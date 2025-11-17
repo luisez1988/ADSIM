@@ -305,30 +305,17 @@ function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_id
     line_idx += 1
     
     # Read boundary conditions
-    bc_count = 0
-    while line_idx <= length(lines) && bc_count < counter
+    for _ in 1:counter
         line = strip(lines[line_idx])
-        
-        if line == "end absolute_pressure"
-            return line_idx + 1
-        end
-        
-        if !isempty(line)
-            parts = split(line)
-            node_id = parse(Int, parts[1])
-            pressure = parse(Float64, parts[2])
-            mesh.absolute_pressure_bc[node_id] = pressure
-            bc_count += 1
-        end
-        
+        parts = split(line)
+        node_id = parse(Int, parts[1])
+        pressure = parse(Float64, parts[2])
+        mesh.absolute_pressure_bc[node_id] = pressure
         line_idx += 1
     end
     
-    # Skip to end marker
-    while line_idx <= length(lines)
-        if strip(lines[line_idx]) == "end absolute_pressure"
-            return line_idx + 1
-        end
+    # Skip end marker
+    if strip(lines[line_idx]) == "end absolute_pressure"
         line_idx += 1
     end
     
@@ -355,30 +342,17 @@ function parse_initial_concentrations!(mesh::MeshData, lines::Vector{String}, li
     line_idx += 1
     
     # Read initial conditions
-    ic_count = 0
-    while line_idx <= length(lines) && ic_count < counter
+    for _ in 1:counter
         line = strip(lines[line_idx])
-        
-        if line == "end initial_concentrations"
-            return line_idx + 1
-        end
-        
-        if !isempty(line)
-            parts = split(line)
-            elem_id = parse(Int, parts[1])
-            concentrations = [parse(Float64, parts[i]) for i in 2:length(parts)]
-            mesh.initial_concentrations[elem_id] = concentrations
-            ic_count += 1
-        end
-        
+        parts = split(line)
+        elem_id = parse(Int, parts[1])
+        concentrations = [parse(Float64, parts[i]) for i in 2:length(parts)]
+        mesh.initial_concentrations[elem_id] = concentrations
         line_idx += 1
     end
     
-    # Skip to end marker
-    while line_idx <= length(lines)
-        if strip(lines[line_idx]) == "end initial_concentrations"
-            return line_idx + 1
-        end
+    # Skip end marker
+    if strip(lines[line_idx]) == "end initial_concentrations"
         line_idx += 1
     end
     
@@ -405,30 +379,17 @@ function parse_initial_temperature!(mesh::MeshData, lines::Vector{String}, line_
     line_idx += 1
     
     # Read initial conditions
-    ic_count = 0
-    while line_idx <= length(lines) && ic_count < counter
+    for _ in 1:counter
         line = strip(lines[line_idx])
-        
-        if line == "end initial_temperature"
-            return line_idx + 1
-        end
-        
-        if !isempty(line)
-            parts = split(line)
-            elem_id = parse(Int, parts[1])
-            temperature = parse(Float64, parts[2])
-            mesh.initial_temperature[elem_id] = temperature
-            ic_count += 1
-        end
-        
+        parts = split(line)
+        elem_id = parse(Int, parts[1])
+        temperature = parse(Float64, parts[2])
+        mesh.initial_temperature[elem_id] = temperature
         line_idx += 1
     end
     
-    # Skip to end marker
-    while line_idx <= length(lines)
-        if strip(lines[line_idx]) == "end initial_temperature"
-            return line_idx + 1
-        end
+    # Skip end marker
+    if strip(lines[line_idx]) == "end initial_temperature"
         line_idx += 1
     end
     
@@ -455,31 +416,20 @@ function parse_materials!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     line_idx += 1
     
     # Read material assignments
-    mat_count = 0
-    while line_idx <= length(lines) && mat_count < counter
+    for mat_count in 1:counter
         line = strip(lines[line_idx])
-        
-        if line == "end materials"
-            return line_idx + 1
-        end
-        
-        if !isempty(line)
-            parts = split(line)
-            elem_id = parse(Int, parts[1])
-            material_idx = parse(Int, parts[2])
-            mesh.materials[elem_id] = material_idx
-            mat_count += 1
-        end
+
+        parts = split(line)
+        elem_id = parse(Int, parts[1])
+        material_idx = parse(Int, parts[2])
+        mesh.materials[elem_id] = material_idx
         
         line_idx += 1
     end
     
-    # Skip to end marker
-    while line_idx <= length(lines)
-        if strip(lines[line_idx]) == "end materials"
-            return line_idx + 1
-        end
-        line_idx += 1
+
+    if strip(lines[line_idx]) == "end materials"
+        return line_idx + 1
     end
     
     return line_idx
