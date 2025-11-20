@@ -21,31 +21,64 @@ include("read_mesh.jl")
 using Dates
 start_time = now()
 
-# Check if mesh file is provided as command-line argument
+# Check if project name is provided as command-line argument
 if length(ARGS) < 1
-    println("Error: No mesh file provided")
-    println("Usage: julia kernel.jl <mesh_file_path>")
-    println("Example: julia kernel.jl ../data/problem.mesh")
+    println("Error: No project name provided")
+    println("Usage: julia kernel.jl <project_name>")
+    println("Example: julia kernel.jl Test")
     exit(1)
 end
 
-mesh_file = ARGS[1]
+project_name = ARGS[1]
 
-# Verify file exists
+# Construct file paths from project name
+# Assuming data files are in the data/ directory relative to src/
+data_dir = "data"
+mesh_file = joinpath(data_dir, "$(project_name).mesh")
+calc_file = joinpath(data_dir, "$(project_name)_calc.toml")
+mat_file = joinpath(data_dir, "$(project_name)_mat.toml")
+
+# Verify mesh file exists
 if !isfile(mesh_file)
     println("Error: Mesh file not found: ", mesh_file)
     exit(1)
 end
 
-println("="^64)
-println("ADSIM: Advection-Diffusion for Soil Improvement and Modification")
-println("="^64)
+# Setup output directory and log file
+output_dir = "output"
+if !isdir(output_dir)
+    mkdir(output_dir)
+end
+
+log_file_path = joinpath(output_dir, "$(project_name).log")
+
+# Delete existing log file if it exists
+if isfile(log_file_path)
+    rm(log_file_path)
+end
+
+# Open log file for writing
+log_file = open(log_file_path, "w")
+
+# Custom print function that writes to both console and log file
+function log_print(msg::String)
+    println(msg)
+    println(log_file, msg)
+    flush(log_file)
+end
+
+# Note: calc and mat files will be checked when needed in future steps
+log_print("Project: $(project_name)")
+
+log_print("="^64)
+log_print("ADSIM: Advection-Diffusion for Soil Improvement and Modification")
+log_print("="^64)
 
 # Step 1: Read mesh data
-println("\n[1/N] Reading mesh file: ", mesh_file)
+log_print("\n[1/N] Reading mesh file: $(mesh_file)")
 mesh = read_mesh_file(mesh_file)
-println("   ✓ Loaded ", mesh.num_nodes, " nodes and ", mesh.num_elements, " elements")
-println("   ✓ Loaded initial and boundary conditions")
+log_print("   ✓ Loaded $(mesh.num_nodes) nodes and $(mesh.num_elements) elements")
+log_print("   ✓ Loaded initial and boundary conditions")
 
 # Step 2: Additional processing steps (to be implemented)
 # - Material properties
@@ -58,9 +91,12 @@ println("   ✓ Loaded initial and boundary conditions")
 #Print total run Time
 end_time = now()
 total_time = end_time - start_time
-println("Total run time: ", total_time)
+log_print("Total run time: $(total_time)")
 
-println("\n", "="^64)
-println("Mesh reading completed successfully")
-println("="^64)
+log_print("\n" * "="^64)
+log_print("Mesh reading completed successfully")
+log_print("="^64)
+
+# Close log file
+close(log_file)
 

@@ -32,3 +32,6 @@ JuliaLocalPreferences.toml
 
 # Any mesh files
 *.mesh
+
+#entire folder output
+output/
