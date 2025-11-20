@@ -14,14 +14,19 @@ proc ADSIM::WriteMaterialData { filename } {
     # Write header
     ADSIM::WriteMaterialHeader
     
-    # Write gas dictionary and properties
-    ADSIM::WriteGasMaterials $root
+    # Write all dictionaries first (TOML requirement: all top-level keys before tables)
+    ADSIM::WriteGasDictionary $root
+    ADSIM::WriteSoilDictionary $root
+    GiD_WriteCalculationFile puts ""
+    
+    # Write gas properties
+    ADSIM::WriteGasProperties $root
     
     # Write liquid properties
     ADSIM::WriteLiquidProperties $root
     
-    # Write soil dictionary and properties
-    ADSIM::WriteSoilMaterials $root
+    # Write soil properties
+    ADSIM::WriteSoilProperties $root
     
     # Close the file
     GiD_WriteCalculationFile end
@@ -38,9 +43,9 @@ proc ADSIM::WriteMaterialHeader { } {
 }
 
 #===============================================================================
-# Write gas dictionary and properties
+# Write gas dictionary (must be at top level before any tables)
 #===============================================================================
-proc ADSIM::WriteGasMaterials { root } {
+proc ADSIM::WriteGasDictionary { root } {
     # Get all gas materials
     set xp_gases {//container[@n="materials"]/container[@n="m_gas"]/blockdata}
     set gas_blocks [$root selectNodes $xp_gases]
@@ -58,7 +63,19 @@ proc ADSIM::WriteGasMaterials { root } {
     
     # Write gas dictionary as array
     GiD_WriteCalculationFile puts "gas_dictionary_ = \[[join $gas_names ", "]\]"
-    GiD_WriteCalculationFile puts ""
+}
+
+#===============================================================================
+# Write gas properties
+#===============================================================================
+proc ADSIM::WriteGasProperties { root } {
+    # Get all gas materials
+    set xp_gases {//container[@n="materials"]/container[@n="m_gas"]/blockdata}
+    set gas_blocks [$root selectNodes $xp_gases]
+    
+    if {[llength $gas_blocks] == 0} {
+        return
+    }
     
     # Write gas properties
     GiD_WriteCalculationFile puts "# Gas properties"
@@ -113,9 +130,9 @@ proc ADSIM::WriteLiquidProperties { root } {
 }
 
 #===============================================================================
-# Write soil dictionary and properties
+# Write soil dictionary (must be at top level before any tables)
 #===============================================================================
-proc ADSIM::WriteSoilMaterials { root } {
+proc ADSIM::WriteSoilDictionary { root } {
     # Get all soil materials
     set xp_soils {//container[@n="materials"]/container[@n="m_soil"]/blockdata}
     set soil_blocks [$root selectNodes $xp_soils]
@@ -132,8 +149,20 @@ proc ADSIM::WriteSoilMaterials { root } {
     }
     
     # Write soil dictionary as array
-    GiD_WriteCalculationFile puts "soil_dictionary = \[[join $soil_names ", "]\]"
-    GiD_WriteCalculationFile puts ""
+    GiD_WriteCalculationFile puts "soil_dictionary_ = \[[join $soil_names ", "]\]"
+}
+
+#===============================================================================
+# Write soil properties
+#===============================================================================
+proc ADSIM::WriteSoilProperties { root } {
+    # Get all soil materials
+    set xp_soils {//container[@n="materials"]/container[@n="m_soil"]/blockdata}
+    set soil_blocks [$root selectNodes $xp_soils]
+    
+    if {[llength $soil_blocks] == 0} {
+        return
+    }
     
     # Write soil properties
     GiD_WriteCalculationFile puts "# Soil properties"
@@ -167,6 +196,9 @@ proc ADSIM::WriteSoilMaterials { root } {
             
             set lime [$first_group selectNodes {string(.//value[@n="lime_content_"]/@v)}]
             GiD_WriteCalculationFile puts "lime_content = $lime"
+
+            set reaction_rate [$first_group selectNodes {string(.//value[@n="reaction_rate_"]/@v)}]
+            GiD_WriteCalculationFile puts "lime_reaction_rate = $reaction_rate"
             
             set res_lime [$first_group selectNodes {string(.//value[@n="lime_impure_"]/@v)}]
             GiD_WriteCalculationFile puts "residual_lime = $res_lime"
