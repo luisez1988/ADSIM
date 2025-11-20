@@ -140,29 +140,19 @@ function read_materials_file(filename::String)
     data = TOML.parsefile(filename)
     
     # Parse gas dictionary
-    if haskey(data, "gas_dictionary_")
-        materials.gas_dictionary = data["gas_dictionary_"]
-    end
+    materials.gas_dictionary = data["gas_dictionary_"]
     
     # Parse gas properties
-    if haskey(data, "gas")
-        parse_gas_properties!(materials, data["gas"])
-    end
+    parse_gas_properties!(materials, data["gas"])
     
     # Parse liquid properties
-    if haskey(data, "liquid")
-        parse_liquid_properties!(materials, data["liquid"])
-    end
+    parse_liquid_properties!(materials, data["liquid"])
     
     # Parse soil dictionary
-    if haskey(data, "soil_dictionary")
-        materials.soil_dictionary = data["soil_dictionary"]
-    end
+    materials.soil_dictionary = data["soil_dictionary"]
     
     # Parse soil properties
-    if haskey(data, "soil")
-        parse_soil_properties!(materials, data["soil"])
-    end
+    parse_soil_properties!(materials, data["soil"])
     
     return materials
 end
@@ -179,25 +169,15 @@ Parse gas properties from TOML data and store in MaterialData structure.
 """
 function parse_gas_properties!(materials::MaterialData, gas_data::Dict)
     for gas_name in materials.gas_dictionary
-        if haskey(gas_data, gas_name)
-            gas_props = GasProperties(gas_name)
-            gas_info = gas_data[gas_name]
-            
-            # Read gas properties
-            if haskey(gas_info, "dynamic_viscosity")
-                gas_props.dynamic_viscosity = Float64(gas_info["dynamic_viscosity"])
-            end
-            
-            if haskey(gas_info, "molar_mass")
-                gas_props.molar_mass = Float64(gas_info["molar_mass"])
-            end
-            
-            if haskey(gas_info, "diff_coefficient")
-                gas_props.diff_coefficient = Float64(gas_info["diff_coefficient"])
-            end
-            
-            materials.gases[gas_name] = gas_props
-        end
+        gas_props = GasProperties(gas_name)
+        gas_info = gas_data[gas_name]
+        
+        # Read gas properties
+        gas_props.dynamic_viscosity = Float64(gas_info["dynamic_viscosity"])
+        gas_props.molar_mass = Float64(gas_info["molar_mass"])
+        gas_props.diff_coefficient = Float64(gas_info["diff_coefficient"])
+        
+        materials.gases[gas_name] = gas_props
     end
 end
 
@@ -213,17 +193,9 @@ Parse liquid properties from TOML data and store in MaterialData structure.
 """
 function parse_liquid_properties!(materials::MaterialData, liquid_data::Dict)
     # Read liquid properties
-    if haskey(liquid_data, "dynamic_viscosity")
-        materials.liquid.dynamic_viscosity = Float64(liquid_data["dynamic_viscosity"])
-    end
-    
-    if haskey(liquid_data, "density")
-        materials.liquid.density = Float64(liquid_data["density"])
-    end
-    
-    if haskey(liquid_data, "specific_heat")
-        materials.liquid.specific_heat = Float64(liquid_data["specific_heat"])
-    end
+    materials.liquid.dynamic_viscosity = Float64(liquid_data["dynamic_viscosity"])
+    materials.liquid.density = Float64(liquid_data["density"])
+    materials.liquid.specific_heat = Float64(liquid_data["specific_heat"])
 end
 
 
@@ -238,52 +210,23 @@ Parse soil properties from TOML data and store in MaterialData structure.
 """
 function parse_soil_properties!(materials::MaterialData, soil_data::Dict)
     for soil_name in materials.soil_dictionary
-        if haskey(soil_data, soil_name)
-            soil_props = SoilProperties(soil_name)
-            soil_info = soil_data[soil_name]
-            
-            # Read physical properties
-            if haskey(soil_info, "specific_gravity")
-                soil_props.specific_gravity = Float64(soil_info["specific_gravity"])
-            end
-            
-            if haskey(soil_info, "porosity")
-                soil_props.porosity = Float64(soil_info["porosity"])
-            end
-            
-            if haskey(soil_info, "saturation")
-                soil_props.saturation = Float64(soil_info["saturation"])
-            end
-            
-            if haskey(soil_info, "granular_tortuosity")
-                soil_props.granular_tortuosity = Float64(soil_info["granular_tortuosity"])
-            end
-            
-            if haskey(soil_info, "intrinsic_permeability")
-                soil_props.intrinsic_permeability = Float64(soil_info["intrinsic_permeability"])
-            end
-            
-            if haskey(soil_info, "lime_content")
-                soil_props.lime_content = Float64(soil_info["lime_content"])
-            end
-            
-            if haskey(soil_info, "residual_lime")
-                soil_props.residual_lime = Float64(soil_info["residual_lime"])
-            end
-            
-            if haskey(soil_info, "reaction_rate")
-                soil_props.reaction_rate = Float64(soil_info["reaction_rate"])
-            else
-                soil_props.reaction_rate = 0.0 # Default value if not specified
-            end
-            
-            # Read thermal properties
-            if haskey(soil_info, "specific_heat_solids")
-                soil_props.specific_heat_solids = Float64(soil_info["specific_heat_solids"])
-            end
-            
-            materials.soils[soil_name] = soil_props
-        end
+        soil_props = SoilProperties(soil_name)
+        soil_info = soil_data[soil_name]
+        
+        # Read physical properties
+        soil_props.specific_gravity = Float64(soil_info["specific_gravity"])
+        soil_props.porosity = Float64(soil_info["porosity"])
+        soil_props.saturation = Float64(soil_info["saturation"])
+        soil_props.granular_tortuosity = Float64(soil_info["granular_tortuosity"])
+        soil_props.intrinsic_permeability = Float64(soil_info["intrinsic_permeability"])
+        soil_props.lime_content = Float64(soil_info["lime_content"])
+        soil_props.residual_lime = Float64(soil_info["residual_lime"])
+        soil_props.reaction_rate = Float64(get(soil_info, "reaction_rate", 0.0))
+        
+        # Read thermal properties
+        soil_props.specific_heat_solids = Float64(soil_info["specific_heat_solids"])
+        
+        materials.soils[soil_name] = soil_props
     end
 end
 

@@ -12,6 +12,7 @@
 
 # Include data reading modules
 include("read_mesh.jl")
+include("read_materials.jl")
 
 #______________________________________________________
 # Main execution script
@@ -22,6 +23,8 @@ using Dates
 start_time = now()
 
 # Check if project name is provided as command-line argument
+#For debugging only
+ARGS = ["Test"]
 if length(ARGS) < 1
     println("Error: No project name provided")
     println("Usage: julia kernel.jl <project_name>")
@@ -33,6 +36,7 @@ project_name = ARGS[1]
 
 # Construct file paths from project name
 # Assuming data files are in the data/ directory relative to src/
+#data_dir = "src//data"
 data_dir = "data"
 mesh_file = joinpath(data_dir, "$(project_name).mesh")
 calc_file = joinpath(data_dir, "$(project_name)_calc.toml")
@@ -79,6 +83,12 @@ log_print("\n[1/N] Reading mesh file: $(mesh_file)")
 mesh = read_mesh_file(mesh_file)
 log_print("   ✓ Loaded $(mesh.num_nodes) nodes and $(mesh.num_elements) elements")
 log_print("   ✓ Loaded initial and boundary conditions")
+
+# Step 2: Read Material properties
+log_print("\n[2/N] Reading material properties file: $(mat_file)")
+materials = read_materials_file(mat_file)
+log_print("   ✓ Loaded $(length(materials.gas_dictionary)) gases")
+log_print("   ✓ Loaded $(length(materials.soil_dictionary)) soils")
 
 # Step 2: Additional processing steps (to be implemented)
 # - Material properties
