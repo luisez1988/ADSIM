@@ -117,7 +117,7 @@ function main()
 
         # Step 5: Apply initial conditions and boundary conditions
         log_print("\n[5/N] Applying initial conditions and boundary conditions")
-        apply_all_initial_conditions!(mesh)
+        apply_all_initial_conditions!(mesh, materials)
         log_print("   ✓ Initial state ready for simulation")
 
         # Step 6: Additional processing steps (to be implemented)

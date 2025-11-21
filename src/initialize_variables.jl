@@ -205,23 +205,78 @@ end
 
 
 """
-    apply_all_initial_conditions!(mesh::MeshData)
+    apply_initial_lime_concentration!(mesh::MeshData, materials)
 
-Apply all initial conditions and boundary conditions from mesh data.
+Apply initial lime concentrations from material properties to the global C_lime array.
+This function loops through all elements, gets their assigned material, retrieves
+the lime content from that material, and assigns it to all nodes in the element.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure containing element-material assignments
+- `materials`: Material data structure containing soil properties with lime content
+
+# Note
+- Modifies global variable `C_lime`
+- If a node belongs to multiple elements with different materials,
+  the last element's value will be used
+"""
+function apply_initial_lime_concentration!(mesh, materials)
+    global C_lime
+    
+    # Loop through all elements
+    for elem_id in 1:mesh.num_elements
+        # Get material index for this element
+        material_idx = get_element_material(mesh, elem_id)
+        
+        if material_idx !== nothing
+            # Get the soil name from the soil dictionary
+            soil_name = materials.soil_dictionary[material_idx]
+            
+            # Get the soil properties for this material
+            soil_props = get_soil_properties(materials, soil_name)
+            
+            if soil_props !== nothing
+                # Get lime content from material
+                β_l = soil_props.lime_content
+                G_s = soil_props.specific_gravity
+                n=soil_props.porosity                
+                M_lime=74.093   # Molar mass of Ca(OH)2 in g/mol
+                #Calculate lime concentration in mol/m^3 
+                lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3         
+                
+                # Get nodes of this element
+                element_nodes = get_element_nodes(mesh, elem_id)
+                
+                # Assign lime content to each node of the element
+                for node_id in element_nodes
+                    C_lime[node_id] = lime_concentration
+                end
+            end
+        end
+    end
+end
+
+
+"""
+    apply_all_initial_conditions!(mesh::MeshData, materials)
+
+Apply all initial conditions and boundary conditions from mesh and material data.
 This is a convenience function that calls all individual application functions.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing all initial and boundary condition data
+- `materials`: Material data structure containing soil and gas properties
 
 # Note
-- Modifies global variables: `C_g`, `T`, `P`
-- Call this after `initialize_variables!()` to set up the initial state
+- Modifies global variables: `C_g`, `T`, `P`, `C_lime`
+- Call this after `zero_variables!()` to set up the initial state
 """
-function apply_all_initial_conditions!(mesh)
+function apply_all_initial_conditions!(mesh, materials)
     apply_initial_concentrations!(mesh)
     apply_initial_temperature!(mesh)
     apply_concentration_bc!(mesh)
     apply_pressure_bc!(mesh)
+    apply_initial_lime_concentration!(mesh, materials)
     
     println("\nAll initial conditions and BCs applied successfully")
 end
