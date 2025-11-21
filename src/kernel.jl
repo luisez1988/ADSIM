@@ -17,6 +17,7 @@ using Dates
 include("read_mesh.jl")
 include("read_materials.jl")
 include("read_calc_params.jl")
+include("initialize_variables.jl")
 
 
 #______________________________________________________
@@ -108,7 +109,18 @@ function main()
         log_print("   ✓ Solver type: $(calc_params["solver_type"])")
         log_print("   ✓ Total simulation time: $(calc_params["time_stepping"]["total_simulation_time"]) $(calc_params["units"]["time_unit"])")
 
-        # Step 4: Additional processing steps (to be implemented)
+        # Step 4: Initialize simulation variables
+        log_print("\n[4/N] Initializing simulation variables")
+        zero_variables!(mesh, materials)
+        log_print("   ✓ Allocated arrays for $(Nnodes) nodes")
+        log_print("   ✓ Tracking $(NGases) gas species in $(NSoils) soil types")
+
+        # Step 5: Apply initial conditions and boundary conditions
+        log_print("\n[5/N] Applying initial conditions and boundary conditions")
+        apply_all_initial_conditions!(mesh)
+        log_print("   ✓ Initial state ready for simulation")
+
+        # Step 6: Additional processing steps (to be implemented)
         # - Material properties
         # - Assembly of system matrices
         # - Time stepping
