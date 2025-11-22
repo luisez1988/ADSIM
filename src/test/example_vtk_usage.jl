@@ -15,7 +15,6 @@ This example demonstrates how to:
 1. Load mesh data using read_mesh_file
 2. Prepare simulation results arrays
 3. Write VTK output files at different time steps
-4. Create a PVD collection file for time series visualization
 """
 
 # Read mesh file
@@ -82,6 +81,9 @@ for (step, time) in zip(time_steps, times)
         concentrations[i, 3] = 0.01 * (1.0 + 0.1 * time)
         co2_concentration[i] = concentrations[i, 3]
         
+        # Update total concentration
+        total_concentration[i] = sum(concentrations[i, :])
+        
         # Example: Degree of carbonation increases
         degree_of_carbonation[i] = min(1.0, 0.1 * (1.0 + time) * (1.0 - exp(-0.1 * i / Nnodes)))
         
@@ -91,11 +93,12 @@ for (step, time) in zip(time_steps, times)
         
         if step > 0
             temperature_rate[i] = (temperature[i] - 293.15) / time
+            concentration_rates[i, 3] = (concentrations[i, 3] - 0.01) / time
         end
     end
     
     # Update CaCO3 based on carbonation
-    caco3_concentration = lime_concentration .* degree_of_carbonation
+    global caco3_concentration = lime_concentration .* degree_of_carbonation
     
     # Write VTK file for this time step
     write_vtk_file(
@@ -120,9 +123,7 @@ for (step, time) in zip(time_steps, times)
     )
 end
 
-# Create PVD collection file for time series animation in ParaView
-println("\nCreating PVD collection file...")
-write_pvd_file("output/simulation", time_steps, times)
-
-println("\nDone! Open 'output/simulation.pvd' in ParaView to visualize the time series.")
-println("Individual VTK files are also available as 'output/simulation_XXXXXX.vtk'")
+println("\nSimulation complete!")
+println("VTK files written for time steps 0-5")
+println("Individual VTK files are available as 'output/simulation_XXXXXX.vtk'")
+println("Open any .vtk file in ParaView to visualize the results")

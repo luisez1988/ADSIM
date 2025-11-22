@@ -313,9 +313,12 @@ function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_id
         parts = split(line)
         node_id = parse(Int, parts[1])
         pressure = parse(Float64, parts[2])
-        gas_index = parse(Int, parts[3])
         mesh.absolute_pressure_bc[node_id] = pressure
-        mesh.vacating_gas_bc[node_id] = gas_index
+        # Optional third field: vacating gas index
+        if length(parts) >= 3
+            gas_index = parse(Int, parts[3])
+            mesh.vacating_gas_bc[node_id] = gas_index
+        end
         line_idx += 1
     end
     
