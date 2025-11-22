@@ -313,12 +313,9 @@ function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_id
         parts = split(line)
         node_id = parse(Int, parts[1])
         pressure = parse(Float64, parts[2])
+        gas_index = parse(Int, parts[3])
         mesh.absolute_pressure_bc[node_id] = pressure
-        # Optional third field: vacating gas index
-        if length(parts) >= 3
-            gas_index = parse(Int, parts[3])
-            mesh.vacating_gas_bc[node_id] = gas_index
-        end
+        mesh.vacating_gas_bc[node_id] = gas_index
         line_idx += 1
     end
     
@@ -558,6 +555,43 @@ function get_element_material(mesh::MeshData, elem_id::Int)
 end
 
 
+"""
+get_node_elements(mesh::MeshData, node_id::Int) -> Vector{Int}
+
+Get all element IDs that contain a specific node.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure
+- `node_id::Int`: Node ID (1-based)
+
+# Returns
+- `Vector{Int}`: Vector of element IDs that contain this node
+
+# Example
+```julia
+elements = get_node_elements(mesh, 10)
+println("Node 10 belongs to ", length(elements), " elements: ", elements)
+```
+"""
+function get_node_elements(mesh::MeshData, node_id::Int)
+    element_list = Int[]
+    
+    # Loop through all elements
+    for elem_id in 1:mesh.num_elements
+        # Check each node position directly without creating a slice
+        if mesh.elements[elem_id, 1] == node_id || 
+           mesh.elements[elem_id, 2] == node_id || 
+           mesh.elements[elem_id, 3] == node_id || 
+           mesh.elements[elem_id, 4] == node_id
+           push!(element_list, elem_id)
+        end
+    end
+    
+    return element_list
+end
+
+
 # Export all public functions and types
 export MeshData, read_mesh_file, get_element_nodes, get_node_coordinates
 export has_concentration_bc, has_flow_bc, has_pressure_bc, get_element_material
+export get_node_elements

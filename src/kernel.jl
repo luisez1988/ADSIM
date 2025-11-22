@@ -18,6 +18,7 @@ include("read_mesh.jl")
 include("read_materials.jl")
 include("read_calc_params.jl")
 include("initialize_variables.jl")
+include("initialize_flows.jl")
 
 
 #______________________________________________________
@@ -115,10 +116,11 @@ function main()
         log_print("   ✓ Allocated arrays for $(Nnodes) nodes")
         log_print("   ✓ Tracking $(NGases) gas species in $(NSoils) soil types")
 
-        # Step 5: Apply initial conditions and boundary conditions
-        log_print("\n[5/N] Applying initial conditions and boundary conditions")
+        # Step 5: Apply initial conditions and initialize flows
+        log_print("\n[5/N] Applying initial conditions and initializing flows")
         apply_all_initial_conditions!(mesh, materials)
-        log_print("   ✓ Initial state ready for simulation")
+        initialize_all_flows!(mesh, materials, Nnodes, NGases)
+        log_print("   ✓ System ready for simulation")
 
         # Step 6: Additional processing steps (to be implemented)
         # - Material properties
