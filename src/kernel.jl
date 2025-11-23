@@ -21,6 +21,9 @@ include("read_calc_params.jl")
 include("initialize_variables.jl")
 include("initialize_flows.jl")
 include("time_step.jl")
+include("shape_functions.jl")
+
+using .ShapeFunctions
 
 
 #______________________________________________________
@@ -122,10 +125,14 @@ function main()
         log_print("\n[5/N] Applying initial conditions and initializing flows")
         apply_all_initial_conditions!(mesh, materials)
         initialize_all_flows!(mesh, materials, Nnodes, NGases)
-        log_print("   ✓ System ready for simulation")
+        log_print("   ✓ Initial and boundary conditions applied")
 
-        # Step 6: Calculate time step information
-        log_print("\n[6/N] Calculating time step information")
+        # Step 6: Initialize shape functions and calculate time step information
+        log_print("\n[6/N] Initializing shape functions")
+        initialize_shape_functions!(mesh)
+        log_print("   ✓ Shape functions and Jacobians precomputed")
+        
+        log_print("\n[7/N] Calculating time step information")
         time_data = calculate_time_step_info(mesh, materials, calc_params)
         log_print(@sprintf("   ✓ Minimum characteristic length: %.3g %s", time_data.h_min, calc_params["units"]["geometry_unit"]))
         log_print(@sprintf("   ✓ Critical time step: %.4g %s", time_data.critical_dt, calc_params["units"]["time_unit"]))
@@ -133,7 +140,7 @@ function main()
         log_print(@sprintf("   ✓ Actual time step: %.4g %s", time_data.actual_dt, calc_params["units"]["time_unit"]))
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
 
-        # Step 7: Additional processing steps (to be implemented)
+        # Step 8: Additional processing steps (to be implemented)
         # - Assembly of system matrices
         # - Time stepping loop
         # - Solution
