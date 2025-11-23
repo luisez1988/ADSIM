@@ -22,8 +22,11 @@ include("initialize_variables.jl")
 include("initialize_flows.jl")
 include("time_step.jl")
 include("shape_functions.jl")
+include("write_vtk.jl")
+include("fully_explicit_solver.jl")
 
 using .ShapeFunctions
+using .WriteVTK
 
 
 #______________________________________________________
@@ -140,11 +143,8 @@ function main()
         log_print(@sprintf("   ✓ Actual time step: %.4g %s", time_data.actual_dt, calc_params["units"]["time_unit"]))
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
 
-        # Step 8: Additional processing steps (to be implemented)
-        # - Assembly of system matrices
-        # - Time stepping loop
-        # - Solution
-        # - Post-processing
+        # Step 8: Run fully explicit solver
+        fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, log_print)
 
         # Print total run time
         end_time = now()
