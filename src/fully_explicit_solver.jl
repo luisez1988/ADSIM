@@ -357,7 +357,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # Main time stepping loop
     save_data = false
     for step in 1:num_steps
-        # Loop over all gases (can be parallelized)
+        #reset flow vectors
+        q_diffusion = zeros(Float64, Nnodes, NGases)
+        # Loop over all gases
         @threads for gas_idx in 1:NGases
             # Get gas name for this species (needed for warning messages)
             gas_name = materials.gas_dictionary[gas_idx]

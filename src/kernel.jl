@@ -148,8 +148,8 @@ function main()
 
         # Print total run time
         end_time = now()
-        total_time = end_time - start_time
-        log_print("\nTotal run time: $(total_time)")
+        total_time = (end_time - start_time).value / 1000.0  # Convert milliseconds to seconds
+        log_print("\nTotal run time: $(total_time) seconds")
 
         log_print("\n" * "="^64)
         log_print("Calculation completed successfully")
