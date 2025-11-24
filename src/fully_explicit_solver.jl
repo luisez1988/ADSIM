@@ -437,6 +437,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             # Update next output time
             next_output_time += load_step_time
             output_counter += 1
+            save_data = false
         end
 
         #update dt to close exactly at next output time
