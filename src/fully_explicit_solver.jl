@@ -318,6 +318,9 @@ where:
 """
 function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, log_print)
     log_print("\n[8/N] Starting fully explicit diffusion solver")
+
+    # Universal gas constant [J/(mol·K)]
+    R = 8.314
     
     # Get dimensions
     Nnodes = mesh.num_nodes
@@ -344,10 +347,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     
     # Precompute geometric element stiffness matrices (same for all gases)    
     K_elements = assemble_element_stiffness_matrices(mesh)
+
+    #Calculate total gas concentrations
+    total_concentration = vec(sum(C_g, dims=2))
     
     # Write initial state (t = 0)
      log_print("   ✓ Load step: 0")
-    write_output_vtk(mesh, materials, 0, 0.0, calc_params)
+    write_output_vtk(mesh, materials, 0, 0.0, calc_params, total_concentration)
     
     # Initialize time tracking
     current_time = 0.0
@@ -359,6 +365,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     for step in 1:num_steps
         #reset flow vectors
         q_diffusion = zeros(Float64, Nnodes, NGases)
+        q_advection = zeros(Float64, Nnodes, NGases)
+
         # Loop over all gases
         @threads for gas_idx in 1:NGases
             # Get gas name for this species (needed for warning messages)
@@ -382,15 +390,22 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
                 # Get soil tortuosity
                 τ = soil.granular_tortuosity
+                # Get intrinsic permeability
+                k_intrinsic = soil.intrinsic_permeability
+
+                
 
                 # Get gas diffusion coefficient
                 gas_name = materials.gas_dictionary[gas_idx]
                 gas = materials.gases[gas_name]
                 D_g = gas.diff_coefficient
 
+                #Get gas dynamic viscosity
+                μ_g = gas.dynamic_viscosity
+
                 #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p 
 
-                #nodal concentrations
+                #Get all gas nodal concentrations                
                 C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
 
                 q_aux= zeros(4) #local diffusion flow vector
@@ -400,11 +415,53 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     node_id = nodes[i] #global node id
                     q_diffusion[node_id, gas_idx] +=  q_aux[i]
                 end
+
+                #Get total nodal concentrations
+                C_t= [total_concentration[nodes[i]] for i in 1:4]
+
+                #Get nodal temperatures
+                T_e = [T[nodes[i]] for i in 1:4]
+
+                #Zero nodal advection fluxes
+                q_aux= zeros(4) #local advection flow vector
+
+                # loop Gauss points
+                for p in 1:4
+                    # Get shape function derivatives in isoparametric coords
+                    B = ShapeFunctions.get_B(p)
+                    # Get shape functions at Gauss point
+                    N_p = ShapeFunctions.shape_funcs.N[p]
+
+                    #Evaluate concentration gas species concentration at Gauss point
+                    C_gp = 0.0
+                    C_gp = N_p' * C_e
+
+                    #Evaluate temperature at Gauss point
+                    T_gp = 0.0
+                    T_gp = N_p' * T_e
+                    
+                    # Get inverse Jacobian and determinant
+                    invJ = ShapeFunctions.get_invJ(e, p)
+                    detJ = ShapeFunctions.get_detJ(e, p)
+                    Wp= ShapeFunctions.shape_funcs.gauss_weights[p]
+                    
+                    # Transform derivatives to physical coordinates
+                    # dN/dx = B · J^-1
+                    dN_dx = B * invJ  # [4 nodes, 2 coords]
+
+                    #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * det(J) * W_p / μ_g^p 
+                    q_aux += (R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g) .* (dN_dx * dN_dx') * C_t
+                end
+                for i in 1:4 #loop nodes in element       
+                    node_id = nodes[i] #global node id
+                    q_advection[node_id, gas_idx] +=  q_aux[i]
+                end
+
             end # flux are ready for this gas
 
-            # calculate rate of change dC/dt = q_diffusion / M
+            # calculate rate of change dC/dt = q_net / M
             for i in 1:Nnodes
-                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx]) * P_boundary[i]) / M[i]
+                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
             end
 
             # Update concentrations: C^(n+1) = C^n + dt * dC/dt
@@ -420,13 +477,16 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end            
         end
         
+        # Calculate total gas concentrations after all gases are updated
+        total_concentration = vec(sum(C_g, dims=2))
+        
         # Update current time
         current_time += dt
 
         # Check if we need to save output
         if save_data || step == num_steps
             # Write output
-            write_output_vtk(mesh, materials, output_counter, current_time, calc_params)
+            write_output_vtk(mesh, materials, output_counter, current_time, calc_params, total_concentration)
             
             # Calculate progress percentage
             progress = 100.0 * step / num_steps
@@ -468,15 +528,12 @@ Write VTK output file for the current time step.
 - `time::Float64`: Current simulation time
 - `calc_params`: Calculation parameters
 """
-function write_output_vtk(mesh, materials, step::Int, time::Float64, calc_params)
+function write_output_vtk(mesh, materials, step::Int, time::Float64, calc_params, total_concentration)
     output_dir = "output"
     filename = joinpath(output_dir, "simulation")
     
     # Prepare data for VTK output
-    gas_names = materials.gas_dictionary
-    
-    # Calculate total concentration
-    total_concentration = vec(sum(C_g, dims=2))
+    gas_names = materials.gas_dictionary   
     
     # Placeholder arrays for unused fields (filled with zeros for now)
     reaction_rates = zeros(mesh.num_nodes)
