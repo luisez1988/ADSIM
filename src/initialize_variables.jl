@@ -27,6 +27,7 @@ global P_boundary::Matrix{Int} = Matrix{Int}(undef, 0, 0)
 # Reactive species
 global C_lime::Vector{Float64} = Float64[]
 global C_caco3::Vector{Float64} = Float64[]
+global C_lime_residual::Vector{Float64} = Float64[]
 
 # Time derivatives
 global dC_g_dt::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
@@ -70,6 +71,7 @@ function zero_variables!(mesh, materials)
     # Allocate and initialize reactive species
     C_lime = zeros(Float64, Nnodes)
     C_caco3 = zeros(Float64, Nnodes)
+    C_lime_residual = zeros(Float64, NSoils)
     
     # Allocate and initialize time derivatives
     dC_g_dt = zeros(Float64, Nnodes, NGases)
@@ -242,7 +244,11 @@ function apply_initial_lime_concentration!(mesh, materials)
                 n=soil_props.porosity                
                 M_lime=74.093   # Molar mass of Ca(OH)2 in g/mol
                 #Calculate lime concentration in mol/m^3 
-                lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3         
+                lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3  
+
+                #Calculatte reidual lime 
+                residual_percent= soil.residual_lime
+                C_lime_residual[material_idx] = residual_percent * lime_concentration
                 
                 # Get nodes of this element
                 element_nodes = get_element_nodes(mesh, elem_id)

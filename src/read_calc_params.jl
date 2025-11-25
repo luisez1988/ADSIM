@@ -187,6 +187,45 @@ function log_analysis_type(solver_settings::Dict)
 end
 
 """
+    validate_reaction_kinetics_requirements(solver_settings::Dict, materials)
+
+Validate that CO2 gas is present in materials when reaction_kinetics is enabled.
+
+# Arguments
+- `solver_settings::Dict`: Dictionary containing solver settings
+- `materials`: MaterialData structure containing gas definitions
+
+# Throws
+- `ErrorException`: If reaction_kinetics is enabled but CO2 gas is not defined
+
+# Returns
+- `true` if validation passes
+"""
+function validate_reaction_kinetics_requirements(solver_settings::Dict, materials)
+    # Check if reaction kinetics is enabled
+    if solver_settings["reaction_kinetics"] == 1
+        # Check if CO2 exists in the gas dictionary
+        if !("CO2" in materials.gas_dictionary)
+            error("""
+            Validation Error: Reaction kinetics is enabled but CO2 gas is not defined.
+            
+            When using reaction_kinetics = 1 in the solver settings, you must include 
+            CO2 in the gas_dictionary_ and define its properties in the materials file.
+            
+            Example materials file entry:
+            gas_dictionary_ = ["CO2"]
+            
+            [gas."CO2"]
+            dynamic_viscosity = 1.48e-5
+            molar_mass = 0.04401
+            diff_coefficient = 1.6e-5            
+            """)
+        end
+    end
+    return true
+end
+
+"""
     get_all_calc_params(filename::String)
 
 Read calculation parameters from a TOML file and return a structured dictionary

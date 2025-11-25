@@ -118,6 +118,13 @@ function main()
         log_print(log_analysis_type(calc_params["solver_settings"]))
         log_print("   ✓ Total simulation time: $(calc_params["time_stepping"]["total_simulation_time"]) $(calc_params["units"]["time_unit"])")
 
+        # Step 3.5: Validate reaction kinetics requirements
+        if calc_params["solver_settings"]["reaction_kinetics"] == 1
+            log_print("\n[3.5/N] Validating reaction kinetics requirements")
+            validate_reaction_kinetics_requirements(calc_params["solver_settings"], materials)
+            log_print("   ✓ CO2 gas is defined in materials")
+        end
+
         # Step 4: Initialize simulation variables
         log_print("\n[4/N] Initializing simulation variables")
         zero_variables!(mesh, materials)

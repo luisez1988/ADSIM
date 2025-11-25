@@ -340,7 +340,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     g_magnitude = gravity_params["magnitude"]
     g_x = gravity_params["x_component"]
     g_y = gravity_params["y_component"]
-    g_vector = [g_x, g_y] * g_magnitude  # [m/s²]
+    g_vector = [g_x, g_y] * g_magnitude  # [m/s²]    
     
     # Time stepping parameters
     dt = time_data.actual_dt
@@ -387,6 +387,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         q_diffusion = zeros(Float64, Nnodes, NGases)
         q_advection = zeros(Float64, Nnodes, NGases)
         q_gravitational = zeros(Float64, Nnodes, NGases)
+        q_reaction = zeros(Float64, Nnodes, NGases)
+        q_source_sink= zeros(Float64, Nnodes) # Only for CO2 for now
 
         # Loop over all gases
         @threads for gas_idx in 1:NGases
@@ -539,12 +541,67 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         q_gravitational[node_id, gas_idx] +=  q_aux[i]
                     end
                 end
+                #______________________________________________________
+                #______________________________________________________
+                #Reaction kinetics calculation start here
+                #______________________________________________________
+                if calculate_reaction && gas_name == "CO2"
+
+                    # Get element nodes
+                    nodes = mesh.elements[e, :]
+                    
+                    # Get material properties for this element
+                    material_idx = get_element_material(mesh, e)
+                    
+                    soil_name = materials.soil_dictionary[material_idx]
+                    soil = materials.soils[soil_name]
+                    #get the carbonation reaction rate for this element
+                    κ_co2= soil.reaction_rate # [m³/(mol·s)]
+
+                    #get water content
+                    n= soil.porosity
+                    S_r= soil.saturation
+                    θ_w= n * S_r  # volumetric water content
+
+                    #Get residual lime concentration in the soil
+                    C_r= C_lime_residual[material_idx]
+
+                    #loop over nodes in element
+                    for i in 1:4    
+                        node_id = nodes[i] #global node id
+                        #Calculate reaction flux only for CO2 gas 
+                        if gas_name == "CO2"
+                            dC_lime_dt[node_id] =  - κ_co2 * θ_w * C_g[node_id, gas_idx] * (C_lime[node_id] - C_r) *heaviside(C_lime[node_id] - C_r)
+                            q_source_sink[node_id] =  M[node_id] * dC_lime_dt[node_id]
+                        end
+                    end
+                end
+                #______________________________________________________
 
             end # flux are ready for this gas
+            
+
 
             # calculate rate of change dC/dt = q_net / M
             for i in 1:Nnodes
-                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
+                isCO2= gas_name == "CO2"
+                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx] + q_source_sink[i] * isCO2) * P_boundary[i, gas_idx]) / M[i]
+            end
+
+            # Update reaction kinetic terms for lime concentration
+            if calculate_reaction
+                for i in 1:Nnodes
+                    C_lime[i] += dt * dC_lime_dt[i]
+                    # Ensure non-negative lime concentrations
+                    if C_lime[i] < 0.0
+                        C_lime[i] = 0.0
+                        # print warning in log_file
+                        log_print("Warning: Negative lime concentration detected at node $i. Setting to zero.")
+                    end
+                    #Update caco3_concentration
+                    C_caco3[i] += dt * (- dC_lime_dt[i]) 
+
+                end
             end
 
             # Update concentrations: C^(n+1) = C^n + dt * dC/dt
@@ -560,6 +617,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
 
         end
+
+
         
         # Calculate total gas concentrations after all gases are updated
         total_concentration = vec(sum(C_g, dims=2))
