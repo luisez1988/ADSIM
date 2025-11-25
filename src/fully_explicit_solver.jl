@@ -318,6 +318,7 @@ where:
 """
 function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print)
     log_print("\n[8/N] Starting fully explicit diffusion solver")
+    log_print("   Using $(Threads.nthreads()) threads for parallel execution")
 
     # Universal gas constant [J/(mol·K)]
     R = 8.314
@@ -410,14 +411,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get gas dynamic viscosity
                 μ_g = gas.dynamic_viscosity
 
+                #Get current gas nodal concentrations                
+                C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
+
                 #______________________________________________________    
                 #Diffusion calculation start here
                 #______________________________________________________
                 if calculate_diffusion
-                    #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p 
-
-                    #Get all gas nodal concentrations                
-                    C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
+                    #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p                    
 
                     q_aux= zeros(4) #local diffusion flow vector
                     q_aux = (θ_g * D_g / τ) * K_elements[e] *  C_e
@@ -493,7 +494,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     # print warning in log_file
                     log_print("Warning: Negative concentration detected at node $i for gas $gas_name. Setting to zero.")
                 end
-            end            
+            end
+                        
         end
         
         # Calculate total gas concentrations after all gases are updated

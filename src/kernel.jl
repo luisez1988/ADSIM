@@ -42,7 +42,7 @@ All errors are logged to the log file before exiting.
 function main()
     # Check if project name is provided as command-line argument
     #For debugging only
-    #ARGS = ["Test"]
+    #ARGS = ["Advection_test"]
     if length(ARGS) < 1
         println("Error: No project name provided")
         println("Usage: julia kernel.jl <project_name>")
