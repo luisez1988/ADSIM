@@ -19,9 +19,6 @@ global q_diffusion::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_boundary::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_source_sink::Vector{Float64} = Float64[]  # Only for CO2
 
-# Lumped mass matrix (same for all gases)
-global M_L::Vector{Float64} = Float64[]
-
 #------------------------------------------------------------------------------
 # Initialize flow vectors
 #------------------------------------------------------------------------------
@@ -37,12 +34,12 @@ This function should be called after mesh and material data are loaded.
 
 # Note
 - Modifies global flow vectors: `q_advection`, `q_gravitational`, `q_diffusion`, 
-  `q_boundary`, `q_source_sink`, and `M_L`
+  `q_boundary`, `q_source_sink`
 - All flow vectors are initialized to zero
 - q_source_sink is only a vector (not matrix) as it only applies to CO2
 """
 function zero_flow_vectors!(Nnodes::Int, NGases::Int)
-    global q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink, M_L
+    global q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink
     
     # Initialize flow matrices (Nnodes × NGases)
     q_advection = zeros(Float64, Nnodes, NGases)
@@ -128,31 +125,6 @@ function calculate_boundary_influence_lengths(mesh)
 end
 
 #------------------------------------------------------------------------------
-# Reset flow vectors (called at each time step)
-#------------------------------------------------------------------------------
-"""
-    reset_flows!()
-
-Reset all flow vectors to zero. This function should be called at the beginning
-of each time step before calculating new flows.
-
-# Note
-- Modifies global flow vectors: `q_advection`, `q_gravitational`, `q_diffusion`
-- Does NOT reset `q_boundary` (boundary conditions remain constant)
-- Does NOT reset `q_source_sink` until reaction module is implemented
-- Does NOT reset `M_L` (mass matrix is constant)
-"""
-function reset_flows!()
-    global q_advection, q_gravitational, q_diffusion
-    
-    # Reset calculated flows (boundary flows remain constant)
-    q_advection .= 0.0
-    q_gravitational .= 0.0
-    q_diffusion .= 0.0
-end
-
-
-#------------------------------------------------------------------------------
 # Initialize all flows
 #------------------------------------------------------------------------------
 """
@@ -181,6 +153,5 @@ end
 
 
 # Export all public functions
-export zero_flow_vectors!, apply_boundary_flows!, calculate_lumped_mass!
-export reset_flows!, initialize_all_flows!
-export q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink, M_L
+export zero_flow_vectors!, apply_boundary_flows!, initialize_all_flows!
+export q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink

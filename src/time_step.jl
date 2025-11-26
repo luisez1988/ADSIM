@@ -489,33 +489,9 @@ function calculate_time_step_info(mesh, materials, calc_params::Dict)
 end
 
 
-"""
-    print_time_step_info(time_data::TimeStepData, time_unit::String="s")
-
-Print time step information in a formatted manner.
-
-# Arguments
-- `time_data::TimeStepData`: Time step data structure
-- `time_unit::String`: Time unit for display (default: "s")
-"""
-function print_time_step_info(time_data::TimeStepData, time_unit::String="s")
-    println("\n" * "="^64)
-    println("TIME STEP INFORMATION")
-    println("="^64)
-    println("Minimum characteristic length: $(time_data.h_min) m")
-    println("Critical time step: $(time_data.critical_dt) $(time_unit)")
-    println("Courant number: $(time_data.courant_number)")
-    println("Actual time step: $(time_data.actual_dt) $(time_unit)")
-    println("Total simulation time: $(time_data.total_time) $(time_unit)")
-    println("Number of time steps: $(time_data.num_steps)")
-    println("="^64)
-end
-
-
 # Export all public functions and types
 export TimeStepData
 export calculate_element_characteristic_length, find_minimum_characteristic_length
 export get_maximum_diffusion_coefficient, get_minimum_gas_viscosity
 export get_maximum_initial_concentration, get_maximum_co2_concentration
 export calculate_critical_time_step, calculate_time_step_info
-export print_time_step_info

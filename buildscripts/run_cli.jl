@@ -5,10 +5,14 @@ using .ADSIM
 
 function run_cli()
     if isempty(ARGS)
-        println("Usage: run_cli.jl <project_name>")
-        println("Example: run_cli.jl Reaction_test")
-        exit(1)
+        # When PackageCompiler runs this for precompilation without arguments,
+        # use a default test case to trace compilation paths
+        push!(ARGS, "Reaction_test")
     end
+
+    # Change to src/ directory where data files are located
+    src_dir = joinpath(@__DIR__, "..", "src")
+    cd(src_dir)
 
     # Pass command-line arguments straight through to ADSIM.main()
     ADSIM.main()

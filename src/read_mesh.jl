@@ -488,57 +488,6 @@ end
 
 
 """
-has_concentration_bc(mesh::MeshData, node_id::Int) -> Bool
-
-Check if a node has concentration boundary conditions applied.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `node_id::Int`: Node ID to check
-
-# Returns
-- `Bool`: true if node has concentration BC, false otherwise
-"""
-function has_concentration_bc(mesh::MeshData, node_id::Int)
-    return haskey(mesh.concentration_bc, node_id)
-end
-
-
-"""
-has_flow_bc(mesh::MeshData, node_id::Int) -> Bool
-
-Check if a node has flow boundary conditions applied.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `node_id::Int`: Node ID to check
-
-# Returns
-- `Bool`: true if node has flow BC, false otherwise
-"""
-function has_flow_bc(mesh::MeshData, node_id::Int)
-    return haskey(mesh.uniform_flow_bc, node_id)
-end
-
-
-"""
-has_pressure_bc(mesh::MeshData, node_id::Int) -> Bool
-
-Check if a node has pressure boundary conditions applied.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `node_id::Int`: Node ID to check
-
-# Returns
-- `Bool`: true if node has pressure BC, false otherwise
-"""
-function has_pressure_bc(mesh::MeshData, node_id::Int)
-    return haskey(mesh.absolute_pressure_bc, node_id)
-end
-
-
-"""
 get_element_material(mesh::MeshData, elem_id::Int) -> Union{Int, Nothing}
 
 Get the material index assigned to an element.
@@ -593,5 +542,4 @@ end
 
 # Export all public functions and types
 export MeshData, read_mesh_file, get_element_nodes, get_node_coordinates
-export has_concentration_bc, has_flow_bc, has_pressure_bc, get_element_material
-export get_node_elements
+export get_element_material, get_node_elements
