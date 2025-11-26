@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 
-include(joinpath(@__DIR__, "..", "ADSIM.jl"))
+include(joinpath(@__DIR__, "..", "src", "ADSIM.jl"))
 using .ADSIM
 
 function run_cli()
