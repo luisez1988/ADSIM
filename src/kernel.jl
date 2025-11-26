@@ -205,6 +205,8 @@ function main()
     end
 end
 
-# Execute main function
-main()
+# Execute main function when script is run directly
+if abspath(PROGRAM_FILE) == @__FILE__
+    main()
+end
 
