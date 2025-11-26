@@ -51,7 +51,7 @@ The exclamation mark indicates it modifies global variables.
 function zero_variables!(mesh, materials)
     global NDim, Nnodes, Nelements, NSoils, NGases
     global C_g, P, T, v, P_boundary
-    global C_lime, C_caco3
+    global C_lime, C_caco3, C_lime_residual
     global dC_g_dt, dT_dt, dC_lime_dt
     
     # Set dimensions
@@ -223,7 +223,7 @@ the lime content from that material, and assigns it to all nodes in the element.
   the last element's value will be used
 """
 function apply_initial_lime_concentration!(mesh, materials)
-    global C_lime
+    global C_lime, C_lime_residual
     
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
@@ -247,7 +247,7 @@ function apply_initial_lime_concentration!(mesh, materials)
                 lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3  
 
                 #Calculatte reidual lime 
-                residual_percent= soil.residual_lime
+                residual_percent= soil_props.residual_lime
                 C_lime_residual[material_idx] = residual_percent * lime_concentration
                 
                 # Get nodes of this element

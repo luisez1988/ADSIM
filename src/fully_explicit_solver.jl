@@ -10,6 +10,23 @@
 # Solves all governing equations using an explicit time-stepping scheme
 #______________________________________________________
 
+using Statistics
+
+"""
+    heaviside(x)
+
+Heaviside step function: returns 0 for x < 0, and 1 for x >= 0.
+
+# Arguments
+- `x`: Input value
+
+# Returns
+- 0 if x < 0, 1 if x >= 0
+"""
+function heaviside(x)
+    return x >= 0 ? 1.0 : 0.0
+end
+
 #=
 IMPLEMENTATION NOTES:
 =====================
