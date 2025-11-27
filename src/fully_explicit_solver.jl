@@ -266,7 +266,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         #reset flow vectors
         q_diffusion = zeros(Float64, Nnodes, NGases)
         q_advection = zeros(Float64, Nnodes, NGases)
-        q_gravitational = zeros(Float64, Nnodes, NGases)        
+        q_gravitational = zeros(Float64, Nnodes, NGases)
+        q_pressure = zeros(Float64, Nnodes, NGases)  # Boundary advective flux from pressure BCs
         q_source_sink= zeros(Float64, Nnodes) # Only for CO2 for now
 
         # Loop over all gases
@@ -324,16 +325,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 end
                 #______________________________________________________    
 
-                #Get total nodal concentrations
-                C_t= [total_concentration[nodes[i]] for i in 1:4]
+                
                 #Apply total pressure boundary condition at nodes
                 for i in 1:4
                     node_id = nodes[i]
                     # Check if this node has a fixed pressure BC for this gas
                     if has_pressure_bc(mesh, node_id)
-                        C_t[i] = mesh.absolute_pressure_bc[node_id] / (R * T[node_id]) #Applied absolute pressure BC
+                        total_concentration[nodes[i]] = mesh.absolute_pressure_bc[node_id] / (R * T[node_id]) #Applied absolute pressure BC
                     end
                 end
+
+                #Get total nodal concentrations
+                C_t= [total_concentration[nodes[i]] for i in 1:4]
 
                 #Get nodal temperatures
                 T_e = [T[nodes[i]] for i in 1:4]
@@ -572,10 +575,35 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
             
 
+            #______________________________________________________
+            # Calculate boundary advective fluxes (Equation 46)
+            # q_BC = ∑_e 0.5 * l_e * C_g * v* · n̂
+            #______________________________________________________
+            if calculate_advection
+                # Loop over all precomputed boundary edges
+                for (elem_id, node_i, node_j, l_e, n_hat) in boundary_edges
+                    # Loop over both nodes on the edge
+                    for node_id in (node_i, node_j)
+                        # Get concentration and velocity at node
+                        C_g_node = C_g[node_id, gas_idx]
+                        v_node = v[node_id, :]  # [v_x, v_y]
+                        
+                        # Calculate normal velocity component: v* · n̂
+                        v_dot_n = dot(v_node, n_hat)
+                        
+                        # Calculate flux at node: q = 0.5 * l_e * C * (v · n)
+                        # Positive flux = outflow (leaving domain)
+                        q_bc = 0.5 * l_e * C_g_node * v_dot_n
+                        
+                        # Add to pressure boundary flux
+                        q_pressure[node_id, gas_idx] += q_bc
+                    end
+                end
+            end
 
             # calculate rate of change dC/dt = q_net / M
             @threads for i in 1:Nnodes                
-                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx] ) * P_boundary[i, gas_idx]) / M[i]
+                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx] + q_pressure[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
                 if gas_name == "CO2" && calculate_reaction                    
                     #include reaction source/sink term
                     Aux= dC_g_dt[i, gas_idx] + ((q_source_sink[i] * P_boundary[i, gas_idx]) / M[i])

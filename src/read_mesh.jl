@@ -556,6 +556,170 @@ function has_pressure_bc(mesh::MeshData, node_id::Int)
 end
 
 
+"""
+    calculate_edge_outward_normal(mesh::MeshData, node_i::Int, node_j::Int) -> Tuple{Float64, Vector{Float64}}
+
+Calculate the length and outward normal vector for a boundary edge between two nodes.
+
+For 2D quadrilateral elements with counter-clockwise node ordering, the outward normal
+is obtained by rotating the edge vector 90° clockwise.
+
+# Arguments
+- `mesh::MeshData`: The mesh data structure
+- `node_i::Int`: First node ID of the edge
+- `node_j::Int`: Second node ID of the edge
+
+# Returns
+- `Tuple{Float64, Vector{Float64}}`: Edge length l_e [m] and unit outward normal vector n̂ [dimensionless]
+
+# Formula
+Given edge vector: `edge_vec = x_j - x_i = [dx, dy]`
+- Edge length: `l_e = ||edge_vec||`
+- Outward normal (CCW ordering): `n̂ = [dy, -dx] / l_e`
+
+# Example
+```julia
+mesh = read_mesh_file("mesh.mesh", materials)
+l_e, n_hat = calculate_edge_outward_normal(mesh, 1, 2)
+# Returns: (0.5, [0.0, -1.0]) for horizontal edge pointing right
+```
+"""
+function calculate_edge_outward_normal(mesh::MeshData, node_i::Int, node_j::Int)
+    # Get node coordinates
+    x_i = mesh.coordinates[node_i, :]
+    x_j = mesh.coordinates[node_j, :]
+    
+    # Calculate edge vector from node_i to node_j
+    edge_vec = x_j - x_i  # [dx, dy]
+    
+    # Calculate edge length
+    l_e = norm(edge_vec)
+    
+    if l_e < 1e-12
+        error("Edge between nodes $node_i and $node_j has zero length (l_e = $l_e)")
+    end
+    
+    # Calculate outward normal by rotating edge vector 90° clockwise
+    # For counter-clockwise node ordering: [dx, dy] → [dy, -dx]
+    outward_normal = [edge_vec[2], -edge_vec[1]]
+    
+    # Normalize to unit vector
+    n_hat = outward_normal / l_e
+    
+    return l_e, n_hat
+end
+
+
+"""
+    identify_boundary_edges(mesh::MeshData) -> Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}}
+
+Identify all boundary edges where both nodes have pressure boundary conditions.
+
+This function efficiently identifies boundary edges by only examining elements connected
+to nodes with pressure BCs, avoiding unnecessary iteration over the entire mesh.
+
+# Arguments
+- `mesh::MeshData`: The mesh data structure
+
+# Returns
+- `Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}}`: Vector of boundary edge information tuples:
+  - `element_id::Int`: Element containing the edge
+  - `node_i::Int`: First node of the edge
+  - `node_j::Int`: Second node of the edge (following element node ordering)
+  - `l_e::Float64`: Edge length [m]
+  - `n_hat::Vector{Float64}`: Unit outward normal vector [dimensionless]
+
+# Algorithm
+1. Extract all nodes with pressure BCs from `mesh.absolute_pressure_bc`
+2. For each pressure BC node, find all connected elements
+3. Check each element edge: if both nodes have pressure BC, it's a boundary edge
+4. Calculate edge geometry (length and outward normal) and store
+5. Remove duplicates (same edge may be found from both nodes)
+
+# Example
+```julia
+mesh = read_mesh_file("mesh.mesh", materials)
+boundary_edges = identify_boundary_edges(mesh)
+println("Found ", length(boundary_edges), " boundary edges")
+
+# Access edge information
+for (elem_id, node_i, node_j, l_e, n_hat) in boundary_edges
+    println("Element \$elem_id: edge \$node_i-\$node_j, length=\$l_e, normal=\$n_hat")
+end
+```
+"""
+function identify_boundary_edges(mesh::MeshData)
+    # Use a Set to avoid duplicate edges
+    boundary_edge_set = Set{Tuple{Int, Int, Int}}()  # (element_id, min_node, max_node)
+    
+    # Get all nodes with pressure boundary conditions
+    pressure_bc_nodes = keys(mesh.absolute_pressure_bc)
+    
+    # For each pressure BC node, examine connected elements
+    for node_id in pressure_bc_nodes
+        # Get all elements containing this node
+        connected_elements = get_node_elements(mesh, node_id)
+        
+        # Check each connected element for boundary edges
+        for elem_id in connected_elements
+            elem_nodes = mesh.elements[elem_id, :]
+            
+            # Check all 4 edges of the quadrilateral element
+            # Edge 1: nodes[1] -> nodes[2]
+            # Edge 2: nodes[2] -> nodes[3]
+            # Edge 3: nodes[3] -> nodes[4]
+            # Edge 4: nodes[4] -> nodes[1]
+            for i in 1:4
+                j = (i % 4) + 1  # Next node in sequence (wraps around)
+                
+                local_node_i = elem_nodes[i]
+                local_node_j = elem_nodes[j]
+                
+                # Check if both nodes have pressure BC
+                if has_pressure_bc(mesh, local_node_i) && has_pressure_bc(mesh, local_node_j)
+                    # Store edge with normalized node ordering to avoid duplicates
+                    # (element_id, min_node, max_node) ensures uniqueness
+                    min_node = min(local_node_i, local_node_j)
+                    max_node = max(local_node_i, local_node_j)
+                    push!(boundary_edge_set, (elem_id, min_node, max_node))
+                end
+            end
+        end
+    end
+    
+    # Convert set to vector and calculate geometry for each edge
+    boundary_edges = Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}}()
+    
+    for (elem_id, min_node, max_node) in boundary_edge_set
+        # Determine correct node ordering from element connectivity
+        # to preserve counter-clockwise orientation for outward normal
+        elem_nodes = mesh.elements[elem_id, :]
+        
+        # Find the edge in the element's node sequence
+        node_i, node_j = min_node, max_node
+        for i in 1:4
+            j = (i % 4) + 1
+            if (elem_nodes[i] == min_node && elem_nodes[j] == max_node) ||
+               (elem_nodes[i] == max_node && elem_nodes[j] == min_node)
+                # Use the actual element ordering
+                node_i = elem_nodes[i]
+                node_j = elem_nodes[j]
+                break
+            end
+        end
+        
+        # Calculate edge geometry
+        l_e, n_hat = calculate_edge_outward_normal(mesh, node_i, node_j)
+        
+        # Store complete edge information
+        push!(boundary_edges, (elem_id, node_i, node_j, l_e, n_hat))
+    end
+    
+    return boundary_edges
+end
+
+
 # Export all public functions and types
 export MeshData, read_mesh_file, get_element_nodes, get_node_coordinates
 export get_element_material, get_node_elements, has_pressure_bc
+export calculate_edge_outward_normal, identify_boundary_edges

@@ -19,6 +19,10 @@ global q_diffusion::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_boundary::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_source_sink::Vector{Float64} = Float64[]  # Only for CO2
 
+# Boundary edge geometry - precomputed during initialization
+# Each tuple contains: (element_id, node_i, node_j, edge_length, outward_normal)
+global boundary_edges::Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}} = []
+
 #------------------------------------------------------------------------------
 # Initialize flow vectors
 #------------------------------------------------------------------------------
@@ -135,7 +139,8 @@ steps to initialize flow vectors and lumped mass matrix.
 
 Call sequence:
 1. Zero all flow vectors
-2. Apply boundary flow conditions
+2. Identify and store boundary edges with geometry
+3. Apply boundary flow conditions
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure
@@ -145,9 +150,17 @@ Call sequence:
 
 # Note
 - Should be called once during initialization after mesh and materials are loaded
+- Precomputes boundary edge geometry (length and outward normals) for efficiency
 """
 function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int)
-    zero_flow_vectors!(Nnodes, NGases)    
+    global boundary_edges
+    
+    zero_flow_vectors!(Nnodes, NGases)
+    
+    # Precompute boundary edge geometry for pressure BC nodes
+    # This is done once during initialization to avoid repeated calculation
+    boundary_edges = identify_boundary_edges(mesh)
+    
     apply_boundary_flows!(mesh)
 end
 
@@ -155,3 +168,4 @@ end
 # Export all public functions
 export zero_flow_vectors!, apply_boundary_flows!, initialize_all_flows!
 export q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink
+export boundary_edges
