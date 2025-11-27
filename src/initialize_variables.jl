@@ -190,28 +190,28 @@ end
 
 Apply absolute pressure boundary conditions from mesh data to the global P array.
 This function sets fixed pressures at nodes where pressure boundary conditions 
-are specified and marks the vacating gas as having restricted flow.
+are specified.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing pressure BC data
 
 # Note
-- Modifies global variables `P` and `P_boundary`
-- Sets P_boundary to 0 for the vacating gas at pressure BC nodes
+- Modifies global variable `P`
+- P_boundary remains free (=1) for all gases at pressure BC nodes
 - These values should be maintained throughout the simulation for BC nodes
 """
 function apply_pressure_bc!(mesh)
-    global P, P_boundary
+    global P
     
     # Apply nodal pressure boundary conditions
     for (node_id, pressure) in mesh.absolute_pressure_bc
         P[node_id] = pressure
         
-        # Get the vacating gas index for this node and mark it as restricted
-        if haskey(mesh.vacating_gas_bc, node_id)
-            gas_idx = mesh.vacating_gas_bc[node_id]
-            P_boundary[node_id, gas_idx] = 0  # Gas can vacate the system
-        end
+        # # Get the vacating gas index for this node and mark it as restricted
+        # if haskey(mesh.vacating_gas_bc, node_id)
+        #     gas_idx = mesh.vacating_gas_bc[node_id]
+        #     P_boundary[node_id, gas_idx] = 0  # Gas can vacate the system
+        # end
     end
 end
 

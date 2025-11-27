@@ -34,71 +34,10 @@ IMPLEMENTATION NOTES:
 This module implements a fully explicit finite element solver for transient 
 gas diffusion in porous media.
 
-GOVERNING EQUATION:
--------------------
-∂(θ_g C_g)/∂t = ∇ · (D_eff ∇C_g)
+The solver can simulate a combination of diffusion, advection, gravitational flow,
+and reaction kinetics (e.g., lime carbonation) using a forward Euler time integration scheme.
 
-where:
-- θ_g = gas volume fraction = n(1 - S_r) [-]
-- C_g = gas concentration [mol/m³]
-- D_eff = D_g × τ = effective diffusion coefficient [m²/s]
-- D_g = gas diffusion coefficient [m²/s]
-- τ = granular tortuosity [-]
-- n = porosity [-]
-- S_r = degree of saturation [-]
-
-FINITE ELEMENT DISCRETIZATION:
--------------------------------
-Semi-discrete form (after spatial discretization):
-M dC/dt = F
-
-where:
-- M = lumped mass matrix (diagonal, M_i = ∫ θ_g N_i dΩ)
-- C = nodal concentration vector
-- F = diffusion flow vector = -K × C
-- K = stiffness matrix (K_ij = ∫ D_eff ∇N_i · ∇N_j dΩ)
-
-TIME INTEGRATION (Forward Euler):
-----------------------------------
-C^(n+1) = C^n + Δt × M^(-1) × F^n
-C^(n+1) = C^n + Δt × M^(-1) × (-K × C^n)
-
-ALGORITHM:
-----------
-1. Assemble lumped mass vector M (once, same for all gases)
-2. Assemble stiffness matrix K for each gas (once, time-independent)
-3. Time stepping loop:
-   For each time step:
-     For each gas (parallelized):
-       a. Compute flow: F = -K × C
-       b. Compute rate: dC/dt = F / M (element-wise)
-       c. Apply boundary conditions (zero rate at fixed nodes)
-       d. Update: C = C + dt × dC/dt
-       e. Enforce non-negativity: C = max(C, 0)
-4. Write output at specified intervals
-
-STABILITY:
-----------
-The explicit scheme requires Δt ≤ Δt_crit for stability.
-Δt_crit is calculated based on:
-- Diffusive time scale: h²τ/(θ_g D_max)
-- Advective time scale (for future implementation)
-- Reactive time scale (for future implementation)
-
-The actual time step is: Δt = C_N × Δt_crit, where C_N is the Courant number (≤ 1).
-
-PARALLELIZATION:
-----------------
-- Gas species loop is parallelized using @threads
-- Each gas can be solved independently in the same time step
-- Element assembly loops are also parallelized where possible
-
-FUTURE EXTENSIONS:
-------------------
-- Add advection terms (Darcy flow)
-- Add chemical reactions (lime carbonation)
-- Add heat transfer
-- Implement adaptive time stepping
+Temperature effects from exothermic reactions are also included, but assumed adiabatic, i.e., no heat loss to surroundings including the soil matrix.
 =#
 
 using Base.Threads
@@ -387,6 +326,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
                 #Get total nodal concentrations
                 C_t= [total_concentration[nodes[i]] for i in 1:4]
+                #Apply total pressure boundary condition at nodes
+                for i in 1:4
+                    node_id = nodes[i]
+                    # Check if this node has a fixed pressure BC for this gas
+                    if has_pressure_bc(mesh, node_id)
+                        C_t[i] = mesh.absolute_pressure_bc[node_id] / (R * T[node_id]) #Applied absolute pressure BC
+                    end
+                end
 
                 #Get nodal temperatures
                 T_e = [T[nodes[i]] for i in 1:4]
