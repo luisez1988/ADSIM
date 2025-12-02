@@ -197,6 +197,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     global boundary_node_influences
     global q_boundary
 
+    # Track warnings for this step
+    negative_conc_warned = Dict{Int, Bool}()  # Track warnings per gas
+
     # Universal gas constant [J/(mol·K)]
     R = 8.314
     M_caco3= 100.09 #g/mol
@@ -269,6 +272,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # Main time stepping loop
     save_data = false
     for step in 1:num_steps
+        
+        
+        
         #reset flow vectors (q_boundary is prefilled and not reset here)
         q_diffusion = zeros(Float64, Nnodes, NGases)
         q_advection = zeros(Float64, Nnodes, NGases)
@@ -499,8 +505,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             # Check if node has influence length (should be in boundary_node_influences)
             if haskey(boundary_node_influences, j)
                 le = boundary_node_influences[j] #length of influence
+                #Get current total concentration at node j
+                C_total_j = sum(C_g[j, :])
                 C_rate_imposed = 0.0 #placeholder for imposed rate will change if a transient pressure is applied
-                λ_bc[j] = 3 * M[j] * (total_rate[j] - C_rate_imposed) / (le * NGases)  # Lagrangian multiplier for node j                
+                λ_bc[j] = M[j] * (C_total_j + dt *total_rate[j]  - total_concentration[j]) / (dt * NGases)  # Lagrangian multiplier for node j                
             else
                 λ_bc[j] = 0.0  # No influence length found, set multiplier to zero
             end
@@ -516,7 +524,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 # Apply Lagrangian correction only at nodes with boundary influence
                 lagrangian_correction = 0.0
                 if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
-                    lagrangian_correction = 0.3333333333333333 * λ_bc[i] * boundary_node_influences[i] / M[i]                    
+                    lagrangian_correction = λ_bc[i] / M[i]                    
                 end
                 
                 C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
@@ -524,8 +532,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 # Ensure non-negative and numerically stable concentrations
                 C_MIN = 1e-12
                 if C_g[i, gas_idx] < C_MIN
-                    if C_g[i, gas_idx] < 0.0  # Only warn for actually negative values
-                        log_print("Warning: Negative concentration detected at node $i for gas $gas_name. Setting to zero.")
+                    if C_g[i, gas_idx] < 0.0 && !get(negative_conc_warned, gas_idx, false)
+                        log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
+                        negative_conc_warned[gas_idx] = true
                     end
                     C_g[i, gas_idx] = 0.0
                 end
@@ -539,7 +548,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
         
-        #Calculate nodal gas velocities using Darcy's law
+        # Calculate nodal gas velocities using Darcy's law
         #zero the velocity vector
         v .= 0.0
 
@@ -653,9 +662,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 C_lime[i] += dt * dC_lime_dt[i]
                 # Ensure non-negative lime concentrations
                 if C_lime[i] < 0.0
+                    if !negative_lime_warned
+                        log_print("Warning: Negative lime concentration detected at step $step. Setting to zero.")
+                        negative_lime_warned = true
+                    end
                     C_lime[i] = 0.0
-                    # print warning in log_file
-                    log_print("Warning: Negative lime concentration detected at node $i. Setting to zero.")
                 end
                 #Update caco3_concentration
                 C_caco3[i] += dt * (- dC_lime_dt[i])
@@ -772,6 +783,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             next_output_time += load_step_time
             output_counter += 1
             save_data = false
+            negative_lime_warned = false
         end
 
         #update dt to close exactly at next output time
