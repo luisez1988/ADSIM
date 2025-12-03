@@ -266,7 +266,7 @@ function apply_initial_lime_concentration!(mesh, materials)
                 C_lime_residual[material_idx] = residual_percent * lime_concentration
 
                 #Calculate Caco3 max for degree of carbonation
-                Caco3_max_concentration= lime_concentration * (100.09 / 74.093) #Molar mass ratio CaCO3/Ca(OH)2
+                Caco3_max_concentration= lime_concentration  
                 
                 # Get nodes of this element
                 element_nodes = get_element_nodes(mesh, elem_id)
