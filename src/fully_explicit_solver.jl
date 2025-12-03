@@ -798,6 +798,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     
     log_print("   ✓ Time integration completed")
     log_print(@sprintf("   ✓ Final time: %.4e %s", current_time, calc_params["units"]["time_unit"]))
+    
+    # Return final time tracking values for checkpoint writing
+    return (current_time=current_time, output_counter=output_counter, next_output_time=next_output_time)
 end
 
 

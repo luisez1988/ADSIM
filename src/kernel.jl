@@ -28,6 +28,7 @@ include("time_step.jl")
 include("shape_functions.jl")
 include("write_vtk.jl")
 include("fully_explicit_solver.jl")
+include("write_checkpoint.jl")
 
 using .ShapeFunctions
 using .WriteVTK
@@ -77,13 +78,41 @@ function main()
         exit(1)
     end
 
-    # Setup output directory and log file
+    # Setup output directory
     output_dir = "output"
     if !isdir(output_dir)
         mkdir(output_dir)
     end
 
-    log_file_path = joinpath(output_dir, "$(project_name).log")
+    # Determine current stage by checking for existing checkpoint files
+    # Look for checkpoint files matching pattern: {project_name}_stage*.jld2
+    if isdir(output_dir)
+        all_files = readdir(output_dir)
+        checkpoint_files = filter(f -> occursin(r"_stage\d+\.jld2$", f) && startswith(f, project_name), all_files)
+        
+        if isempty(checkpoint_files)
+            # No checkpoints found - this is stage 1
+            current_stage = 1
+        else
+            # Extract stage numbers from checkpoint filenames
+            stage_numbers = Int[]
+            for filename in checkpoint_files
+                # Extract number between "stage" and ".jld2"
+                m = match(r"_stage(\d+)\.jld2$", filename)
+                if m !== nothing
+                    push!(stage_numbers, parse(Int, m.captures[1]))
+                end
+            end
+            # Current stage is one more than the highest existing stage
+            current_stage = isempty(stage_numbers) ? 1 : maximum(stage_numbers) + 1
+        end
+    else
+        # Output directory doesn't exist yet - this is stage 1
+        current_stage = 1
+    end
+
+    # Setup log file with stage number
+    log_file_path = joinpath(output_dir, "$(project_name)_stage$(current_stage).log")
 
     # Delete existing log file if it exists
     if isfile(log_file_path)
@@ -106,6 +135,7 @@ function main()
 
         # Note: calc and mat files will be checked when needed in future steps
         log_print("Project: $(project_name)")
+        log_print("Stage: $(current_stage)")
 
         log_print("="^64)
         log_print("ADSIM: Advection-Diffusion for Soil Improvement and Modification")
@@ -164,7 +194,16 @@ function main()
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
 
         # Step 8: Run fully explicit solver
-        fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print)
+        final_state = fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print)
+
+        # Write checkpoint file for multi-stage calculations
+        log_print("\nWriting checkpoint file for stage $(current_stage)...")
+        checkpoint_file = write_checkpoint(project_name, current_stage, 
+                                          final_state.current_time, 
+                                          final_state.output_counter, 
+                                          final_state.next_output_time)
+        checkpoint_size = get_checkpoint_file_size(checkpoint_file)
+        log_print("   ✓ Checkpoint saved: $(basename(checkpoint_file)) ($(checkpoint_size))")
 
         # Print total run time
         end_time = now()
