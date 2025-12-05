@@ -206,8 +206,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     ρ_caco3= 2.71e6 #g/m³
     
     # Reaction enthalpy for lime carbonation [J/mol CO2]
-    # Ca(OH)2 + CO2 -> CaCO3 + H2O  ΔH_r ≈ -113 kJ/mol (exothermic)
-    ΔH_r = 113000.0  # J/mol CO2
+    # Ca(OH)2 + CO2 -> CaCO3 + H2O  ΔH_r ≈ -38 kJ/mol (exothermic)
+    ΔH_r = 38000.0  # J/mol CO2
     
     # Constant specific heat for all gases [J/(kg·K)]
     # Using a representative value for common gases at ambient conditions
