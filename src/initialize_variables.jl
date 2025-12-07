@@ -283,6 +283,40 @@ end
 
 
 """
+    apply_partial_pressure_bc!(mesh::MeshData)
+
+Apply partial pressure boundary conditions from mesh data to the global C_g array.
+This function sets gas concentrations at nodes where partial pressure boundary 
+conditions are specified, using the ideal gas law: C_g[i] = P_partial[i] / (R * T).
+It also marks these nodes in P_boundary to prevent the solver from updating them.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure containing partial pressure BC data
+
+# Note
+- Modifies global variables `C_g` and `P_boundary`
+- Uses ideal gas law: P_partial = C_g * R * T, where R = 8.314 J/(mol·K)
+- P_boundary is set to 0 for all gases at partial pressure BC nodes
+- Concentrations will be dynamically updated in solver to maintain partial pressure
+"""
+function apply_partial_pressure_bc!(mesh)
+    global C_g, NGases, P_boundary, T
+    
+    R = 8.314  # Universal gas constant [J/(mol·K)]
+    
+    # Apply nodal partial pressure boundary conditions
+    for (node_id, partial_pressures) in mesh.partial_pressure_bc
+        @threads for gas_idx in 1:NGases
+            # Calculate concentration from partial pressure using ideal gas law
+            # P_partial = C_g * R * T  =>  C_g = P_partial / (R * T)
+            C_g[node_id, gas_idx] = partial_pressures[gas_idx] / (R * T[node_id])
+            P_boundary[node_id, gas_idx] = 0  # Mark node as having partial pressure BC
+        end
+    end
+end
+
+
+"""
     apply_all_initial_conditions!(mesh::MeshData, materials)
 
 Apply all initial conditions and boundary conditions from mesh and material data.
@@ -300,6 +334,7 @@ function apply_all_initial_conditions!(mesh, materials)
     apply_initial_concentrations!(mesh)
     apply_initial_temperature!(mesh)
     apply_concentration_bc!(mesh)
+    apply_partial_pressure_bc!(mesh)
     apply_pressure_bc!(mesh)
     apply_initial_lime_concentration!(mesh, materials)
     

@@ -17,6 +17,7 @@ Structure to store all mesh data and associated boundary/initial conditions.
 - `concentration_bc::Dict{Int, Vector{Float64}}`: Concentration BC (node_id => [gas1, gas2, ...])
 - `uniform_flow_bc::Dict{Int, Vector{Float64}}`: Uniform flow BC (node_id => [gas1, gas2, ...])
 - `absolute_pressure_bc::Dict{Int, Float64}`: Absolute pressure BC (node_id => pressure)
+- `partial_pressure_bc::Dict{Int, Vector{Float64}}`: Partial pressure BC (node_id => [P_gas1, P_gas2, ...])
 # - `vacating_gas_bc::Dict{Int, Int}`: Vacating gas index for pressure BC (node_id => gas_index)
 - `initial_concentrations::Dict{Int, Vector{Float64}}`: Initial concentrations (elem_id => [gas1, gas2, ...])
 - `initial_temperature::Dict{Int, Float64}`: Initial temperature (elem_id => temperature)
@@ -31,6 +32,7 @@ mutable struct MeshData
     concentration_bc::Dict{Int, Vector{Float64}}
     uniform_flow_bc::Dict{Int, Vector{Float64}}
     absolute_pressure_bc::Dict{Int, Float64}
+    partial_pressure_bc::Dict{Int, Vector{Float64}}
     initial_concentrations::Dict{Int, Vector{Float64}}
     initial_temperature::Dict{Int, Float64}
     materials::Dict{Int, Int}
@@ -41,7 +43,8 @@ mutable struct MeshData
             zeros(Int, 0, 0),
             Dict{Int, Vector{Float64}}(),
             Dict{Int, Vector{Float64}}(),
-            Dict{Int, Float64}(),            
+            Dict{Int, Float64}(),
+            Dict{Int, Vector{Float64}}(),
             Dict{Int, Vector{Float64}}(),
             Dict{Int, Float64}(),
             Dict{Int, Int}())
@@ -127,6 +130,10 @@ function read_mesh_file(filename::String)
             # Parse absolute pressure boundary conditions
             elseif line == "absolute_pressure"
                 line_idx = parse_absolute_pressure!(mesh, lines, line_idx + 1)
+                
+            # Parse partial pressure boundary conditions
+            elseif line == "partial_pressure_bc"
+                line_idx = parse_partial_pressure_bc!(mesh, lines, line_idx + 1)
                 
             # Parse initial concentrations
             elseif line == "initial_concentrations"
@@ -339,6 +346,43 @@ function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_id
     
     # Skip end marker
     if strip(lines[line_idx]) == "end absolute_pressure"
+        line_idx += 1
+    end
+    
+    return line_idx
+end
+
+
+"""
+parse_partial_pressure_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> Int
+
+Parse partial pressure boundary conditions from the mesh file.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure to populate
+- `lines::Vector{String}`: All lines from the file
+- `line_idx::Int`: Current line index
+
+# Returns
+- `Int`: Next line index to process
+"""
+function parse_partial_pressure_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
+    # Read counter
+    counter = parse(Int, strip(lines[line_idx]))
+    line_idx += 1
+    
+    # Read boundary conditions
+    for i in 1:counter
+        line = strip(lines[line_idx])
+        parts = split(line)
+        node_id = parse(Int, parts[1])
+        partial_pressures = [parse(Float64, parts[i]) for i in 2:length(parts)]
+        mesh.partial_pressure_bc[node_id] = partial_pressures
+        line_idx += 1
+    end
+    
+    # Skip end marker
+    if strip(lines[line_idx]) == "end partial_pressure_bc"
         line_idx += 1
     end
     

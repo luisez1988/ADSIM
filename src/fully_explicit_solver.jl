@@ -758,6 +758,16 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
+        # Apply partial pressure boundary conditions after temperature update
+        # This ensures partial pressure remains constant by updating concentrations
+        # based on new temperature: C_g = P_partial / (R * T)
+        for (node_id, partial_pressures) in mesh.partial_pressure_bc
+            for gas_idx in 1:NGases
+                # Recalculate concentration to maintain constant partial pressure
+                # P_partial = C_g * R * T  =>  C_g = P_partial / (R * T)
+                C_g[node_id, gas_idx] = partial_pressures[gas_idx] / (R * T[node_id])
+            end
+        end
         
         # Calculate total gas concentrations after all gases are updated
         total_concentration = vec(sum(C_g, dims=2))

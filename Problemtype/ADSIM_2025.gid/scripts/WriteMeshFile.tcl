@@ -38,6 +38,9 @@ proc ADSIM::WriteMeshFile { filename } {
     # Write absolute pressure boundary conditions
     ADSIM::WriteMeshPressureBC $root
     
+    # Write partial pressure boundary conditions
+    ADSIM::WriteMeshPartialPressureBC $root
+    
     # Write initial gas concentrations
     ADSIM::WriteMeshInitialConcentrations $root
     
@@ -257,6 +260,59 @@ proc ADSIM::WriteMeshPressureBC { root } {
     GiD_WriteCalculationFile puts $counter
     GiD_WriteCalculationFile nodes $formats
     GiD_WriteCalculationFile puts "end absolute_pressure"
+    GiD_WriteCalculationFile puts ""
+}
+
+#===============================================================================
+# Write partial pressure boundary conditions
+#===============================================================================
+proc ADSIM::WriteMeshPartialPressureBC { root } {
+    GiD_WriteCalculationFile puts "partial_pressure_bc"
+    
+    # Get number of gases defined
+    set xp_gases {//container[@n="materials"]/container[@n="m_gas"]/blockdata}
+    set gas_blocks [$root selectNodes $xp_gases]
+    set num_gases [llength $gas_blocks]
+
+    # Line conditions
+    set ov_type "line"
+    set xp [format_xpath {container[@n="BC"]/condition[@n="gas_partial_pressure"]/group[@ov=%s]} $ov_type]
+    set formats ""
+
+    foreach gNode [$root selectNodes $xp] {
+        set aux ""
+        for {set i 1} {$i <= $num_gases} {incr i} {
+            # set string as : partial_pressure_gas_1_
+            set format_xpath [format {string(value[@n="partial_pressure_gas_%d_"]/@v)} $i]
+            set v1 [$gNode selectNodes $format_xpath]
+            append aux "$v1 " 
+        }
+        
+        #write nodes with values
+        dict set formats [$gNode @n] "%d $aux\n"
+    }
+
+    #point conditions
+    set ov_type "point" 
+    set xp [format_xpath {container[@n="BC"]/condition[@n="gas_partial_pressure"]/group[@ov=%s]} $ov_type]
+
+    foreach gNode [$root selectNodes $xp] {
+        set aux ""
+        for {set i 1} {$i <= $num_gases} {incr i} {
+            # set string as : partial_pressure_gas_1_
+            set format_xpath [format {string(value[@n="partial_pressure_gas_%d_"]/@v)} $i]
+            set v1 [$gNode selectNodes $format_xpath]
+            append aux "$v1 "
+        }
+        #write nodes with values
+        dict set formats [$gNode @n] "%d $aux\n"
+    }
+
+    # Add a counter 
+    set counter [GiD_WriteCalculationFile nodes -count $formats]
+    GiD_WriteCalculationFile puts $counter
+    GiD_WriteCalculationFile nodes $formats
+    GiD_WriteCalculationFile puts "end partial_pressure_bc"
     GiD_WriteCalculationFile puts ""
 }
 

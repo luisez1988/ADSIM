@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?><!-- -*- coding: utf-8; mode: SGML -*- -->
+
+<condition n="gas_partial_pressure" pn="Partial Pressure" icon="icon_concentration_bc.png" ov="point,line" help="Use this condition to apply a partial pressure for each gas and keep it constant during the analysis. Gas concentrations will adjust to maintain the partial pressure as temperature changes"> 
+	<!-- Partial pressure fields are dynamically shown based on the number of gases defined in Materials -->
+	<value n="partial_pressure_gas_1_" pn="Gas 1 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 1]"/>
+	<value n="partial_pressure_gas_2_" pn="Gas 2 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 2]"/>
+	<value n="partial_pressure_gas_3_" pn="Gas 3 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 3]"/>
+	<value n="partial_pressure_gas_4_" pn="Gas 4 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 4]"/>
+	<value n="partial_pressure_gas_5_" pn="Gas 5 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 5]"/>
+	<value n="partial_pressure_gas_6_" pn="Gas 6 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 6]"/>
+	<value n="partial_pressure_gas_7_" pn="Gas 7 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 7]"/>
+	<value n="partial_pressure_gas_8_" pn="Gas 8 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 8]"/>
+	<value n="partial_pressure_gas_9_" pn="Gas 9 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 9]"/>
+	<value n="partial_pressure_gas_10_" pn="Gas 10 Partial Pressure [F/L^2]" v="0.0" state="[ADSIM_2025::CheckGasExists 10]"/>
+</condition>
