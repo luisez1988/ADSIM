@@ -47,7 +47,8 @@
       <value n="intrinsic_permeabiliy_" pn="Intrinsic permeability [L^2]" v="0.0"/>
       <value n="lime_content_" pn="Lime content [-]" v="0.0" help="Defined as a fraction of the weight of solids."/>
       <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Defined as a fraction of the lime content."/>
-      <value n="reaction_rate_" pn="Reaction rate [mol/L^3.s]" v="0.0" help="Defined as a fraction of the lime content."/>
+      <value n="arrhenius_factor_" pn="Arrhenius factor k_o [L^3/(mol.s)]" v="0.0" help="Pre-exponential factor of the carbonation rate coefficient k_T = k_o exp(-E/RT). Calibration parameter."/>
+      <value n="activation_energy_" pn="Activation energy E [FL/mol]" v="0.0" help="Activation energy of the carbonation reaction, in J/mol. Calibration parameter."/>
 
       </container>          
 

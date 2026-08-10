@@ -197,8 +197,11 @@ proc ADSIM::WriteSoilProperties { root } {
             set lime [$first_group selectNodes {string(.//value[@n="lime_content_"]/@v)}]
             GiD_WriteCalculationFile puts "lime_content = $lime"
 
-            set reaction_rate [$first_group selectNodes {string(.//value[@n="reaction_rate_"]/@v)}]
-            GiD_WriteCalculationFile puts "lime_reaction_rate = $reaction_rate"
+            set arrhenius_factor [$first_group selectNodes {string(.//value[@n="arrhenius_factor_"]/@v)}]
+            GiD_WriteCalculationFile puts "lime_arrhenius_factor = $arrhenius_factor"
+
+            set activation_energy [$first_group selectNodes {string(.//value[@n="activation_energy_"]/@v)}]
+            GiD_WriteCalculationFile puts "lime_activation_energy = $activation_energy"
             
             set res_lime [$first_group selectNodes {string(.//value[@n="lime_impure_"]/@v)}]
             GiD_WriteCalculationFile puts "residual_lime = $res_lime"

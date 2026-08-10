@@ -64,7 +64,8 @@ Structure to store soil material properties.
 - `intrinsic_permeability::Float64`: Intrinsic permeability [m²]
 - `lime_content::Float64`: Lime content [-]
 - `residual_lime::Float64`: Residual lime [-]
-- `reaction_rate::Float64`: Chemical reaction rate [1/s]
+- `arrhenius_factor::Float64`: Arrhenius factor k_o of the carbonation reaction [m³/(mol·s)]
+- `activation_energy::Float64`: Activation energy E of the carbonation reaction [J/mol]
 - `specific_heat_solids::Float64`: Specific heat of solids [J/(kg·K)]
 """
 mutable struct SoilProperties
@@ -76,11 +77,12 @@ mutable struct SoilProperties
     intrinsic_permeability::Float64
     lime_content::Float64
     residual_lime::Float64
-    reaction_rate::Float64
+    arrhenius_factor::Float64
+    activation_energy::Float64
     specific_heat_solids::Float64
-    
+
     function SoilProperties(name::String)
-        new(name, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        new(name, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     end
 end
 
@@ -221,7 +223,8 @@ function parse_soil_properties!(materials::MaterialData, soil_data::Dict)
         soil_props.intrinsic_permeability = Float64(soil_info["intrinsic_permeability"])
         soil_props.lime_content = Float64(soil_info["lime_content"])
         soil_props.residual_lime = Float64(soil_info["residual_lime"])
-        soil_props.reaction_rate = Float64(get(soil_info, "lime_reaction_rate", 0.0))
+        soil_props.arrhenius_factor = Float64(get(soil_info, "lime_arrhenius_factor", 0.0))
+        soil_props.activation_energy = Float64(get(soil_info, "lime_activation_energy", 0.0))
         
         # Read thermal properties
         soil_props.specific_heat_solids = Float64(soil_info["specific_heat_solids"])

@@ -283,35 +283,51 @@ Get the maximum value of (κ × θ_w × C_CO2_max) for the reactive time scale.
 # Arguments
 - `mesh::MeshData`: Mesh data structure
 - `materials`: Material data structure
-- `C_co2_max::Float64`: Maximum CO2 concentration [mol/m³]
+- `T_ref::Float64`: Reference temperature [K]
 
 # Returns
 - `Float64`: Maximum reaction parameter [1/s]
 """
-function get_maximum_reaction_parameters(mesh, materials, C_co2_max::Float64)
+function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     param_max = 0.0
-    
+    ρ_w = materials.liquid.density  # [kg/m³]
+    R_gas = 8.3145                  # J mol⁻¹ K⁻¹
+    M_lime = 74.093                 # Molar mass of Ca(OH)2 [g/mol]
+
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
         # Get material for this element
         material_idx = get_element_material(mesh, elem_id)
-        
+
         if material_idx !== nothing
             # Get soil properties
             soil_name = materials.soil_dictionary[material_idx]
             soil = materials.soils[soil_name]
-            
-            # Calculate reaction parameter
-            κ = soil.reaction_rate  # Reaction rate [1/s]
-            θ_w = soil.porosity * soil.saturation  # Volumetric water content [-]
-            
-            if C_co2_max > 0.0
-                param = κ * θ_w * C_co2_max
+
+            n = soil.porosity
+            θ_w = n * soil.saturation        # Volumetric water content [-]
+            θ_g = n * (1.0 - soil.saturation)  # Volumetric gas content [-]
+
+            if θ_w > 0.0 && θ_g > 0.0
+                # Initial reactive lime on the water basis, A*_s at t = 0
+                C_lime_0 = (soil.lime_content * soil.specific_gravity *
+                            (1.0 - n) * 1e6) / M_lime          # [mol/m³ total]
+                A_star_0 = C_lime_0 * (1.0 - soil.residual_lime) / θ_w
+
+                # The rate law is pseudo-first order in the CO2 gas concentration:
+                #   dC_g/dt|rxn = -(θ_w/θ_g) k_T K_H R T min{A_aq,sat, A*_s} C_g
+                # so the bracket below is the decay constant of that equation.
+                A_react = min(lime_solubility(T_ref, ρ_w), A_star_0)
+                k_T = arrhenius_coefficient(soil.arrhenius_factor,
+                                            soil.activation_energy, T_ref)
+
+                param = (θ_w / θ_g) * k_T * henry_solubility(T_ref) *
+                        R_gas * T_ref * A_react
                 param_max = max(param_max, param)
             end
         end
     end
-    
+
     return param_max
 end
 
@@ -349,7 +365,7 @@ end
 Calculate the critical time step based on three stability criteria:
 1. Diffusive time scale: h_min² × τ / (θ_g × D_max)
 2. Advective time scale: h_min² × (μ_g / (C_g^i × K × T × R))_min
-3. Reactive time scale: 1 / (κ × θ_w × C_CO2_max)
+3. Reactive time scale: 1 / ((θ_w/θ_g) × k_T × K_H × R × T × min{A_aq,sat, A*_s})
 
 The critical time step is the minimum of these three values.
 
@@ -365,7 +381,7 @@ The critical time step is the minimum of these three values.
 ```
 Δt_crit = min{ h_min² × τ / (θ_g × D_max),
                h_min² × (μ_g / (C_g^i × K × T × R))_min,
-               1 / (κ × θ_w × C_CO2_max) }
+               1 / ((θ_w/θ_g) × k_T × K_H × R × T × min{A_aq,sat, A*_s}) }
 ```
 """
 function calculate_critical_time_step(mesh, materials, T_ref::Float64)
@@ -401,8 +417,7 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64)
     
     # Calculate reactive time scale
     dt_reaction = Inf
-    C_co2_max = get_maximum_co2_concentration(mesh, materials)
-    reaction_param_max = get_maximum_reaction_parameters(mesh, materials, C_co2_max)
+    reaction_param_max = get_maximum_reaction_parameters(mesh, materials, T_ref)
     if reaction_param_max > 0.0
         dt_reaction = 1.0 / (2 * reaction_param_max)
     end

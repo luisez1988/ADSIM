@@ -37,3 +37,6 @@ JuliaLocalPreferences.toml
 output/
 # Compiled application folder
 ADSIM_app/
+
+# Claude Code local settings
+.claude/settings.local.json

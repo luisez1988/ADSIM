@@ -27,6 +27,124 @@ function heaviside(x)
     return x >= 0 ? 1.0 : 0.0
 end
 
+"""
+    henry_solubility(T)
+
+Henry solubility of CO2 in water, K_H(T), following the van 't Hoff form of
+Eq. (henry_vantHoff) of the manuscript.
+
+    K_H(T) = K_H° exp[2400 (1/T - 1/T°)],   K_H° = 3.3e-4 mol m⁻³ Pa⁻¹, T° = 298.15 K
+
+# Arguments
+- `T`: Absolute temperature [K]
+
+# Returns
+- Henry solubility [mol m⁻³ Pa⁻¹]
+"""
+function henry_solubility(T)
+    K_H_ref = 3.3e-4    # mol m⁻³ Pa⁻¹ at T_ref (Sander 2015)
+    T_ref = 298.15      # K
+    return K_H_ref * exp(2400.0 * (1.0 / T - 1.0 / T_ref))
+end
+
+"""
+    lime_solubility(T, ρ_w)
+
+Solubility limit of portlandite in water, A_aq,sat, from the IUPAC correlation
+restated on a volumetric basis in Eq. (solubility) of the manuscript.
+
+    ln(A_aq,sat) = 86.1534 - 3492.14/T - 13.7494 ln(T) + ln(ρ_w)
+
+The correlation is retrograde: solubility falls as temperature rises. It returns
+2.0e1 mol m⁻³ at 298.15 K.
+
+# Arguments
+- `T`: Absolute temperature [K]
+- `ρ_w`: Density of water [kg/m³]
+
+# Returns
+- Solubility limit [mol per m³ of water]
+"""
+function lime_solubility(T, ρ_w)
+    return exp(86.1534 - 3492.14 / T - 13.7494 * log(T) + log(ρ_w))
+end
+
+"""
+    arrhenius_coefficient(k_o, E, T)
+
+Arrhenius rate coefficient k_T of Eq. (arrhenius) of the manuscript.
+
+    k_T = k_o exp(-E / R T)
+
+# Arguments
+- `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
+- `E`: Activation energy [J/mol]
+- `T`: Absolute temperature [K]
+
+# Returns
+- Rate coefficient [m³ mol⁻¹ s⁻¹]
+"""
+function arrhenius_coefficient(k_o, E, T)
+    R_gas = 8.3145  # J mol⁻¹ K⁻¹
+    return k_o * exp(-E / (R_gas * T))
+end
+
+"""
+    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, ρ_w)
+
+Non-negative extent-of-reaction rate r of Eq. (reaction_rate) of the manuscript,
+per unit volume of pore water.
+
+    r = k_T C_aq min{A_aq,sat, A*_s}
+
+with C_aq from Henry's law, k_T from Arrhenius, and A*_s the reactive lime
+concentration expressed on the water basis.
+
+# Basis note
+`C_lime` and `C_r` are stored by ADSIM per unit **total** volume, whereas the
+manuscript writes A_s and A_r per unit gas volume. Converting the manuscript's
+A*_s = (θ_g/θ_w)(A_s - A_r) H(A_s - A_r) into the storage basis used here
+substitutes A_s = C_lime/θ_g, so the θ_g factors cancel and the conversion
+reduces to a single division by θ_w. See `docs` note in the manuscript §2.
+
+# Arguments
+- `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
+- `C_lime`: Available lime concentration [mol per m³ of total volume]
+- `C_r`: Residual (shielded) lime concentration [mol per m³ of total volume]
+- `θ_w`: Volumetric water content [-]
+- `T`: Absolute temperature [K]
+- `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
+- `E`: Activation energy [J/mol]
+- `ρ_w`: Density of water [kg/m³]
+
+# Returns
+- `r`: Extent-of-reaction rate [mol per m³ of water per s], r >= 0
+"""
+function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, ρ_w)
+    if θ_w <= 0.0 || C_g_co2 <= 0.0
+        return 0.0
+    end
+
+    R_gas = 8.3145  # J mol⁻¹ K⁻¹
+
+    # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water]
+    C_aq = henry_solubility(T) * R_gas * T * C_g_co2
+
+    # Reactive lime in excess of the shielded residual, on the water basis.
+    # The Heaviside sits inside the min of Eq. (reaction_rate), not as a
+    # multiplicative factor on it, so the rate decays continuously to zero
+    # at A_s = A_r instead of being cut off abruptly.
+    Δ_lime = C_lime - C_r
+    A_star = heaviside(Δ_lime) > 0.0 ? Δ_lime / θ_w : 0.0
+
+    # Solubility-limited or solid-limited dissolved lime, whichever binds
+    A_sat = lime_solubility(T, ρ_w)
+
+    k_T = arrhenius_coefficient(k_o, E, T)
+
+    return k_T * C_aq * min(A_sat, A_star)
+end
+
 #=
 IMPLEMENTATION NOTES:
 =====================
@@ -206,8 +324,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     ρ_caco3= 2.71e6 #g/m³
     
     # Reaction enthalpy for lime carbonation [J/mol CO2]
-    # Ca(OH)2 + CO2 -> CaCO3 + H2O  ΔH_r ≈ -38 kJ/mol (exothermic)
-    ΔH_r = 38000.0  # J/mol CO2
+    # Ca(OH)2(s) + CO2(g) -> CaCO3(s) + H2O(l)
+    # Hess's law on the standard enthalpies of formation at 298.15 K
+    # (-986.09, -393.51, -1207.6, -285.83 kJ/mol) gives -113.8 kJ/mol CO2.
+    # Negative under the IUPAC convention, i.e. exothermic. The liquid-phase
+    # product water applies here; taking H2O(g) instead would give -69.8 kJ/mol.
+    ΔH_r = -113800.0  # J/mol CO2
     
     # Constant specific heat for all gases [J/(kg·K)]
     # Using a representative value for common gases at ambient conditions
@@ -224,7 +346,21 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     calculate_advection = solver_settings["advection"] == 1
     calculate_gravity = solver_settings["gravity"] == 1
     calculate_reaction = solver_settings["reaction_kinetics"] == 1
-    
+
+    # The rate law takes an Arrhenius pair (k_o, E) in place of the single
+    # constant κ used before. Material files written for the old input will
+    # parse with k_o = 0 and silently produce no reaction, so flag it here.
+    if calculate_reaction
+        for soil_name in materials.soil_dictionary
+            if materials.soils[soil_name].arrhenius_factor <= 0.0
+                log_print("Warning: reaction kinetics is enabled but soil '$soil_name' has " *
+                          "lime_arrhenius_factor = 0. No carbonation will occur in this " *
+                          "material. Check that the material file defines " *
+                          "lime_arrhenius_factor and lime_activation_energy.")
+            end
+        end
+    end
+
     # Get gravity vector from calc_params
     gravity_params = calc_params["gravity"]
     g_magnitude = gravity_params["magnitude"]
@@ -449,30 +585,42 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
                     # Get element nodes
                     nodes = mesh.elements[e, :]
-                    
+
                     # Get material properties for this element
                     material_idx = get_element_material(mesh, e)
-                    
+
                     soil_name = materials.soil_dictionary[material_idx]
                     soil = materials.soils[soil_name]
-                    #get the carbonation reaction rate for this element
-                    κ_co2= soil.reaction_rate # [m³/(mol·s)]
+                    #get the Arrhenius parameters of the carbonation reaction
+                    k_o= soil.arrhenius_factor      # [m³/(mol·s)]
+                    E_a= soil.activation_energy     # [J/mol]
 
-                    #get water content
+                    #get water and gas contents
                     n= soil.porosity
                     S_r= soil.saturation
-                    θ_w= n * S_r  # volumetric water content
+                    θ_w= n * S_r          # volumetric water content
+                    θ_g= n * (1.0 - S_r)  # volumetric gas content
+                    ρ_w= materials.liquid.density  # [kg/m³]
 
                     #Get residual lime concentration in the soil
-                    C_r= C_lime_residual[material_idx]                    
+                    C_r= C_lime_residual[material_idx]
 
                     #loop over nodes in element
-                    for i in 1:4    
+                    for i in 1:4
                         node_id = nodes[i] #global node id
-                        #Calculate reaction flux only for CO2 gas 
-                        if gas_name == "CO2"
-                            dC_lime_dt[node_id] =  - κ_co2 * θ_w * C_g[node_id, gas_idx] * (C_lime[node_id] - C_r) *heaviside(C_lime[node_id] - C_r)
-                            q_source_sink[node_id] =  M[node_id] * dC_lime_dt[node_id]
+                        #Extent-of-reaction rate r >= 0, per unit volume of water
+                        r = extent_of_reaction_rate(C_g[node_id, gas_idx], C_lime[node_id],
+                                                    C_r, θ_w, T[node_id], k_o, E_a, ρ_w)
+
+                        #Species rates follow from the stoichiometric coefficients.
+                        #Lime is stored per unit total volume, so dA/dt = -θ_w r.
+                        dC_lime_dt[node_id] = -θ_w * r
+
+                        #CO2 is stored per unit gas volume, so the sink carries θ_w/θ_g.
+                        if θ_g > 0.0
+                            q_source_sink[node_id] = -M[node_id] * (θ_w / θ_g) * r
+                        else
+                            q_source_sink[node_id] = 0.0
                         end
                     end
                 end
@@ -484,13 +632,23 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             @threads for i in 1:Nnodes                
                 dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
 
-                if gas_name == "CO2" && calculate_reaction                    
-                    #include reaction source/sink term
-                    Aux= dC_g_dt[i, gas_idx] + ((q_source_sink[i] * P_boundary[i, gas_idx]) / M[i])
-                    if C_g[i, gas_idx] + dt * Aux < 0.0 #can't consume more CO2 than available
-                        dC_g_dt[i, gas_idx] = - C_g[i, gas_idx] / dt
-                        dC_lime_dt[i] = dC_g_dt[i, gas_idx]
+                if gas_name == "CO2" && calculate_reaction
+                    #reaction contribution to the CO2 gas-phase rate [mol/(m³ gas·s)]
+                    dC_g_dt_rxn = (q_source_sink[i] * P_boundary[i, gas_idx]) / M[i]
+
+                    if C_g[i, gas_idx] + dt * (dC_g_dt[i, gas_idx] + dC_g_dt_rxn) < 0.0
+                        #can't consume more CO2 than available: throttle the reaction
+                        #so the gas is exactly exhausted at the end of the step, and
+                        #scale the lime and heat rates by the same factor.
+                        dC_g_dt_rxn_allowed = min(-C_g[i, gas_idx] / dt - dC_g_dt[i, gas_idx], 0.0)
+                        scale = dC_g_dt_rxn < 0.0 ?
+                                clamp(dC_g_dt_rxn_allowed / dC_g_dt_rxn, 0.0, 1.0) : 0.0
+                        dC_g_dt_rxn *= scale
+                        dC_lime_dt[i] *= scale
                     end
+
+                    #include reaction source/sink term
+                    dC_g_dt[i, gas_idx] += dC_g_dt_rxn
                 end
             end
         end # end gas loop
@@ -732,9 +890,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*ρ_g*c_g
                             C_mix = (1.0 - n) * ρ_s * c_s + θ_w * ρ_w * c_w + θ_g * ρ_g * c_g
                             
-                            # Calculate heat generation rate from reaction: q̇ = -ΔH_r * dC_CO2/dt
+                            # Heat generation rate from reaction, Eq. (heat_rate): q̇ = ΔH_r * dC_CO2/dt
+                            # Both factors are negative (exothermic reaction, CO2 consumed),
+                            # so q̇ > 0 and represents heat released. dC_lime_dt is the molar
+                            # rate per unit total volume, which matches the basis of C_mix
+                            # and equals dC_CO2/dt on the same basis by 1:1 stoichiometry.
                             if C_mix > 0.0
-                                q_dot = -ΔH_r * dC_lime_dt[node_id]
+                                q_dot = ΔH_r * dC_lime_dt[node_id]
                                 
                                 # Calculate temperature rate of change
                                 dT_dt[node_id] = q_dot / C_mix

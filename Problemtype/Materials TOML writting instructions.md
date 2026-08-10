@@ -55,7 +55,8 @@ granular_tortuosity= val
 intrinsic_permeability= val
 lime_content= val
 residual_lime= val
-reaction_rate= val
+lime_arrhenius_factor= val
+lime_activation_energy= val
 #thermal properties
 specific_heat_solids= val
 
@@ -68,7 +69,8 @@ granular_tortuosity= val
 intrinsic_permeability= val
 lime_content= val
 residual_lime= val
-reaction_rate= val
+lime_arrhenius_factor= val
+lime_activation_energy= val
 #thermal properties
 specific_heat_solids= val
 .
@@ -83,7 +85,8 @@ granular_tortuosity= val
 intrinsic_permeability= val
 lime_content= val
 residual_lime= val
-reaction_rate= val
+lime_arrhenius_factor= val
+lime_activation_energy= val
 #thermal properties
 specific_heat_solids= val
 
