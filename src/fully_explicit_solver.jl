@@ -179,40 +179,62 @@ where θ_g is the gas volume fraction and A_e is the element area.
 """
 function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
     fill!(M, 0.0)
-    
-    # Loop over all elements
-    @threads for e in 1:mesh.num_elements
-        # Get element nodes
-        nodes = mesh.elements[e, :]
-        
-        # Get material properties for this element
-        material_idx = get_element_material(mesh, e)
-        if material_idx === nothing # No material assigned
-            error("Element $e has no material assigned. Check mesh material definitions.")
+
+    Nelements = mesh.num_elements
+
+    # A node is shared by several elements, so scatter-adding into M straight from a threaded
+    # element loop is a read-modify-write race. The element range is split into fixed chunks
+    # and each chunk accumulates into its own buffer, which are summed in order after the join.
+    #
+    # Chunks are indexed explicitly rather than by Threads.threadid(): tasks may migrate
+    # between threads, so a threadid-indexed buffer can be shared by two tasks, and
+    # threadid() may also exceed Threads.nthreads() when interactive threads are present.
+    nchunks = max(1, min(Threads.nthreads(), Nelements))
+    M_chunk = [zeros(Float64, length(M)) for _ in 1:nchunks]
+    chunk_bounds = round.(Int, range(0, Nelements, length = nchunks + 1))
+
+    # Loop over element chunks
+    @threads for c in 1:nchunks
+        M_local = M_chunk[c]
+
+        for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
+            # Get element nodes
+            nodes = mesh.elements[e, :]
+
+            # Get material properties for this element
+            material_idx = get_element_material(mesh, e)
+            if material_idx === nothing # No material assigned
+                error("Element $e has no material assigned. Check mesh material definitions.")
+            end
+
+            soil_name = materials.soil_dictionary[material_idx]
+            soil = materials.soils[soil_name]
+
+            # Calculate gas volume fraction θ_g = n - θ_w = n(1 - S_r)
+            θ_g = soil.porosity * (1.0 - soil.saturation)
+
+            # Calculate element area using Gaussian quadrature
+            A_e = 0.0
+            for p in 1:4  # 4 Gauss points
+                detJ = ShapeFunctions.get_detJ(e, p)
+                w = ShapeFunctions.shape_funcs.gauss_weights[p]
+                A_e += w * detJ
+            end
+
+            # Distribute mass equally to all 4 nodes (lumped mass)
+            M_node = θ_g * A_e / 4.0
+
+            # Add contribution to each node
+            for i in 1:4
+                node_id = nodes[i]
+                M_local[node_id] += M_node
+            end
         end
-        
-        soil_name = materials.soil_dictionary[material_idx]
-        soil = materials.soils[soil_name]
-        
-        # Calculate gas volume fraction θ_g = n - θ_w = n(1 - S_r)
-        θ_g = soil.porosity * (1.0 - soil.saturation)
-        
-        # Calculate element area using Gaussian quadrature
-        A_e = 0.0
-        for p in 1:4  # 4 Gauss points
-            detJ = ShapeFunctions.get_detJ(e, p)
-            w = ShapeFunctions.shape_funcs.gauss_weights[p]
-            A_e += w * detJ
-        end
-        
-        # Distribute mass equally to all 4 nodes (lumped mass)
-        M_node = θ_g * A_e / 4.0
-        
-        # Add contribution to each node
-        for i in 1:4
-            node_id = nodes[i]
-            M[node_id] += M_node
-        end
+    end
+
+    # Reduce the chunk buffers in a fixed order, so M is reproducible run to run
+    for c in 1:nchunks
+        M .+= M_chunk[c]
     end
 end
 
@@ -245,17 +267,12 @@ function assemble_element_stiffness_matrices(mesh)
         
         # Integrate over Gauss points
         for p in 1:4
-            # Get shape function derivatives in isoparametric coords
-            B = ShapeFunctions.get_B(p)
-            
-            # Get inverse Jacobian and determinant
-            invJ = ShapeFunctions.get_invJ(e, p)
+            # Get Jacobian determinant
             detJ = ShapeFunctions.get_detJ(e, p)
-            
-            # Transform derivatives to physical coordinates
-            # dN/dx = B · J^-1
-            dN_dx = B * invJ  # [4 nodes, 2 coords]
-            
+
+            # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
+            dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
+
             # Gauss weight
             w = ShapeFunctions.shape_funcs.gauss_weights[p]
             
@@ -414,18 +431,32 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         output_counter = 1
     end
     
+    # Flow vectors, allocated once and zeroed in place each step.
+    # These are function-local rather than the like-named globals in initialize_flows.jl:
+    # locals are type-stable and avoid a global lookup in the hot loop. The globals of the
+    # same name are not used by this solver.
+    q_diffusion = zeros(Float64, Nnodes, NGases)
+    q_advection = zeros(Float64, Nnodes, NGases)
+    q_gravitational = zeros(Float64, Nnodes, NGases)
+    total_rate = zeros(Float64, Nnodes)   # Boundary rate of change
+    q_source_sink = zeros(Float64, Nnodes) # Only for CO2 for now
+
+    # Per-element scratch buffers, one set per gas species so the threaded gas loop
+    # never shares them. Sized 4 for the nodes of a quad element.
+    q_aux_buffers = [zeros(4) for _ in 1:NGases]
+    ρ_g_buffers = [zeros(4) for _ in 1:NGases]
+    ρ_g_velocity = zeros(4)  # velocity loop is serial, so one buffer suffices
+
     # Main time stepping loop
     save_data = false
     for step in 1:num_steps
-        
-        
-        
+
         #reset flow vectors (q_boundary is prefilled and not reset here)
-        q_diffusion = zeros(Float64, Nnodes, NGases)
-        q_advection = zeros(Float64, Nnodes, NGases)
-        q_gravitational = zeros(Float64, Nnodes, NGases)
-        total_rate = zeros(Float64, Nnodes)  # Boundary rate of change
-        q_source_sink= zeros(Float64, Nnodes) # Only for CO2 for now
+        q_diffusion .= 0.0
+        q_advection .= 0.0
+        q_gravitational .= 0.0
+        total_rate .= 0.0
+        q_source_sink .= 0.0
 
         # Loop over all gases
         @threads for gas_idx in 1:NGases
@@ -472,8 +503,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 if calculate_diffusion
                     #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p                    
 
-                    q_aux= zeros(4) #local diffusion flow vector
-                    q_aux = (θ_g * D_g / τ) * K_elements[e] *  C_e
+                    q_aux = q_aux_buffers[gas_idx] #local diffusion flow vector
+                    mul!(q_aux, K_elements[e], C_e, θ_g * D_g / τ, 0.0)
 
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
@@ -492,12 +523,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #______________________________________________________
                 if calculate_advection
                     #Zero nodal advection fluxes
-                    q_aux= zeros(4) #local advection flow vector
+                    q_aux = q_aux_buffers[gas_idx] #local advection flow vector
+                    fill!(q_aux, 0.0)
 
                     # loop Gauss points
                     for p in 1:4
-                        # Get shape function derivatives in isoparametric coords
-                        B = ShapeFunctions.get_B(p)
                         # Get shape functions at Gauss point
                         N_p = ShapeFunctions.shape_funcs.N[p]
 
@@ -508,19 +538,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         #Evaluate temperature at Gauss point
                         T_gp = 0.0
                         T_gp = N_p' * T_e
-                        
-                        # Get inverse Jacobian and determinant
-                        invJ = ShapeFunctions.get_invJ(e, p)
+
+                        # Get Jacobian determinant
                         detJ = ShapeFunctions.get_detJ(e, p)
 
                         Wp= ShapeFunctions.shape_funcs.gauss_weights[p]
-                        
-                        # Transform derivatives to physical coordinates
-                        # dN/dx = B · J^-1
-                        dN_dx = B * invJ  # [4 nodes, 2 coords]
 
-                        #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * det(J) * W_p / μ_g^p 
-                        q_aux += (R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g) .* (dN_dx * dN_dx') * C_t
+                        # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
+                        dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
+
+                        #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * det(J) * W_p / μ_g^p
+                        #Contract right to left: dN_dx * (dN_dx' * C_t) avoids forming the 4×4 product
+                        q_aux .+= (R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g) .* (dN_dx * (dN_dx' * C_t))
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
@@ -533,34 +562,31 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Gravity calculation start here
                 #______________________________________________________
 
-                if calculate_gravity                    
+                if calculate_gravity
                     #Zero nodal advection fluxes
-                    q_aux= zeros(4) #local advection flow vector
+                    q_aux = q_aux_buffers[gas_idx] #local advection flow vector
+                    fill!(q_aux, 0.0)
 
                     # loop Gauss points
                     for p in 1:4
-                        # Get shape function derivatives in isoparametric coords
-                        B = ShapeFunctions.get_B(p)
-
                         # Get shape functions at Gauss point
                         N_p = ShapeFunctions.shape_funcs.N[p]
 
                         #Evaluate concentration gas species concentration at Gauss point
                         C_gp = 0.0
                         C_gp = N_p' * C_e
-                        
-                        # Get inverse Jacobian and determinant
-                        invJ = ShapeFunctions.get_invJ(e, p)
+
+                        # Get Jacobian determinant
                         detJ = ShapeFunctions.get_detJ(e, p)
 
                         Wp= ShapeFunctions.shape_funcs.gauss_weights[p]
-                        
-                        # Transform derivatives to physical coordinates
-                        # dN/dx = B · J^-1
-                        dN_dx = B * invJ  # [4 nodes, 2 coords]
+
+                        # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
+                        dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
                         #get nodal densities
-                        ρ_g = zeros(4)
+                        ρ_g = ρ_g_buffers[gas_idx]
+                        fill!(ρ_g, 0.0)
                         for i in 1:4
                             for g in 1:NGases
                                 gas_name = materials.gas_dictionary[g]
@@ -570,7 +596,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         end
 
                         #Update diffusion flow vector ∑_p R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g  * (dN_dx · g) * N_p *∑ M C_g
-                        q_aux += ( k_intrinsic * C_gp * detJ * Wp / μ_g) .* (dN_dx * g_vector) .* N_p' * ρ_g
+                        #ρ_g interpolates to a scalar at the Gauss point, so this is a scaled
+                        #4-vector rather than the 4×4 outer product the previous form built
+                        ρ_g_gp = N_p' * ρ_g
+                        q_aux .+= (k_intrinsic * C_gp * detJ * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
@@ -744,18 +773,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get shape functions at Gauss point
                 N_p = ShapeFunctions.shape_funcs.N[p]
 
-                # Get shape function derivatives in isoparametric coords
-                B = ShapeFunctions.get_B(p)
-
-                # Get inverse Jacobian and determinant
-                invJ = ShapeFunctions.get_invJ(e, p)
+                # Get Jacobian determinant
                 detJ = ShapeFunctions.get_detJ(e, p)
-                
+
                 # Gauss weight
                 w = ShapeFunctions.shape_funcs.gauss_weights[p]
 
-                # Transform derivatives to physical coordinates
-                dN_dx = B * invJ  # [4 nodes, 2 coords]
+                # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
+                dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
                 #Evaluate pressure gradient at Gauss point
                 grad_P = dN_dx' * P_e  # [2 coords]
@@ -794,7 +819,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #consider velocity contribution from gravity
                 if calculate_gravity
                     #Calculate gravitational velocity at Gauss point
-                    ρ_g = zeros(4)
+                    #This loop is serial, so a single shared buffer is safe here
+                    ρ_g = ρ_g_velocity
+                    fill!(ρ_g, 0.0)
                     for i in 1:4
                         for g in 1:NGases
                             gas_name = materials.gas_dictionary[g]

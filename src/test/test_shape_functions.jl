@@ -24,7 +24,7 @@ function test_determinant_sum()
     println("="^70)
     
     # Read the mesh file
-    mesh_file = "../data/TEST.mesh"
+    mesh_file = "../data/Base_carbonation_tests.mesh"
     println("\nReading mesh file: $mesh_file")
     mesh = read_mesh_file(mesh_file)
     

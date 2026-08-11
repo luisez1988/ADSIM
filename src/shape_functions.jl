@@ -9,7 +9,7 @@ module ShapeFunctions
 
 using Base.Threads
 
-export ShapeFunctionData, initialize_shape_functions!, get_N, get_B, get_invJ, get_detJ
+export ShapeFunctionData, initialize_shape_functions!, get_N, get_B, get_invJ, get_detJ, get_dN_dx
 
 """
     ShapeFunctionData
@@ -21,14 +21,21 @@ Structure to store precomputed shape function values and element-specific Jacobi
 - `B::Vector{Matrix{Float64}}`: Derivatives of shape functions at each Gauss point [4 Gauss points][4 nodes, 2 coords]
 - `invJ::Array{Float64, 4}`: Inverse Jacobian at each element and Gauss point [Nelements, 4 Gauss points, 2, 2]
 - `detJ::Matrix{Float64}`: Determinant of Jacobian at each element and Gauss point [Nelements, 4 Gauss points]
+- `dN_dx::Array{Float64, 4}`: Shape function derivatives in physical coordinates, B · J^-1,
+  at each element and Gauss point [Nelements, 4 Gauss points, 4 nodes, 2 coords]
 - `gauss_points::Matrix{Float64}`: Gauss point coordinates in isoparametric space [4 points, 2 coords (ξ, η)]
 - `gauss_weights::Vector{Float64}`: Gauss point weights [4 points]
+
+`dN_dx` is the quantity every flux term actually consumes. It is stored rather than recomputed
+from `B` and `invJ` at each use, because the product is element- and Gauss-point-specific but
+time-invariant, so recomputing it inside the time loop is pure waste.
 """
 mutable struct ShapeFunctionData
     N::Vector{Vector{Float64}}
     B::Vector{Matrix{Float64}}
     invJ::Array{Float64, 4}
     detJ::Matrix{Float64}
+    dN_dx::Array{Float64, 4}
     gauss_points::Matrix{Float64}
     gauss_weights::Vector{Float64}
 end
@@ -205,7 +212,8 @@ function initialize_shape_functions!(mesh)
     Nelements = mesh.num_elements
     invJ_elements = zeros(Nelements, 4, 2, 2)  # [element, gauss point, 2x2 matrix]
     detJ_elements = zeros(Nelements, 4)         # [element, gauss point]
-    
+    dN_dx_elements = zeros(Nelements, 4, 4, 2)  # [element, gauss point, 4 nodes, 2 coords]
+
     # Compute Jacobian data for each element at each Gauss point (parallelized)
     @threads for e in 1:Nelements
         # Get node indices for this element
@@ -226,12 +234,16 @@ function initialize_shape_functions!(mesh)
             
             invJ_elements[e, p, :, :] = invJ
             detJ_elements[e, p] = detJ
+
+            # Physical-coordinate derivatives dN/dx = B · J^-1, cached so the time loop
+            # never has to form this product again
+            dN_dx_elements[e, p, :, :] = B_gauss[p] * invJ
         end
     end
-    
+
     # Store globally within module
-    global shape_funcs = ShapeFunctionData(N_gauss, B_gauss, invJ_elements, detJ_elements, 
-                                            gauss_points, gauss_weights)
+    global shape_funcs = ShapeFunctionData(N_gauss, B_gauss, invJ_elements, detJ_elements,
+                                            dN_dx_elements, gauss_points, gauss_weights)
     
     return shape_funcs
 end
@@ -282,13 +294,39 @@ Get precomputed inverse Jacobian for element e at Gauss point p.
 - `p::Int`: Gauss point index (1-4)
 
 # Returns
-- `Matrix{Float64}`: Inverse Jacobian matrix [2×2]
+- A 2×2 view of the inverse Jacobian matrix
+
+Returns a view rather than a copy: this is called once per element per Gauss point per gas per
+time step, so slicing here would allocate in the innermost loop.
 """
 function get_invJ(e::Int, p::Int)
     if shape_funcs === nothing
         error("Shape functions not initialized. Call initialize_shape_functions! first.")
     end
-    return shape_funcs.invJ[e, p, :, :]
+    return @view shape_funcs.invJ[e, p, :, :]
+end
+
+"""
+    get_dN_dx(e::Int, p::Int)
+
+Get the precomputed physical-coordinate shape function derivatives dN/dx = B · J^-1 for
+element e at Gauss point p.
+
+# Arguments
+- `e::Int`: Element index
+- `p::Int`: Gauss point index (1-4)
+
+# Returns
+- A [4 nodes, 2 coords] view of the derivative matrix
+
+This replaces the `B * invJ` product previously formed at each use site. Returns a view, so it
+allocates nothing.
+"""
+function get_dN_dx(e::Int, p::Int)
+    if shape_funcs === nothing
+        error("Shape functions not initialized. Call initialize_shape_functions! first.")
+    end
+    return @view shape_funcs.dN_dx[e, p, :, :]
 end
 
 """
