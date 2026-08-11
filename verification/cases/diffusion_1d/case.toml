@@ -1,0 +1,19 @@
+# Verification case: 1D pure diffusion
+# Analytical reference: sine-series (consolidation) solution,
+# Cleary & Adrian (1973) with v = 0.  See verification/README.md.
+
+project     = "Diffusion_test"                 # base name of the input files in this folder
+field       = "CO2_Concentration"              # VTK scalar to compare
+axis        = "y"                              # 1D axis of the strip mesh
+boundary_coord = 1.0                           # driving boundary is at y = 1.0
+tolerance   = 0.02                             # PASS if worst relative L2 <= 2%
+check_steps = []                               # [] = every saved step except t=0
+
+[analytical]
+type  = "diffusion_series"
+C0    = 40.0      # boundary concentration [mol/m^3]
+Ci    = 32.0      # initial concentration  [mol/m^3]
+D     = 6.11e-5    # effective diffusion coefficient [m^2/s] (must match solver)
+R     = 1.0       # retardation factor
+L     = 1.0       # column length [m]
+terms = 500       # series truncation

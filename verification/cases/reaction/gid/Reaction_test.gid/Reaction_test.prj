@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gid version="15.0">
+  <pre>
+    <layer_to_use name="Layer0"/>
+    <groups>
+      <group id="1" name="Physical and thermal properties Auto1" color="#ff00ffff" allowed_types="#24" allowed_element_types="#7fe"/>
+      <group id="2" name="Initial gas concentrations Auto1" color="#008000ff" allowed_types="#24" allowed_element_types="#7fe"/>
+      <group id="3" name="Initial temperature Auto1" color="#ffff00ff" allowed_types="#24" allowed_element_types="#7fe"/>
+      <group id="4" name="Gas concentration Auto1" color="#ffa500ff" allowed_types="#73" allowed_element_types="#7fe"/>
+      <group id="5" name="Gas flow Auto1" color="#ffc0cbff" allowed_types="#77" allowed_element_types="#7fe"/>
+      <group id="6" name="Gas concentration Auto2" color="#cdc0b0ff" allowed_types="#73" allowed_element_types="#7fe"/>
+    </groups>
+    <entities_groups>
+      <entities_group name="lines">
+        <vector name="entity_ids" length="4" type="integer">1:4</vector>
+        <vector name="entity_num_groups" length="4" type="ushort">1x4</vector>
+        <vector name="entity_groups" length="4" type="ushort">6 5 4 5</vector>
+      </entities_group>
+      <entities_group name="surfaces">
+        <vector name="entity_ids" length="1" type="integer">1</vector>
+        <vector name="entity_num_groups" length="1" type="ushort">3</vector>
+        <vector name="entity_groups" length="3" type="ushort">1 2 3</vector>
+      </entities_group>
+      <entities_group name="nodes">
+        <vector name="entity_ids" length="52" type="integer">1:52</vector>
+        <vector name="entity_num_groups" length="52" type="ushort">2 1x7 2 1x40 2 1 2</vector>
+        <vector name="entity_groups" length="56" type="ushort">5 6 5x8 6 5x40 4 5 5 4 5</vector>
+      </entities_group>
+      <entities_group name="elements">
+        <vector name="entity_ids" length="25" type="integer">1:25</vector>
+        <vector name="entity_num_groups" length="25" type="ushort">3x25</vector>
+        <vector name="entity_groups" length="75" type="ushort">1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3 1 2 3</vector>
+      </entities_group>
+      <entities_group name="faces">
+        <vector name="entity_ids" length="25" type="integer">1:25</vector>
+        <vector name="entity_num_faces" length="25" type="uchar">3 2x23 3</vector>
+        <vector name="entity_faces" length="52" type="uchar">1 3 4 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 1 3 2 1 3</vector>
+        <vector name="face_num_groups" length="52" type="ushort">1x52</vector>
+        <vector name="face_groups" length="52" type="ushort">5 5 6 5x46 4 5 5</vector>
+      </entities_group>
+    </entities_groups>
+  </pre>
+</gid>

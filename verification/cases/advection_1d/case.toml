@@ -1,0 +1,19 @@
+# Verification case: 1D advection-diffusion
+# Analytical reference: Cleary & Adrian (1973) finite-column solution
+# with a first-type inlet boundary.  See verification/README.md.
+
+project     = "Advection_test"
+field       = "CO2_Concentration"
+axis        = "y"
+boundary_coord = 1.0
+tolerance   = 0.02
+check_steps = []
+
+[analytical]
+type = "advection_diffusion"
+C0   = 40.0     # inlet concentration [mol/m^3]
+Ci   = 32.0     # initial concentration [mol/m^3]
+D    = 1.6e-5   # effective diffusion coefficient [m^2/s] (must match solver)
+v    = 8.0e-6   # gas seepage velocity [m/s]
+R    = 0.5      # retardation factor
+L    = 1.0      # column length [m]

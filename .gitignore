@@ -40,3 +40,12 @@ ADSIM_app/
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# --- Verification suite -------------------------------------------------
+# The global *.toml / *.mesh rules above would otherwise hide the
+# verification inputs and case configs, which MUST be committed so the
+# suite is reproducible. Re-include everything under verification/cases/.
+!verification/cases/**/*.toml
+!verification/cases/**/*.mesh
+# Diagnostic artifacts the runner may drop are not tracked.
+verification/output/

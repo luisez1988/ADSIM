@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?><!-- -*- coding: utf-8; mode: SGML -*- -->
+<ADSIM_data version="0.1">
+  <style show_menubutton_about="0" show_menubutton_search="1"/>
+  <!-- units -->
+  <units>
+    <!--by now it is compulsory define this node if units are used (could be empty if defaults are enougth)-->
+  </units>
+  <!-- ############ container of units ############ -->
+  <container n="Units_Dimensions" pn="Units and dimensions" icon="icon_units.png" help="Setup unit system, problem dimensions, and gravity acceleration." tree_state="open">
+    <container n="units" pn="Units" icon="icon_units_2.png" help="Just for reference. The user must ensure the use of consistent units throughout the model definition." tree_state="close">
+      <value n="units_mesh" pn="Geometry unit" values="m,cm,ft,in" v="m" editable="0" tree_state="close"/>
+      <value n="units_mass" pn="Mass unit" values="gr,kg,lb" v="kg" editable="0" tree_state="open"/>
+      <value n="units_pressure" pn="Pressure unit" values="kPa,Pa,psf,psi,atm" v="kPa" editable="0" tree_state="close"/>
+      <value n="units_temperature" pn="Temperature unit" values="K,C,F" v="K" editable="0" tree_state="close"/>
+      <value n="units_time" pn="Time unit" values="s,min,hr" v="s" editable="0" tree_state="close"/>
+    </container>
+    <!-- Add container to define gravity vector in 2D -->
+    <container n="gravity" pn="Gravity vector" icon="icon_gravity.png" help="Define gravity vector components for 2D problems." tree_state="close">
+      <value n="gravity_acceleration" pn="Gravity magnitude [L/T^2]" v="9.81" tree_state="close"/>
+      <value n="gravity_x" pn="Gravity x component" v="0.0" tree_state="close"/>
+      <value n="gravity_y" pn="Gravity y component" v="-1.0" tree_state="close"/>
+    </container>
+  </container>
+  <!-- ############ Materials ############ -->
+  <container n="materials" pn="Materials" icon="icon_materials.png" help="Define materials properties for gases and soils." tree_state="open">
+    <!-- ______________________________________________________________________ -->
+    <!-- Gas properties -->
+    <!-- ______________________________________________________________________ -->
+    <container n="m_gas" pn="Gas properties" icon="icon_gas.png" tree_state="open">
+      <blockdata n="gas" name="CO2" sequence="1" editable_name="unique" morebutton="0" icon="icon_gas.png" tree_state="close">
+        <value n="Dynamic_viscosity_" pn="Dynamic viscosity [L^2/T]" v="1.48e-5" tree_state="close"/>
+        <value n="molar_mass_" pn="Molar mass [M/mol]" v="0.04401" tree_state="close"/>
+        <value n="diffusion_coefficient_1" pn="Diffusion coefficient [L^2/T]" v="1.6e-5" tree_state="close"/>
+      </blockdata>
+    </container>
+    <!-- ______________________________________________________________________ -->
+    <!-- Liquid properties -->
+    <!-- ______________________________________________________________________ -->
+    <container n="m_liquid" pn="Liquid properties" icon="icon_drop.png" help="Define properties of the liquid phase for all materials." tree_state="open">
+      <value n="Dynamic_viscosity_" pn="Dynamic viscosity [L^2/T]" v="1e-3" tree_state="close"/>
+      <value n="density_" pn="Density [M/L^3]" v="1000" tree_state="close"/>
+      <value n="specific_heat_water_" pn="Specific heat [FL/(M·Tm)]" v="1.0" tree_state="open"/>
+    </container>
+    <!-- ______________________________________________________________________ -->
+    <!-- Solid properties -->
+    <!-- ______________________________________________________________________ -->
+    <container n="m_soil" pn="Soil properties" icon="icon_soils.png" help="Define soil material properties." tree_state="open">
+      <blockdata n="soil_material" name="Soil 1" sequence="1" editable_name="unique" morebutton="0" icon="icon_soils.png" tree_state="open">
+        <condition n="soil_basic" pn="Physical and thermal properties" icon="" ov="surface" ovm="element" tree_state="open">
+          <container n="soil_physical" pn="Physical properties" icon="" help="Define the physical properties of the soil material.">
+            <value n="specific_gravity" pn="Specific gravity [-]" v="0.0" state=""/>
+            <value n="initial_porosity_" pn="Porosity [-]" v="0.0" state=""/>
+            <value n="saturation_" pn="Saturation [-]" v="0.0" state=""/>
+            <value n="granular_tortuosity_" pn="Granular tortuosity [-]" v="0.0" state=""/>
+            <value n="intrinsic_permeabiliy_" pn="Intrinsic permeability [L^2]" v="0.0" state=""/>
+            <value n="lime_content_" pn="Lime content [-]" v="0.0" help="Defined as a fraction of the weight of solids." state=""/>
+            <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Defined as a fraction of the lime content." state=""/>
+            <value n="reaction_rate_" pn="Reaction rate [mol/L^3.s]" v="0.0" help="Defined as a fraction of the lime content." state=""/>
+          </container>
+          <container n="soil_thermal" pn="Thermal properties" icon="" help="Define the thermal properties of the soil material.">
+            <value n="specific_heat_solid_" pn="Specific heat solid [FL/(M·Tm)]" v="0.0" state=""/>
+          </container>
+          <group n="Physical and thermal properties Auto1" ov="surface" tree_state="close">
+            <container n="soil_physical" pn="Physical properties" icon="" help="Define the physical properties of the soil material." tree_state="close">
+              <value n="specific_gravity" pn="Specific gravity [-]" state="" v="2.65" tree_state="close"/>
+              <value n="initial_porosity_" pn="Porosity [-]" state="" v="0.474" tree_state="close"/>
+              <value n="saturation_" pn="Saturation [-]" state="" v="0.3" tree_state="close"/>
+              <value n="granular_tortuosity_" pn="Granular tortuosity [-]" state="" v="1.5" tree_state="close"/>
+              <value n="intrinsic_permeabiliy_" pn="Intrinsic permeability [L^2]" state="" v="1e-15" tree_state="close"/>
+              <value n="lime_content_" pn="Lime content [-]" help="Defined as a fraction of the weight of solids." state="" v="0.1" tree_state="close"/>
+              <value n="lime_impure_" pn="Residual lime content [-]" help="Defined as a fraction of the lime content." state="" v="0.5" tree_state="close"/>
+              <value n="reaction_rate_" pn="Reaction rate [mol/L^3.s]" help="Defined as a fraction of the lime content." state="" v="0.001" tree_state="close"/>
+            </container>
+            <container n="soil_thermal" pn="Thermal properties" icon="" help="Define the thermal properties of the soil material." tree_state="close">
+              <value n="specific_heat_solid_" pn="Specific heat solid [FL/(M·Tm)]" state="" v="1.0" tree_state="close"/>
+            </container>
+          </group>
+        </condition>
+      </blockdata>
+    </container>
+  </container>
+  <!-- ############ Initial conditions ############ -->
+  <container n="initial_conditions" pn="Initial Conditions" icon="icon_initial_cond.png" help="Initial concentration, temperature, pressure, or flow." tree_state="open">
+    <condition n="Initial_Concentrations" pn="Initial gas concentrations" icon="icon_init_concentrations.png" ov="surface" ovm="element" help="Use this conditions to establish the initial concentrations of all gases defined" actualize_tree="1" tree_state="open">
+      <!-- Concentration fields are dynamically shown based on the number of gases defined in Materials -->
+      <value n="concentration_gas_1_" pn="Concentration gas 1 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 1]" help="Initial concentration for gas 1"/>
+      <value n="concentration_gas_2_" pn="Concentration gas 2 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 2]" help="Initial concentration for gas 2"/>
+      <value n="concentration_gas_3_" pn="Concentration gas 3 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 3]" help="Initial concentration for gas 3"/>
+      <value n="concentration_gas_4_" pn="Concentration gas 4 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 4]" help="Initial concentration for gas 4"/>
+      <value n="concentration_gas_5_" pn="Concentration gas 5 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 5]" help="Initial concentration for gas 5"/>
+      <value n="concentration_gas_6_" pn="Concentration gas 6 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 6]" help="Initial concentration for gas 6"/>
+      <value n="concentration_gas_7_" pn="Concentration gas 7 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 7]" help="Initial concentration for gas 7"/>
+      <value n="concentration_gas_8_" pn="Concentration gas 8 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 8]" help="Initial concentration for gas 8"/>
+      <value n="concentration_gas_9_" pn="Concentration gas 9 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 9]" help="Initial concentration for gas 9"/>
+      <value n="concentration_gas_10_" pn="Concentration gas 10 [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 10]" help="Initial concentration for gas 10"/>
+      <group n="Initial gas concentrations Auto1" ov="surface" tree_state="open">
+        <value n="concentration_gas_1_" pn="Concentration gas 1 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 1]" help="Initial concentration for gas 1" v="40" tree_state="open"/>
+        <value n="concentration_gas_2_" pn="Concentration gas 2 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 2]" help="Initial concentration for gas 2" v="41.6" tree_state="close"/>
+        <value n="concentration_gas_3_" pn="Concentration gas 3 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 3]" help="Initial concentration for gas 3" v="0.0"/>
+        <value n="concentration_gas_4_" pn="Concentration gas 4 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 4]" help="Initial concentration for gas 4" v="0.0"/>
+        <value n="concentration_gas_5_" pn="Concentration gas 5 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 5]" help="Initial concentration for gas 5" v="0.0"/>
+        <value n="concentration_gas_6_" pn="Concentration gas 6 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 6]" help="Initial concentration for gas 6" v="0.0"/>
+        <value n="concentration_gas_7_" pn="Concentration gas 7 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 7]" help="Initial concentration for gas 7" v="0.0"/>
+        <value n="concentration_gas_8_" pn="Concentration gas 8 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 8]" help="Initial concentration for gas 8" v="0.0"/>
+        <value n="concentration_gas_9_" pn="Concentration gas 9 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 9]" help="Initial concentration for gas 9" v="0.0"/>
+        <value n="concentration_gas_10_" pn="Concentration gas 10 [mol/L^3]" state="[ADSIM_2025::CheckGasExists 10]" help="Initial concentration for gas 10" v="0.0"/>
+      </group>
+    </condition>
+    <condition n="Initial_Temperature" pn="Initial temperature" icon="icon_init_temp.png" ov="surface" ovm="element" help="Use this condition to establish the initial temperature" actualize_tree="1" tree_state="open">
+      <value n="Temperature" pn="Temperature [Tp]" v="293.15" help="Initial temperature" state=""/>
+      <group n="Initial temperature Auto1" ov="surface" tree_state="open">
+        <value n="Temperature" pn="Temperature [Tp]" help="Initial temperature" state="normal" v="298.15" tree_state="close"/>
+      </group>
+    </condition>
+    <!-- <include path="xml/InitialFlow.xml"/>  Needs implementation-->
+    <!-- <include path="xml/InitialPressure.xml"/>  Needs implementation-->
+  </container>
+  <!-- ############ Boundary Conditions ############ -->
+  <container n="BC" pn="Boundary conditions" icon="icon_bc.png" help="Specify initial and boundary conditions for the problem." tree_state="open">
+    <condition n="gas_fixities" pn="Gas concentration" icon="icon_concentration_bc.png" ov="point,line" help="Use this condition to apply a concentration and keep it constant during the analysis" tree_state="open">
+      <!-- Concentration fields are dynamically shown based on the number of gases defined in Materials -->
+      <value n="concentration_gas_1_" pn="Gas 1 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 1]"/>
+      <value n="concentration_gas_2_" pn="Gas 2 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 2]"/>
+      <value n="concentration_gas_3_" pn="Gas 3 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 3]"/>
+      <value n="concentration_gas_4_" pn="Gas 4 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 4]"/>
+      <value n="concentration_gas_5_" pn="Gas 5 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 5]"/>
+      <value n="concentration_gas_6_" pn="Gas 6 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 6]"/>
+      <value n="concentration_gas_7_" pn="Gas 7 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 7]"/>
+      <value n="concentration_gas_8_" pn="Gas 8 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 8]"/>
+      <value n="concentration_gas_9_" pn="Gas 9 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 9]"/>
+      <value n="concentration_gas_10_" pn="Gas 10 Concentration [mol/L^3]" v="0.0" state="[ADSIM_2025::CheckGasExists 10]"/>
+      <group n="Gas concentration Auto1" ov="line" tree_state="close">
+        <value n="concentration_gas_1_" pn="Gas 1 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 1]" v="45" tree_state="close"/>
+        <value n="concentration_gas_2_" pn="Gas 2 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 2]" v="0.0" tree_state="close"/>
+        <value n="concentration_gas_3_" pn="Gas 3 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 3]" v="0.0"/>
+        <value n="concentration_gas_4_" pn="Gas 4 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 4]" v="0.0"/>
+        <value n="concentration_gas_5_" pn="Gas 5 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 5]" v="0.0"/>
+        <value n="concentration_gas_6_" pn="Gas 6 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 6]" v="0.0"/>
+        <value n="concentration_gas_7_" pn="Gas 7 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 7]" v="0.0"/>
+        <value n="concentration_gas_8_" pn="Gas 8 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 8]" v="0.0"/>
+        <value n="concentration_gas_9_" pn="Gas 9 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 9]" v="0.0"/>
+        <value n="concentration_gas_10_" pn="Gas 10 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 10]" v="0.0"/>
+      </group>
+      <group n="Gas concentration Auto2" ov="line" tree_state="close">
+        <value n="concentration_gas_1_" pn="Gas 1 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 1]" v="40" tree_state="close"/>
+        <value n="concentration_gas_2_" pn="Gas 2 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 2]" v="0.0"/>
+        <value n="concentration_gas_3_" pn="Gas 3 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 3]" v="0.0"/>
+        <value n="concentration_gas_4_" pn="Gas 4 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 4]" v="0.0"/>
+        <value n="concentration_gas_5_" pn="Gas 5 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 5]" v="0.0"/>
+        <value n="concentration_gas_6_" pn="Gas 6 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 6]" v="0.0"/>
+        <value n="concentration_gas_7_" pn="Gas 7 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 7]" v="0.0"/>
+        <value n="concentration_gas_8_" pn="Gas 8 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 8]" v="0.0"/>
+        <value n="concentration_gas_9_" pn="Gas 9 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 9]" v="0.0"/>
+        <value n="concentration_gas_10_" pn="Gas 10 Concentration [mol/L^3]" state="[ADSIM_2025::CheckGasExists 10]" v="0.0"/>
+      </group>
+    </condition>
+    <condition n="Gas_Flow" pn="Gas flow" icon="icon_flow_bc" ov="point,line,surface" help="Use this condition to apply gas flow normal to the surface" tree_state="open">
+      <!-- Flow fields are dynamically shown based on the number of gases defined in Materials -->
+      <value n="flow_gas_1" pn="flow gas 1 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 1]"/>
+      <value n="flow_gas_2" pn="flow gas 2 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 2]"/>
+      <value n="flow_gas_3" pn="flow gas 3 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 3]"/>
+      <value n="flow_gas_4" pn="flow gas 4 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 4]"/>
+      <value n="flow_gas_5" pn="flow gas 5 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 5]"/>
+      <value n="flow_gas_6" pn="flow gas 6 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 6]"/>
+      <value n="flow_gas_7" pn="flow gas 7 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 7]"/>
+      <value n="flow_gas_8" pn="flow gas 8 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 8]"/>
+      <value n="flow_gas_9" pn="flow gas 9 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 9]"/>
+      <value n="flow_gas_10" pn="flow gas 10 [mol/L^2*s]" v="0.0" state="[ADSIM_2025::CheckGasExists 10]"/>
+      <group n="Gas flow Auto1" ov="line" tree_state="close">
+        <value n="flow_gas_1" pn="flow gas 1 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 1]" v="0.0" tree_state="close"/>
+        <value n="flow_gas_2" pn="flow gas 2 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 2]" v="0.0"/>
+        <value n="flow_gas_3" pn="flow gas 3 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 3]" v="0.0"/>
+        <value n="flow_gas_4" pn="flow gas 4 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 4]" v="0.0"/>
+        <value n="flow_gas_5" pn="flow gas 5 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 5]" v="0.0"/>
+        <value n="flow_gas_6" pn="flow gas 6 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 6]" v="0.0"/>
+        <value n="flow_gas_7" pn="flow gas 7 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 7]" v="0.0"/>
+        <value n="flow_gas_8" pn="flow gas 8 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 8]" v="0.0"/>
+        <value n="flow_gas_9" pn="flow gas 9 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 9]" v="0.0"/>
+        <value n="flow_gas_10" pn="flow gas 10 [mol/L^2*s]" state="[ADSIM_2025::CheckGasExists 10]" v="0.0"/>
+      </group>
+    </condition>
+    <condition n="gas_absolute_boundary" pn="Absolute Pressure" icon="icon_pressure_bc.png" ov="point,line,surface" help="Use this condition to constrain absolute pressure boundary conditions" tree_state="close">
+      <value n="absolute_pressure" pn="Absolute Pressure [F/L^2]" v="0.0"/>
+      <value n="vacating_gas_index" pn="Vacating gas index" v="1" values="[ADSIM_2025::GetGasIndices]" help="Select the gas index that will vacate through this boundary"/>
+    </condition>
+  </container>
+  <!-- ############ Calculation Data ############ -->
+  <container n="Calculation_Data" pn="Calculation Data" icon="icon_calculation.png" help="Define calculation parameters for the simulation." tree_state="open">
+    <container n="solver_type" pn="Solver type" icon="" tree_state="open">
+      <value n="dimension_selection" pn="Select dimension" icon="" values="2D-Plane,2D-Axisymmetric" v="2D-Plane" editable="0" tree_state="close"/>
+      <container n="calculation_mode" pn="Select solver components" icon="" help="Activate the components needed for your analysis" tree_state="open">
+        <value n="diffusion" pn="Diffusion" v="1" values="1,0" help="Enable diffusion component" tree_state="open"/>
+        <value n="advection" pn="Advection" v="1" values="1,0" help="Enable advection component" tree_state="close"/>
+        <value n="gravity" pn="Gravity" v="0" values="1,0" help="Enable gravity effects" tree_state="close"/>
+        <value n="reaction_kinetics" pn="Reaction kinetics" v="1" values="1,0" help="Enable reaction kinetics" tree_state="open"/>
+      </container>
+    </container>
+    <container n="calculation_stepping_data" pn="Time stepping data" icon="icon_time.png" tree_state="open">
+      <value n="simulation_time" pn="Total time of simulation [T]" v="3600" state="normal" tree_state="close"/>
+      <value n="time_step" pn="time per calculation step [T]" v="300" state="normal" tree_state="close"/>
+      <value n="courant_number" pn="Courant number" v="0.98" state="normal" tree_state="active,selected,close"/>
+    </container>
+    <!-- Data saving parameter -->
+    <container n="data_saving" pn="Simulation probing" icon="icon_timeseries.png" tree_state="close">
+      <value n="data_saving_interval" pn="Choose the time interval between data saved [T]" v="1.0" state="normal" tree_state="close"/>
+      <!-- Choose nodes to follow -->
+      <container n="nodes_to_follow" pn="Get data on nodes" icon="icon_nodes.png" help="Select nodes to follow during the simulation" tree_state="close">
+        <value n="number_nodes" pn="Number of nodes to probe" v="0" help="Specify the number of nodes to probe" editable="1"/>
+        <value n="node_1" pn="Node 1" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 1]"/>
+        <value n="node_2" pn="Node 2" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 2]"/>
+        <value n="node_3" pn="Node 3" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 3]"/>
+        <value n="node_4" pn="Node 4" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 4]"/>
+        <value n="node_5" pn="Node 5" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 5]"/>
+        <value n="node_6" pn="Node 6" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 6]"/>
+        <value n="node_7" pn="Node 7" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 7]"/>
+        <value n="node_8" pn="Node 8" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 8]"/>
+        <value n="node_9" pn="Node 9" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 9]"/>
+        <value n="node_10" pn="Node 10" v="0" help="Node ID to follow" state="[ADSIM_2025::CheckNumberofNodes 10]"/>
+      </container>
+      <!-- Choose elements to follow -->
+      <container n="elements_to_follow" pn="Get data on elements" icon="icon_elements.png" help="Select elements to follow during the simulation. Data will be calculated at Gaussian point of elements." tree_state="close">
+        <value n="number_elements" pn="Number of elements to probe" v="0" help="Specify the number of elements to probe" editable="1"/>
+        <value n="element_1" pn="Element 1" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 1]"/>
+        <value n="element_2" pn="Element 2" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 2]"/>
+        <value n="element_3" pn="Element 3" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 3]"/>
+        <value n="element_4" pn="Element 4" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 4]"/>
+        <value n="element_5" pn="Element 5" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 5]"/>
+        <value n="element_6" pn="Element 6" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 6]"/>
+        <value n="element_7" pn="Element 7" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 7]"/>
+        <value n="element_8" pn="Element 8" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 8]"/>
+        <value n="element_9" pn="Element 9" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 9]"/>
+        <value n="element_10" pn="Element 10" v="0" help="Element ID to follow" state="[ADSIM_2025::CheckNumberofElements 10]"/>
+      </container>
+    </container>
+  </container>
+  <display_options frame_width="423" is_frame_open="1" view_conditions_search="0" conditions_search_values=""/>
+  <global_preferences>
+    <units/>
+    <tree_preferences/>
+  </global_preferences>
+  <blockdata n="Internal data">
+    <value n="spd_file" v="C:/Users/zamcr/Dcuments/Research_delete/Reaction_test.gid/Reaction_test.spd"/>
+  </blockdata>
+  <groups>
+    <group n="Physical and thermal properties Auto1" onoff="1" color="magenta" type=""/>
+    <group n="Initial gas concentrations Auto1" onoff="1" color="green" type=""/>
+    <group n="Initial temperature Auto1" onoff="1" color="yellow" type=""/>
+    <group n="Gas concentration Auto1" onoff="1" color="orange" type=""/>
+    <group n="Gas flow Auto1" onoff="1" color="pink" type=""/>
+    <group n="Gas concentration Auto2" onoff="1" color="AntiqueWhite3" type=""/>
+  </groups>
+</ADSIM_data>
+

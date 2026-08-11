@@ -1,0 +1,36 @@
+# ADSIM material file header (need to add disclaimer and license)
+# ADSIM_version = "2025 v0.1.0"
+# File_created = "2025-11-25"
+
+gas_dictionary_ = ["CO2"]
+soil_dictionary_ = ["Soil 1"]
+
+# Gas properties
+[gas."CO2"]
+dynamic_viscosity = 1.48e-5
+molar_mass = 0.04401
+diff_coefficient = 1.6e-5
+
+# Liquid properties
+[liquid]
+dynamic_viscosity = 1e-3
+density = 1000
+specific_heat = 1.0
+
+# Soil properties
+[soil."Soil 1"]
+# Physical properties
+specific_gravity = 2.65
+porosity = 0.474
+saturation = 0.3
+granular_tortuosity = 1.5
+intrinsic_permeability = 1e-15
+lime_content = 0.1
+# NOTE: old `lime_reaction_rate = 0.001` mapped to the new Arrhenius model as
+# k_o with E = 0 (so k_T = k_o). Re-calibrate if the reaction model changed.
+lime_arrhenius_factor = 0.001
+lime_activation_energy = 0.0
+residual_lime = 0.5
+# Thermal properties
+specific_heat_solids = 1.0
+
