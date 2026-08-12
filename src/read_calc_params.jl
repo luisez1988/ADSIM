@@ -130,10 +130,13 @@ Extract probing node information from calculation data.
 - Dictionary with number of nodes and array of node IDs to probe
 """
 function get_probing_nodes(calc_data::Dict)
-    probing = calc_data["probing"]
+    # Probing is optional: a calculation file written without a [probing] section,
+    # or with the section but no node list, simply runs without probes
+    probing = get(calc_data, "probing", Dict{String, Any}())
+    nodes = Int[Int(n) for n in get(probing, "nodes_to_probe", Int[])]
     return Dict(
-        "number_of_nodes" => probing["number_of_nodes"],
-        "nodes_to_probe" => probing["nodes_to_probe"]
+        "number_of_nodes" => Int(get(probing, "number_of_nodes", length(nodes))),
+        "nodes_to_probe" => nodes
     )
 end
 
@@ -149,10 +152,13 @@ Extract probing element information from calculation data.
 - Dictionary with number of elements and array of element IDs to probe
 """
 function get_probing_elements(calc_data::Dict)
-    probing = calc_data["probing"]
+    # Optional for the same reason as the node list. Element probing is parsed but
+    # not yet consumed by the solver; only nodes are written as time series.
+    probing = get(calc_data, "probing", Dict{String, Any}())
+    elements = Int[Int(e) for e in get(probing, "elements_to_probe", Int[])]
     return Dict(
-        "number_of_elements" => probing["number_of_elements"],
-        "elements_to_probe" => probing["elements_to_probe"]
+        "number_of_elements" => Int(get(probing, "number_of_elements", length(elements))),
+        "elements_to_probe" => elements
     )
 end
 

@@ -440,7 +440,7 @@ where:
 - F = diffusion flow vector = -K × C_g
 - K = stiffness matrix from diffusion term
 """
-function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state=nothing)
+function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state=nothing, current_stage::Int=1)
     log_print("\n[8/8] Starting fully explicit diffusion solver")
     log_print("   Using $(Threads.nthreads()) threads for parallel execution")
 
@@ -574,7 +574,23 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         next_output_time = load_step_time
         output_counter = 1
     end
-    
+
+    # Open the node probes. These follow individual nodes at data_saving_interval,
+    # which is set apart from the VTK cadence, so they can be sampled much more
+    # finely than the mesh is dumped. Returns nothing when no nodes were requested.
+    probe_writer = WriteProbes.init_node_probes(project_name, current_stage, mesh,
+                                                materials.gas_dictionary,
+                                                calc_params["probing_nodes"],
+                                                Float64(data_saving_interval),
+                                                calc_params["units"], current_time,
+                                                log_print)
+
+    # Record the starting state, so a series begins at the initial (or restart) time
+    WriteProbes.probe_sample!(probe_writer, current_time, C_g, dC_g_dt,
+                              total_concentration, P, T, dT_dt, C_lime, C_caco3,
+                              dC_lime_dt, degree_of_carbonation, binder_content, v;
+                              force=true)
+
     # Flow vectors, allocated once and zeroed in place each step.
     # These are function-local rather than the like-named globals in initialize_flows.jl:
     # locals are type-stable and avoid a global lookup in the hot loop. The globals of the
@@ -1175,6 +1191,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Update current time
         current_time += dt
 
+        # Sample the probed nodes. Placed after the pressure update so the row holds
+        # the fully updated state of this step, and outside the VTK block so the
+        # probe cadence is independent of the output cadence.
+        WriteProbes.probe_sample!(probe_writer, current_time, C_g, dC_g_dt,
+                                  total_concentration, P, T, dT_dt, C_lime, C_caco3,
+                                  dC_lime_dt, degree_of_carbonation, binder_content, v)
+
         # Check if we need to save output
         if save_data || step == num_steps
 
@@ -1208,7 +1231,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     
     log_print("   ✓ Time integration completed")
     log_print(@sprintf("   ✓ Final time: %.4e %s", current_time, calc_params["units"]["time_unit"]))
-    
+
+    # Flush and close the probe files
+    WriteProbes.close_probes!(probe_writer, log_print)
+
     # Return final time tracking values for checkpoint writing
     return (current_time=current_time, output_counter=output_counter, next_output_time=next_output_time)
 end

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Node probing is implemented. Nodes selected in GiD under Calculation Data →
+  Simulation probing are now followed through the run and written as one CSV time
+  series per node, `output/<project>_node<ID>_stage<N>.csv`, holding every nodal
+  state variable under the same names the VTK output uses. The node list was
+  previously written to the calculation file and parsed by the solver, but never
+  used.
+  - `data_saving_interval` is the probe sampling interval. It was read into an
+    unused local before; it is the field that already sits beside the node list
+    in the GiD interface, and it is independent of the VTK cadence, so nodes can
+    be sampled much more finely than the mesh is dumped.
+  - Sampling does not affect the solution: a sample is taken at the first step at
+    or past each scheduled probe time and stamped with the true current time,
+    rather than shortening `dt` to land on it. The schedule advances in whole
+    multiples of the interval, so it does not drift.
+  - Each stage writes its own file; a restarted run begins at the restart time.
+  - Invalid or repeated node ids are reported and skipped instead of aborting.
 - Reaction enthalpy ΔH_r is now an input, set in GiD under Materials → Reactant
   properties and written to a `[reactants]` table of the material file. It was
   previously hardcoded at -113800 J/mol CO₂ in the solver.

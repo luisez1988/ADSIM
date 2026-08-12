@@ -68,6 +68,60 @@ number_of_elements = 2
 elements_to_probe = [1, 2]
 ```
 
+### Node probes
+
+Every node listed in `nodes_to_probe` is followed through the run and written as
+its own time series:
+
+```
+output/<project>_node<ID>_stage<N>.csv
+```
+
+The file is a plain-text CSV with a commented preamble (project, stage, node id,
+node coordinates, sampling interval and unit labels) followed by one header row
+and one row per sample. Columns carry the same names as the VTK point data, so a
+probe series and a VTK snapshot of the same node agree field for field:
+
+| column                              | meaning                                  |
+| ----------------------------------- | ---------------------------------------- |
+| `time`                              | Simulation time of the sample            |
+| `Total_Concentration`               | Summed gas concentration                 |
+| `Absolute_Pressure`                 | Pressure from the ideal gas law          |
+| `Reaction_Rate`                     | dC_lime/dt                               |
+| `Lime_Concentration`                | C_lime                                   |
+| `CaCO3_Concentration`               | C_caco3                                  |
+| `Degree_of_Carbonation`             | C_caco3 / C_caco3,max                    |
+| `Volumetric_Binder_Content`         | Binder content                           |
+| `Temperature`, `Temperature_Rate`   | T and dT/dt                              |
+| `<Gas>_Concentration`               | One column per gas species               |
+| `<Gas>_Concentration_Rate`          | One rate column per gas species          |
+| `Gas_Seepage_Velocity_X/Y[/Z]`      | Darcy velocity components                |
+
+`data_saving_interval` is the **probe sampling interval**. It is set in GiD under
+Calculation Data → Simulation probing, in the same container as the node list,
+and is independent of the VTK output cadence (which follows `time_per_step`), so
+nodes can be sampled far more finely than the mesh is written.
+
+Sampling does not affect the solution. A sample is taken at the first time step
+at or past each scheduled probe time and stamped with the true current time,
+rather than shortening `dt` to land on it exactly; the recorded times therefore
+sit at or just after the exact multiples of the interval. The schedule advances
+in whole multiples of the interval, so it does not drift over long runs.
+
+Each calculation stage writes its own file. A restarted run opens
+`..._stage2.csv` beginning at the restart time, whose first row repeats the final
+state of `..._stage1.csv`.
+
+Node ids outside the mesh, and repeated ids, are reported in the log and skipped
+rather than aborting the run. If `number_of_nodes` disagrees with the length of
+`nodes_to_probe`, the listed ids win and the mismatch is reported.
+
+Probing is optional: with `nodes_to_probe = []`, or without a `[probing]` section
+at all, no probe files are written.
+
+> `elements_to_probe` is parsed but not yet consumed by the solver. Only node
+> time series are written at present.
+
 ## Complete Example
 
 ```toml

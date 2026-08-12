@@ -27,12 +27,14 @@ include("initialize_flows.jl")
 include("time_step.jl")
 include("shape_functions.jl")
 include("write_vtk.jl")
+include("write_probes.jl")
 include("fully_explicit_solver.jl")
 include("write_checkpoint.jl")
 include("read_checkpoint.jl")
 
 using .ShapeFunctions
 using .WriteVTK
+using .WriteProbes
 
 
 #______________________________________________________
@@ -268,7 +270,7 @@ function main()
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
 
         # Step 8: Run fully explicit solver
-        final_state = fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state)
+        final_state = fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state, current_stage)
 
         # Write checkpoint file for multi-stage calculations
         log_print("\nWriting checkpoint file for stage $(current_stage)...")
