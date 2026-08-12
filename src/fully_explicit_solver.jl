@@ -163,6 +163,125 @@ using Printf
 using LinearAlgebra
 
 """
+    ElementProperties
+
+Static, time-invariant properties of one element, resolved once before the time loop.
+
+The solver previously re-derived all of these inside the time loop by calling
+`get_element_material` and indexing `materials.soil_dictionary` / `materials.soils`,
+once per element per gas per step, and again in each of the velocity and temperature
+sweeps. None of it changes in time, so it is resolved once here instead.
+
+# Fields
+- `material_idx::Int`: Index of the soil material assigned to the element
+- `porosity::Float64`: Porosity n [-]
+- `saturation::Float64`: Degree of saturation S_r [-]
+- `θ_w::Float64`: Volumetric water content n·S_r [-]
+- `θ_g::Float64`: Volumetric gas content n(1-S_r) [-]
+- `tortuosity::Float64`: Granular tortuosity τ [-]
+- `permeability::Float64`: Intrinsic permeability K [m²]
+- `residual_lime::Float64`: Residual lime concentration A_r [mol/m³ total]
+- `specific_gravity::Float64`: Specific gravity of solids G_s [-]
+- `specific_heat_solids::Float64`: Specific heat of solids c_s [J/(kg·K)]
+
+The Arrhenius pair is deliberately absent: the kinetics belong to the reaction,
+not to a material, so k_o and E are read once from the reactant properties rather
+than carried per element.
+"""
+struct ElementProperties
+    material_idx::Int
+    porosity::Float64
+    saturation::Float64
+    θ_w::Float64
+    θ_g::Float64
+    tortuosity::Float64
+    permeability::Float64
+    residual_lime::Float64
+    specific_gravity::Float64
+    specific_heat_solids::Float64
+end
+
+"""
+    build_element_properties(mesh, materials, C_lime_residual) -> Vector{ElementProperties}
+
+Resolve the static material properties of every element once, before time stepping.
+
+# Arguments
+- `mesh`: Mesh data structure
+- `materials`: Material data structure
+- `C_lime_residual::Vector{Float64}`: Residual lime concentration per soil material
+
+# Returns
+- `Vector{ElementProperties}`: One entry per element, indexed by element id
+"""
+function build_element_properties(mesh, materials, C_lime_residual)
+    props = Vector{ElementProperties}(undef, mesh.num_elements)
+
+    for e in 1:mesh.num_elements
+        material_idx = get_element_material(mesh, e)
+        if material_idx === nothing # No material assigned
+            error("Element $e has no material assigned. Check mesh material definitions.")
+        end
+
+        soil_name = materials.soil_dictionary[material_idx]
+        soil = materials.soils[soil_name]
+        n = soil.porosity
+        S_r = soil.saturation
+
+        props[e] = ElementProperties(
+            material_idx,
+            n,
+            S_r,
+            n * S_r,             # θ_w
+            n * (1.0 - S_r),     # θ_g
+            soil.granular_tortuosity,
+            soil.intrinsic_permeability,
+            C_lime_residual[material_idx],
+            soil.specific_gravity,
+            soil.specific_heat_solids,
+        )
+    end
+
+    return props
+end
+
+"""
+    build_node_owner_elements(mesh) -> Vector{Int}
+
+For each node, the highest-index element containing it.
+
+The reaction and temperature terms are evaluated per node but depend on element-level
+properties (θ_w, θ_g, the Arrhenius pair). Written as element loops that *assign* rather
+than accumulate, they leave each shared node holding the value written by whichever
+element came last, i.e. the highest element index. Resolving that ownership once lets
+those terms be evaluated in a node loop, which is both order-independent and trivially
+parallel, while reproducing the element-loop result exactly.
+
+Where a node sits on a boundary between two materials the choice is arbitrary, but it is
+arbitrary in exactly the same way it already was.
+
+# Arguments
+- `mesh`: Mesh data structure
+
+# Returns
+- `Vector{Int}`: Owning element id per node, 0 if the node belongs to no element
+"""
+function build_node_owner_elements(mesh)
+    owner = zeros(Int, mesh.num_nodes)
+
+    for e in 1:mesh.num_elements
+        for i in 1:4
+            node_id = mesh.elements[e, i]
+            if e > owner[node_id]
+                owner[node_id] = e
+            end
+        end
+    end
+
+    return owner
+end
+
+"""
 assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
 
 Assemble the lumped mass vector for all nodes.
@@ -340,14 +459,21 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     M_caco3= 100.09 #g/mol
     ρ_caco3= 2.71e6 #g/m³
     
-    # Reaction enthalpy for lime carbonation [J/mol CO2]
+    # Reaction enthalpy for lime carbonation [J/mol CO2], read from the material file.
     # Ca(OH)2(s) + CO2(g) -> CaCO3(s) + H2O(l)
+    # Negative under the IUPAC convention, i.e. exothermic. Material files that
+    # predate the [reactants] table fall back to -113800 J/mol CO2, which is
     # Hess's law on the standard enthalpies of formation at 298.15 K
-    # (-986.09, -393.51, -1207.6, -285.83 kJ/mol) gives -113.8 kJ/mol CO2.
-    # Negative under the IUPAC convention, i.e. exothermic. The liquid-phase
-    # product water applies here; taking H2O(g) instead would give -69.8 kJ/mol.
-    ΔH_r = -113800.0  # J/mol CO2
-    
+    # (-986.09, -393.51, -1207.6, -285.83 kJ/mol). That value assumes liquid-phase
+    # product water; taking H2O(g) instead would give -69.8 kJ/mol.
+    ΔH_r = materials.reactants.reaction_enthalpy  # J/mol CO2
+
+    # Kinetics of the carbonation reaction, k_T = k_o exp(-E/RT). A property of the
+    # reaction rather than of a material, so it is read once here instead of being
+    # carried per element.
+    k_o_reaction = materials.reactants.arrhenius_factor    # m³/(mol·s)
+    E_reaction = materials.reactants.activation_energy     # J/mol
+
     # Constant specific heat for all gases [J/(kg·K)]
     # Using a representative value for common gases at ambient conditions
     c_g_constant = 1000.0  # J/(kg·K)
@@ -368,13 +494,23 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # constant κ used before. Material files written for the old input will
     # parse with k_o = 0 and silently produce no reaction, so flag it here.
     if calculate_reaction
-        for soil_name in materials.soil_dictionary
-            if materials.soils[soil_name].arrhenius_factor <= 0.0
-                log_print("Warning: reaction kinetics is enabled but soil '$soil_name' has " *
-                          "lime_arrhenius_factor = 0. No carbonation will occur in this " *
-                          "material. Check that the material file defines " *
-                          "lime_arrhenius_factor and lime_activation_energy.")
-            end
+        log_print(@sprintf("   Reaction enthalpy ΔH_r: %.4g J/mol CO2", ΔH_r))
+        log_print(@sprintf("   Arrhenius factor k_o: %.4g m³/(mol·s), activation energy E: %.4g J/mol",
+                           k_o_reaction, E_reaction))
+        if k_o_reaction <= 0.0
+            log_print("Warning: reaction kinetics is enabled but lime_arrhenius_factor = 0, " *
+                      "so no carbonation will occur. Check that the material file defines a " *
+                      "[reactants] table with lime_arrhenius_factor and lime_activation_energy.")
+        end
+
+        # ΔH_r enters the energy equation as q̇ = ΔH_r dC_CO2/dt with dC_CO2/dt < 0,
+        # so the exothermic carbonation reaction requires a negative enthalpy to
+        # release heat. A magnitude entered without its sign would cool the soil,
+        # which is easy to miss in the output, hence the explicit check.
+        if ΔH_r > 0.0
+            log_print("Warning: reaction_enthalpy = $(ΔH_r) J/mol is positive, i.e. " *
+                      "endothermic, so carbonation will cool the soil. Lime carbonation " *
+                      "is exothermic; enter the enthalpy as a negative number.")
         end
     end
 
@@ -403,8 +539,16 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         error("Lumped mass vector contains zero or negative values!")
     end
     
-    # Precompute geometric element stiffness matrices (same for all gases)    
+    # Precompute geometric element stiffness matrices (same for all gases)
     K_elements = assemble_element_stiffness_matrices(mesh)
+
+    # Resolve static element material properties and node ownership once, so the time
+    # loop never repeats a material dictionary lookup
+    elem_props = build_element_properties(mesh, materials, C_lime_residual)
+    node_owner = build_node_owner_elements(mesh)
+
+    # CO2 is the only reactive species; resolve its index once
+    co2_gas_idx = findfirst(name -> name == "CO2", materials.gas_dictionary)
 
     #Calculate total gas concentrations
     total_concentration = vec(sum(C_g, dims=2))
@@ -441,11 +585,32 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     total_rate = zeros(Float64, Nnodes)   # Boundary rate of change
     q_source_sink = zeros(Float64, Nnodes) # Only for CO2 for now
 
-    # Per-element scratch buffers, one set per gas species so the threaded gas loop
-    # never shares them. Sized 4 for the nodes of a quad element.
-    q_aux_buffers = [zeros(4) for _ in 1:NGases]
-    ρ_g_buffers = [zeros(4) for _ in 1:NGases]
-    ρ_g_velocity = zeros(4)  # velocity loop is serial, so one buffer suffices
+    # Element-chunk decomposition for the threaded flux and velocity loops.
+    #
+    # nchunks is deliberately independent of Threads.nthreads(): the per-chunk buffers are
+    # reduced in chunk order, so a fixed chunk count makes the result reproducible to the
+    # last bit no matter how many threads run it. Tying it to the thread count would make
+    # the summation order, and therefore the round-off, depend on the machine.
+    #
+    # Memory is nchunks * Nnodes * (3*NGases + NDim) * 8 bytes. For meshes large enough for
+    # that to matter, mesh colouring would replace the buffers entirely.
+    nchunks = max(1, min(Nelements, 32))
+    chunk_bounds = round.(Int, range(0, Nelements, length = nchunks + 1))
+
+    qd_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
+    qa_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
+    qg_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
+    v_chunk = [zeros(Float64, Nnodes, NDim) for _ in 1:nchunks]
+
+    # Per-element scratch, one set per chunk. Sized 4 for the nodes of a quad element.
+    q_aux_chunk = [zeros(4) for _ in 1:nchunks]
+    ρ_g_chunk = [zeros(4) for _ in 1:nchunks]
+
+    # Gauss-point Darcy velocity, cached per element and Gauss point. Presently written
+    # for the nodal projection only; the thermal advective flux of the energy equation
+    # consumes it directly (manuscript Eq. thermal_advective_flux), which is why it is
+    # retained rather than discarded once projected.
+    v_gp_cache = zeros(Float64, Nelements, 4, NDim)
 
     # Main time stepping loop
     save_data = false
@@ -457,34 +622,81 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         q_gravitational .= 0.0
         total_rate .= 0.0
         q_source_sink .= 0.0
+        for c in 1:nchunks
+            qd_chunk[c] .= 0.0
+            qa_chunk[c] .= 0.0
+            qg_chunk[c] .= 0.0
+        end
 
-        # Loop over all gases
-        @threads for gas_idx in 1:NGases
-            # Get gas name for this species (needed for warning messages)
-            gas_name = materials.gas_dictionary[gas_idx]
-            
-            for e in 1:Nelements #loop elements
+        #______________________________________________________
+        #Reaction kinetics calculation start here
+        #
+        #Evaluated per node rather than per element. The rate depends only on nodal
+        #state (C_g, C_lime, T) plus element-level properties, which `node_owner`
+        #resolves once, so this reproduces the element loop exactly while being
+        #order-independent and parallel. It uses level-k state, so it must run before
+        #the gas fluxes consume q_source_sink.
+        #______________________________________________________
+        if calculate_reaction && co2_gas_idx !== nothing
+            ρ_w = materials.liquid.density  # [kg/m³]
+
+            @threads for node_id in 1:Nnodes
+                e = node_owner[node_id]
+                if e == 0
+                    continue
+                end
+                props = elem_props[e]
+
+                #Extent-of-reaction rate r >= 0, per unit volume of water
+                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_lime[node_id],
+                                            props.residual_lime, props.θ_w, T[node_id],
+                                            k_o_reaction, E_reaction,
+                                            ρ_w)
+
+                #Species rates follow from the stoichiometric coefficients.
+                #Lime is stored per unit total volume, so dA/dt = -θ_w r.
+                dC_lime_dt[node_id] = -props.θ_w * r
+
+                #CO2 is stored per unit gas volume, so the sink carries θ_w/θ_g.
+                if props.θ_g > 0.0
+                    q_source_sink[node_id] = -M[node_id] * (props.θ_w / props.θ_g) * r
+                else
+                    q_source_sink[node_id] = 0.0
+                end
+            end
+        end
+        #______________________________________________________
+
+        # Loop over element chunks, with the gas loop moved inside.
+        #
+        # Threading over elements rather than gas species widens the parallel section from
+        # NGases (commonly 2) to the element count. Elements sharing a node would race on
+        # the nodal flux arrays, so each chunk accumulates into its own buffer and the
+        # buffers are reduced in chunk order afterwards. The chunk count is fixed and
+        # independent of Threads.nthreads(), so the reduction order - and hence the result
+        # to the last bit - does not depend on how many threads happen to be available.
+        @threads for c in 1:nchunks
+            qd_c = qd_chunk[c]
+            qa_c = qa_chunk[c]
+            qg_c = qg_chunk[c]
+            q_aux = q_aux_chunk[c]
+            ρ_g_buf = ρ_g_chunk[c]
+
+            for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1] #loop elements
                 # Get element nodes
                 nodes = mesh.elements[e, :]
-                
-                # Get material properties for this element
-                material_idx = get_element_material(mesh, e)
-                if material_idx === nothing # No material assigned
-                    error("Element $e has no material assigned. Check mesh material definitions.")
-                end
-                
-                soil_name = materials.soil_dictionary[material_idx]
-                soil = materials.soils[soil_name]
-                
-                # Calculate gas volume fraction θ_g = n - θ_w = n(1 - S_r)
-                θ_g = soil.porosity * (1.0 - soil.saturation)                
 
-                # Get soil tortuosity
-                τ = soil.granular_tortuosity
-                # Get intrinsic permeability
-                k_intrinsic = soil.intrinsic_permeability
+                # Static element properties, resolved once before the time loop
+                props = elem_props[e]
 
-                
+                # Gas volume fraction θ_g = n - θ_w = n(1 - S_r)
+                θ_g = props.θ_g
+                # Soil tortuosity
+                τ = props.tortuosity
+                # Intrinsic permeability
+                k_intrinsic = props.permeability
+
+            for gas_idx in 1:NGases
 
                 # Get gas diffusion coefficient
                 gas_name = materials.gas_dictionary[gas_idx]
@@ -503,12 +715,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 if calculate_diffusion
                     #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p                    
 
-                    q_aux = q_aux_buffers[gas_idx] #local diffusion flow vector
+                    #local diffusion flow vector (per-chunk buffer)
                     mul!(q_aux, K_elements[e], C_e, θ_g * D_g / τ, 0.0)
 
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
-                        q_diffusion[node_id, gas_idx] +=  q_aux[i]
+                        qd_c[node_id, gas_idx] +=  q_aux[i]
                     end
                 end
                 #______________________________________________________              
@@ -522,8 +734,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Advection calculation start here
                 #______________________________________________________
                 if calculate_advection
-                    #Zero nodal advection fluxes
-                    q_aux = q_aux_buffers[gas_idx] #local advection flow vector
+                    #Zero nodal advection fluxes (per-chunk buffer)
                     fill!(q_aux, 0.0)
 
                     # loop Gauss points
@@ -553,7 +764,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
-                        q_advection[node_id, gas_idx] +=  q_aux[i]
+                        qa_c[node_id, gas_idx] +=  q_aux[i]
                     end
                 end
                 #______________________________________________________
@@ -563,8 +774,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #______________________________________________________
 
                 if calculate_gravity
-                    #Zero nodal advection fluxes
-                    q_aux = q_aux_buffers[gas_idx] #local advection flow vector
+                    #Zero nodal gravity fluxes (per-chunk buffer)
                     fill!(q_aux, 0.0)
 
                     # loop Gauss points
@@ -585,7 +795,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
                         #get nodal densities
-                        ρ_g = ρ_g_buffers[gas_idx]
+                        ρ_g = ρ_g_buf
                         fill!(ρ_g, 0.0)
                         for i in 1:4
                             for g in 1:NGases
@@ -603,62 +813,29 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
-                        q_gravitational[node_id, gas_idx] +=  q_aux[i]
-                    end
-                end
-                #______________________________________________________
-                #______________________________________________________
-                #Reaction kinetics calculation start here
-                #______________________________________________________
-                if calculate_reaction && gas_name == "CO2"
-
-                    # Get element nodes
-                    nodes = mesh.elements[e, :]
-
-                    # Get material properties for this element
-                    material_idx = get_element_material(mesh, e)
-
-                    soil_name = materials.soil_dictionary[material_idx]
-                    soil = materials.soils[soil_name]
-                    #get the Arrhenius parameters of the carbonation reaction
-                    k_o= soil.arrhenius_factor      # [m³/(mol·s)]
-                    E_a= soil.activation_energy     # [J/mol]
-
-                    #get water and gas contents
-                    n= soil.porosity
-                    S_r= soil.saturation
-                    θ_w= n * S_r          # volumetric water content
-                    θ_g= n * (1.0 - S_r)  # volumetric gas content
-                    ρ_w= materials.liquid.density  # [kg/m³]
-
-                    #Get residual lime concentration in the soil
-                    C_r= C_lime_residual[material_idx]
-
-                    #loop over nodes in element
-                    for i in 1:4
-                        node_id = nodes[i] #global node id
-                        #Extent-of-reaction rate r >= 0, per unit volume of water
-                        r = extent_of_reaction_rate(C_g[node_id, gas_idx], C_lime[node_id],
-                                                    C_r, θ_w, T[node_id], k_o, E_a, ρ_w)
-
-                        #Species rates follow from the stoichiometric coefficients.
-                        #Lime is stored per unit total volume, so dA/dt = -θ_w r.
-                        dC_lime_dt[node_id] = -θ_w * r
-
-                        #CO2 is stored per unit gas volume, so the sink carries θ_w/θ_g.
-                        if θ_g > 0.0
-                            q_source_sink[node_id] = -M[node_id] * (θ_w / θ_g) * r
-                        else
-                            q_source_sink[node_id] = 0.0
-                        end
+                        qg_c[node_id, gas_idx] +=  q_aux[i]
                     end
                 end
                 #______________________________________________________
 
-            end # flux are ready for this gas
+            end # all gases done for this element
+            end # element chunk done
+        end # end element-chunk loop
+
+        # Reduce the per-chunk nodal fluxes in a fixed chunk order
+        for c in 1:nchunks
+            q_diffusion .+= qd_chunk[c]
+            q_advection .+= qa_chunk[c]
+            q_gravitational .+= qg_chunk[c]
+        end
+
+        # Loop over all gases to form the rate of change
+        @threads for gas_idx in 1:NGases
+            # Get gas name for this species (needed for the reaction branch)
+            gas_name = materials.gas_dictionary[gas_idx]
 
             # calculate rate of change dC/dt = q_net / M
-            @threads for i in 1:Nnodes                
+            for i in 1:Nnodes
                 dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
 
                 if gas_name == "CO2" && calculate_reaction
@@ -704,7 +881,22 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get current total concentration at node j
                 C_total_j = sum(C_g[j, :])
                 C_rate_imposed = 0.0 #placeholder for imposed rate will change if a transient pressure is applied
-                λ_bc[j] = M[j] * (C_total_j + dt *total_rate[j]  - total_concentration[j]) / (dt * NGases)  # Lagrangian multiplier for node j                
+
+                #The correction λ/M is applied equally to every gas that is free to move
+                #at this node. A gas whose concentration is prescribed here cannot absorb
+                #any of it, so the constraint must be shared among the free gases only;
+                #dividing by NGases would both under-correct and push the prescribed gas
+                #off its boundary value.
+                n_free = 0
+                for g in 1:NGases
+                    n_free += P_boundary[j, g]
+                end
+
+                if n_free > 0
+                    λ_bc[j] = M[j] * (C_total_j + dt *total_rate[j]  - total_concentration[j]) / (dt * n_free)  # Lagrangian multiplier for node j
+                else
+                    λ_bc[j] = 0.0  # every gas is prescribed here, nothing left to correct
+                end
             else
                 λ_bc[j] = 0.0  # No influence length found, set multiplier to zero
             end
@@ -717,12 +909,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             
             # Update concentrations: C^(n+1) = C^n + dt * dC/dt
             for i in 1:Nnodes
-                # Apply Lagrangian correction only at nodes with boundary influence
+                # Apply Lagrangian correction only at nodes with boundary influence, and
+                # only to gases that are actually free at this node. P_boundary already
+                # zeroes dC_g_dt for a prescribed gas; without the same factor here the
+                # correction would be added straight through that gate and would walk the
+                # prescribed concentration away from its boundary value every step. The
+                # drift only shows up once the reaction is active, because λ is built from
+                # total_rate, which carries the CO2 sink term.
                 lagrangian_correction = 0.0
                 if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
-                    lagrangian_correction = λ_bc[i] / M[i]                    
+                    lagrangian_correction = (λ_bc[i] / M[i]) * P_boundary[i, gas_idx]
                 end
-                
+
                 C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
                 
                 # Ensure non-negative and numerically stable concentrations
@@ -747,23 +945,27 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Calculate nodal gas velocities using Darcy's law
         #zero the velocity vector
         v .= 0.0
+        for c in 1:nchunks
+            v_chunk[c] .= 0.0
+        end
 
-        #loop over elements
-        for e in 1:Nelements
+        # This stays a separate pass rather than being folded into the flux loop above:
+        # it consumes C_g at level k+1 (already updated) together with P at level k, and
+        # merging it would silently change which state the velocity is built from.
+        #loop over element chunks
+        @threads for c in 1:nchunks
+            v_c = v_chunk[c]
+            ρ_g_vel = ρ_g_chunk[c]
+
+        for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
             # Get element nodes
             nodes = mesh.elements[e, :]
 
-            # Get material properties for this element
-            material_idx = get_element_material(mesh, e)
-            if material_idx === nothing # No material assigned
-                error("Element $e has no material assigned. Check mesh material definitions.")
-            end
-            
-            soil_name = materials.soil_dictionary[material_idx]
-            soil = materials.soils[soil_name]
-            
+            # Static element properties, resolved once before the time loop
+            props = elem_props[e]
+
             # Get intrinsic permeability
-            k_intrinsic = soil.intrinsic_permeability
+            k_intrinsic = props.permeability
 
             # Get nodal pressures
             P_e = [P[nodes[i]] for i in 1:4]
@@ -804,23 +1006,20 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
                 #Calculate velocity at Gauss point using Darcy's law: v = - (k/μ) ∇P
                 v_gp = - (k_intrinsic / μ_g_weighted) * grad_P
-                
+
                 # Calculate mass weight at this Gauss point
-                # Get gas volume fraction for this element
-                θ_g = soil.porosity * (1.0 - soil.saturation)
-                mass_weight = θ_g * w * detJ
-                
+                mass_weight = props.θ_g * w * detJ
+
                 #Distribute mass-weighted velocity to nodes
                 for i in 1:4
                     node_id = nodes[i]
-                    v[node_id, :] += v_gp * N_p[i] * mass_weight
+                    v_c[node_id, :] += v_gp * N_p[i] * mass_weight
                 end
-                
+
                 #consider velocity contribution from gravity
                 if calculate_gravity
-                    #Calculate gravitational velocity at Gauss point
-                    #This loop is serial, so a single shared buffer is safe here
-                    ρ_g = ρ_g_velocity
+                    #Calculate gravitational velocity at Gauss point (per-chunk buffer)
+                    ρ_g = ρ_g_vel
                     fill!(ρ_g, 0.0)
                     for i in 1:4
                         for g in 1:NGases
@@ -836,12 +1035,27 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     #Distribute mass-weighted gravitational velocity to nodes
                     for i in 1:4
                         node_id = nodes[i]
-                        v[node_id, :] += v_g_gp * N_p[i] * mass_weight
+                        v_c[node_id, :] += v_g_gp * N_p[i] * mass_weight
                     end
+
+                    #Total Gauss-point velocity, retained for the energy equation
+                    v_gp = v_gp + v_g_gp
+                end
+
+                #Cache the Gauss-point velocity (Eq. Darcy_Gauss). Previously this was
+                #projected to nodes and discarded; the thermal advective flux needs it.
+                for d in 1:NDim
+                    v_gp_cache[e, p, d] = v_gp[d]
                 end
             end
         end
-        
+        end # end velocity chunk loop
+
+        # Reduce the per-chunk nodal velocities in a fixed chunk order
+        for c in 1:nchunks
+            v .+= v_chunk[c]
+        end
+
         # Divide accumulated velocities by nodal mass to get average velocity
         for i in 1:Nnodes
             if M[i] > 0.0
@@ -852,89 +1066,77 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Update reaction kinetic terms for lime concentration
         if calculate_reaction
             for i in 1:Nnodes
-                C_lime[i] += dt * dC_lime_dt[i]
-                # Ensure non-negative lime concentrations
-                if C_lime[i] < 0.0
+                # Lime consumed this step. The clamp is applied to the INCREMENT, not to
+                # C_lime after the fact, so that CaCO3 gains exactly what lime lost.
+                # Clamping C_lime alone while crediting CaCO3 with the unclamped rate
+                # would create carbonate from lime that was never there, breaking the 1:1
+                # stoichiometry of Eq. (carbonation).
+                ΔC_lime = dt * dC_lime_dt[i]
+                if C_lime[i] + ΔC_lime < 0.0
                     if !negative_lime_warned
-                        log_print("Warning: Negative lime concentration detected at step $step. Setting to zero.")
+                        log_print("Warning: Negative lime concentration detected at step $step. Clamping to zero.")
                         negative_lime_warned = true
                     end
-                    C_lime[i] = 0.0
+                    ΔC_lime = -C_lime[i]
                 end
+                C_lime[i] += ΔC_lime
+
                 #Update caco3_concentration
-                C_caco3[i] += dt * (- dC_lime_dt[i])
+                C_caco3[i] += - ΔC_lime
                 #calculate binder content β_b= V_caco3/V_total
                 binder_content[i]= C_caco3[i] * M_caco3 / ρ_caco3
                 #calculate degree of carbonation DoC= C_caco3/C_caco3_max
-                degree_of_carbonation[i] = C_caco3[i] / Caco3_max[i]
+                #Caco3_max is zero for a lime-free material, which would otherwise emit
+                #NaN into the output field
+                degree_of_carbonation[i] = Caco3_max[i] > 0.0 ? C_caco3[i] / Caco3_max[i] : 0.0
             end
         end
 
         # Calculate temperature change due to reaction (after all gas fluxes are calculated)
-        if calculate_reaction
-            # Find CO2 gas index (once, outside loops)
-            co2_idx = findfirst(name -> name == "CO2", materials.gas_dictionary)
-            
-            if co2_idx !== nothing
-                # Loop over elements
-                for e in 1:Nelements
-                    # Get element nodes
-                    nodes = mesh.elements[e, :]
-                    
-                    # Get material properties for this element
-                    material_idx = get_element_material(mesh, e)
-                    if material_idx !== nothing
-                        soil_name = materials.soil_dictionary[material_idx]
-                        soil = materials.soils[soil_name]
-                        
-                        # Get phase properties (element-based)
-                        n = soil.porosity
-                        S_r = soil.saturation
-                        θ_w = n * S_r
-                        θ_g = n * (1.0 - S_r)
-                        G_s = soil.specific_gravity
-                        ρ_w = materials.liquid.density
-                        ρ_s = G_s * ρ_w
-                        
-                        # Get specific heats
-                        c_s = soil.specific_heat_solids
-                        c_w = materials.liquid.specific_heat
-                        c_g = c_g_constant
-                        
-                        # Loop over nodes in element
-                        for i in 1:4
-                            node_id = nodes[i]
-                            
-                            # Calculate gas density at node
-                            ρ_g = 0.0
-                            for g in 1:NGases
-                                gas_name_temp = materials.gas_dictionary[g]
-                                gas_temp = materials.gases[gas_name_temp]
-                                ρ_g += C_g[node_id, g] * gas_temp.molar_mass
-                            end
-                            
-                            # Calculate mixture volumetric heat capacity
-                            # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*ρ_g*c_g
-                            C_mix = (1.0 - n) * ρ_s * c_s + θ_w * ρ_w * c_w + θ_g * ρ_g * c_g
-                            
-                            # Heat generation rate from reaction, Eq. (heat_rate): q̇ = ΔH_r * dC_CO2/dt
-                            # Both factors are negative (exothermic reaction, CO2 consumed),
-                            # so q̇ > 0 and represents heat released. dC_lime_dt is the molar
-                            # rate per unit total volume, which matches the basis of C_mix
-                            # and equals dC_CO2/dt on the same basis by 1:1 stoichiometry.
-                            if C_mix > 0.0
-                                q_dot = ΔH_r * dC_lime_dt[node_id]
-                                
-                                # Calculate temperature rate of change
-                                dT_dt[node_id] = q_dot / C_mix
-                            else
-                                dT_dt[node_id] = 0.0
-                            end
-                        end
-                    end
+        #
+        # Evaluated per node using the same element-ownership resolution as the reaction
+        # term above: the element loop this replaces also assigned rather than accumulated,
+        # so the owning element's properties reproduce it exactly.
+        if calculate_reaction && co2_gas_idx !== nothing
+            ρ_w = materials.liquid.density
+            c_w = materials.liquid.specific_heat
+            c_g = c_g_constant
+
+            @threads for node_id in 1:Nnodes
+                e = node_owner[node_id]
+                if e == 0
+                    continue
+                end
+                props = elem_props[e]
+                ρ_s = props.specific_gravity * ρ_w
+
+                # Calculate gas density at node
+                ρ_g = 0.0
+                for g in 1:NGases
+                    gas_temp = materials.gases[materials.gas_dictionary[g]]
+                    ρ_g += C_g[node_id, g] * gas_temp.molar_mass
+                end
+
+                # Calculate mixture volumetric heat capacity
+                # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*ρ_g*c_g
+                C_mix = (1.0 - props.porosity) * ρ_s * props.specific_heat_solids +
+                        props.θ_w * ρ_w * c_w + props.θ_g * ρ_g * c_g
+
+                # Heat generation rate from reaction, Eq. (heat_rate): q̇ = ΔH_r * dC_CO2/dt
+                # Both factors are negative (exothermic reaction, CO2 consumed),
+                # so q̇ > 0 and represents heat released. dC_lime_dt is the molar
+                # rate per unit total volume, which matches the basis of C_mix
+                # and equals dC_CO2/dt on the same basis by 1:1 stoichiometry.
+                if C_mix > 0.0
+                    q_dot = ΔH_r * dC_lime_dt[node_id]
+
+                    # Calculate temperature rate of change
+                    dT_dt[node_id] = q_dot / C_mix
+                else
+                    dT_dt[node_id] = 0.0
                 end
             end
-            
+
             # Update temperature: T^(n+1) = T^n + dt * dT/dt
             for i in 1:Nnodes
                 T[i] += dt * dT_dt[i]

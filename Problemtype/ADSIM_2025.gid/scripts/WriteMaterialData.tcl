@@ -24,10 +24,16 @@ proc ADSIM::WriteMaterialData { filename } {
     
     # Write liquid properties
     ADSIM::WriteLiquidProperties $root
-    
+
+    # Write reactant properties (chemistry shared by all materials)
+    ADSIM::WriteReactantProperties $root
+
     # Write soil properties
     ADSIM::WriteSoilProperties $root
-    
+
+    # Write per-material reaction properties
+    ADSIM::WriteReactionProperties $root
+
     # Close the file
     GiD_WriteCalculationFile end
 }
@@ -130,6 +136,39 @@ proc ADSIM::WriteLiquidProperties { root } {
 }
 
 #===============================================================================
+# Write reactant properties
+#
+# Chemistry and kinetics of the carbonation reaction, common to every soil
+# material. The per-material lime quantities are written separately by
+# WriteReactionProperties.
+#===============================================================================
+proc ADSIM::WriteReactantProperties { root } {
+    # Get reactant properties container
+    set xp_reactants {//container[@n="materials"]/container[@n="m_reactants"]}
+    set reactants_container [$root selectNodes $xp_reactants]
+
+    if {$reactants_container == ""} {
+        return
+    }
+
+    GiD_WriteCalculationFile puts "# Reactant properties"
+    GiD_WriteCalculationFile puts "\[reactants\]"
+
+    # Reaction enthalpy
+    set reaction_enthalpy [$reactants_container selectNodes {string(value[@n="reaction_enthalpy_"]/@v)}]
+    GiD_WriteCalculationFile puts "reaction_enthalpy = $reaction_enthalpy"
+
+    # Reaction kinetics
+    set arrhenius_factor [$reactants_container selectNodes {string(value[@n="arrhenius_factor_"]/@v)}]
+    GiD_WriteCalculationFile puts "lime_arrhenius_factor = $arrhenius_factor"
+
+    set activation_energy [$reactants_container selectNodes {string(value[@n="activation_energy_"]/@v)}]
+    GiD_WriteCalculationFile puts "lime_activation_energy = $activation_energy"
+
+    GiD_WriteCalculationFile puts ""
+}
+
+#===============================================================================
 # Write soil dictionary (must be at top level before any tables)
 #===============================================================================
 proc ADSIM::WriteSoilDictionary { root } {
@@ -193,26 +232,54 @@ proc ADSIM::WriteSoilProperties { root } {
             
             set perm [$first_group selectNodes {string(.//value[@n="intrinsic_permeabiliy_"]/@v)}]
             GiD_WriteCalculationFile puts "intrinsic_permeability = $perm"
-            
-            set lime [$first_group selectNodes {string(.//value[@n="lime_content_"]/@v)}]
-            GiD_WriteCalculationFile puts "lime_content = $lime"
 
-            set arrhenius_factor [$first_group selectNodes {string(.//value[@n="arrhenius_factor_"]/@v)}]
-            GiD_WriteCalculationFile puts "lime_arrhenius_factor = $arrhenius_factor"
-
-            set activation_energy [$first_group selectNodes {string(.//value[@n="activation_energy_"]/@v)}]
-            GiD_WriteCalculationFile puts "lime_activation_energy = $activation_energy"
-            
-            set res_lime [$first_group selectNodes {string(.//value[@n="lime_impure_"]/@v)}]
-            GiD_WriteCalculationFile puts "residual_lime = $res_lime"
-            
             # Thermal properties
             GiD_WriteCalculationFile puts "# Thermal properties"
             
             set spec_heat_solid [$first_group selectNodes {string(.//value[@n="specific_heat_solid_"]/@v)}]
             GiD_WriteCalculationFile puts "specific_heat_solids = $spec_heat_solid"
         }
-        
+
+        GiD_WriteCalculationFile puts ""
+    }
+}
+
+#===============================================================================
+# Write reaction properties
+#
+# One table per soil material, holding how much lime that material carries.
+# Keyed by the same soil name, so the solver pairs each reaction block with its
+# material. The kinetics are common to all materials and are written by
+# WriteReactantProperties instead.
+#===============================================================================
+proc ADSIM::WriteReactionProperties { root } {
+    # Get all soil materials
+    set xp_soils {//container[@n="materials"]/container[@n="m_soil"]/blockdata}
+    set soil_blocks [$root selectNodes $xp_soils]
+
+    if {[llength $soil_blocks] == 0} {
+        return
+    }
+
+    # Write reaction properties
+    GiD_WriteCalculationFile puts "# Reaction properties"
+    foreach soil_block $soil_blocks {
+        set soil_name [$soil_block @name]
+        GiD_WriteCalculationFile puts "\[reaction.\"$soil_name\"\]"
+
+        # Get the first group for this soil (assumes all groups have same values)
+        set groups [$soil_block selectNodes {condition[@n="soil_basic"]/group}]
+
+        if {[llength $groups] > 0} {
+            set first_group [lindex $groups 0]
+
+            set lime [$first_group selectNodes {string(.//value[@n="lime_content_"]/@v)}]
+            GiD_WriteCalculationFile puts "lime_content = $lime"
+
+            set res_lime [$first_group selectNodes {string(.//value[@n="lime_impure_"]/@v)}]
+            GiD_WriteCalculationFile puts "residual_lime = $res_lime"
+        }
+
         GiD_WriteCalculationFile puts ""
     }
 }

@@ -29,8 +29,8 @@ println("="^64)
 
 # Get lime content from material 1
 soil_name = materials.soil_dictionary[1]
-soil_props = get_soil_properties(materials, soil_name)
-expected_lime = soil_props.lime_content
+reaction_props = get_reaction_properties(materials, soil_name)
+expected_lime = reaction_props.lime_content
 
 println("\nExpected lime content from material '$(soil_name)': $(expected_lime)")
 println("\nChecking nodal lime concentrations (C_lime):")

@@ -17,6 +17,12 @@ dynamic_viscosity = 1e-5
 density = 1000
 specific_heat = 1.0
 
+# Reactant properties
+[reactants]
+reaction_enthalpy = -113800.0
+lime_arrhenius_factor = 0.0
+lime_activation_energy = 0.0
+
 # Soil properties
 [soil."Soil 1"]
 # Physical properties
@@ -24,11 +30,17 @@ specific_gravity = 2.65
 porosity = 0.5
 saturation = 0.0
 granular_tortuosity = 1.0
-intrinsic_permeability = 1e-15
-lime_content = 0.1
-lime_arrhenius_factor = 0.0
-lime_activation_energy = 0.0
-residual_lime = 0.1
+# Chosen so the Darcy velocity matches the v = 8.0e-6 m/s declared in case.toml.
+# The concentration step held at the top of the column (45 against an initial 41)
+# sets dp = R*T*dC = 9910 Pa over L = 1 m, so v = (K/mu)*grad p requires
+# K = v*mu/grad p = 8.0e-6 * 1e-5 / 9910 = 8.07e-15 m^2.
+# Was 1e-15, which produced v = 9.9e-7 m/s, eight times smaller than case.toml assumed.
+intrinsic_permeability = 8.07e-15
 # Thermal properties
 specific_heat_solids = 1.0
+
+# Reaction properties
+[reaction."Soil 1"]
+lime_content = 0.1
+residual_lime = 0.1
 

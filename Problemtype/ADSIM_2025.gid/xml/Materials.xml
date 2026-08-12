@@ -2,7 +2,7 @@
 
 
 
-<container n="materials" pn="Materials" icon="icon_materials.png" help="Define materials properties for gases and soils.">
+<container n="materials" pn="Materials" icon="icon_materials.png" help="Define materials properties for gases, soils and the carbonation reaction.">
 
 <!-- ______________________________________________________________________ -->
 <!-- Gas properties -->
@@ -31,12 +31,29 @@
 
 
 <!-- ______________________________________________________________________ -->
+<!-- Reactant properties -->
+<!-- Chemistry and kinetics of the carbonation reaction, shared by every soil -->
+<!-- material. How much lime each material carries is a mix-design input and  -->
+<!-- lives in the soil blockdata below, under "Reaction properties".          -->
+<!-- ______________________________________________________________________ -->
+<container n="m_reactants" pn="Reactant properties" icon="icon_scientific.png" help="Define the properties of the carbonation reaction Ca(OH)2 + CO2 -> CaCO3 + H2O. These describe the reaction itself and apply to every soil material.">
+
+      <value n="reaction_enthalpy_" pn="Reaction enthalpy [FL/mol]" v="-113800.0" help="Enthalpy of reaction of lime carbonation, per mole of CO2, in J/mol. Enter a NEGATIVE value: carbonation is exothermic and a positive value would cool the soil. The default -113800 follows from Hess's law on the standard enthalpies of formation at 298.15 K, with liquid product water."/>
+
+      <value n="arrhenius_factor_" pn="Arrhenius factor k_o [L^3/(mol.s)]" v="0.0" help="Pre-exponential factor of the carbonation rate coefficient k_T = k_o exp(-E/RT). Calibration parameter."/>
+
+      <value n="activation_energy_" pn="Activation energy E [FL/mol]" v="0.0" help="Activation energy of the carbonation reaction, in J/mol. Calibration parameter."/>
+
+</container>
+
+
+<!-- ______________________________________________________________________ -->
 <!-- Solid properties -->
 <!-- ______________________________________________________________________ -->
 <container n="m_soil" pn="Soil properties" icon="icon_soils.png" help="Define soil material properties.">
 
   <blockdata n="soil_material" name="Soil 1" sequence='1' editable_name='unique' morebutton="0" icon="icon_soils.png">
-    <condition n="soil_basic" pn="Physical and thermal properties" icon="" ov="surface" ovm="element">
+    <condition n="soil_basic" pn="Physical, thermal and reaction properties" icon="" ov="surface" ovm="element">
       <container n="soil_physical" pn="Physical properties" icon=""
         help="Define the physical properties of the soil material."
       > 
@@ -45,16 +62,19 @@
       <value n="saturation_" pn="Saturation [-]" v="0.0"/>
       <value n="granular_tortuosity_" pn="Granular tortuosity [-]" v="0.0"/>
       <value n="intrinsic_permeabiliy_" pn="Intrinsic permeability [L^2]" v="0.0"/>
-      <value n="lime_content_" pn="Lime content [-]" v="0.0" help="Defined as a fraction of the weight of solids."/>
-      <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Defined as a fraction of the lime content."/>
-      <value n="arrhenius_factor_" pn="Arrhenius factor k_o [L^3/(mol.s)]" v="0.0" help="Pre-exponential factor of the carbonation rate coefficient k_T = k_o exp(-E/RT). Calibration parameter."/>
-      <value n="activation_energy_" pn="Activation energy E [FL/mol]" v="0.0" help="Activation energy of the carbonation reaction, in J/mol. Calibration parameter."/>
 
-      </container>          
+      </container>
 
 
       <container n="soil_thermal" pn="Thermal properties" icon="" help="Define the thermal properties of the soil material.">
-      <value n="specific_heat_solid_" pn="Specific heat solid [FL/(M·Tm)]" v="0.0"/> 
+      <value n="specific_heat_solid_" pn="Specific heat solid [FL/(M·Tm)]" v="0.0"/>
+      </container>
+
+      <container n="soil_reaction" pn="Reaction properties" icon="icon_scientific.png"
+        help="Define how much lime this soil material carries. Used only when reaction kinetics is enabled in the calculation data. The reaction enthalpy and the kinetics are common to all materials and are set under Reactant properties."
+      >
+      <value n="lime_content_" pn="Lime content [-]" v="0.0" help="Defined as a fraction of the weight of solids."/>
+      <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Defined as a fraction of the lime content."/>
       </container>
     </condition>
   </blockdata>

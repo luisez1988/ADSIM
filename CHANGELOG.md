@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Reaction enthalpy ΔH_r is now an input, set in GiD under Materials → Reactant
+  properties and written to a `[reactants]` table of the material file. It was
+  previously hardcoded at -113800 J/mol CO₂ in the solver.
+- The solver logs the reaction enthalpy and the Arrhenius pair in use, and warns
+  when the enthalpy is entered as a positive (endothermic) number, which would
+  cool the soil instead of heating it.
+
+### Changed
+- The carbonation reaction inputs are separated from the soil properties, and
+  split by what they describe:
+  - `[reactants]` holds the reaction itself — enthalpy, Arrhenius factor and
+    activation energy — and applies to every material. In GiD this is the new
+    Materials → Reactant properties page.
+  - `[reaction."<name>"]` holds the mix design of one soil material, its lime
+    content and residual lime, so different layers can still carry different
+    amounts of lime. In GiD this is a "Reaction properties" page on each soil.
+
+  All four keys previously sat in `[soil."<name>"]` alongside the physical
+  properties.
+- Material files written against the old layout still run: the reaction keys are
+  read from the `[soil]` tables with a deprecation warning, and a missing
+  `[reactants]` table falls back to the previous built-in enthalpy, so results
+  are unchanged. A legacy file whose soils declare different kinetics cannot be
+  represented by the single Arrhenius pair; the first material's values are used
+  and the conflict is reported.
+
 ## [0.1.0] - 2025-11-30
 
 ### Added

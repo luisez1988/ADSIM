@@ -17,8 +17,8 @@ materials = read_materials_file(mat_file)
 
 println("Materials available:")
 for (idx, soil_name) in enumerate(materials.soil_dictionary)
-    soil_props = get_soil_properties(materials, soil_name)
-    println("  Material $(idx): $(soil_name) - Lime content: $(soil_props.lime_content)")
+    reaction_props = get_reaction_properties(materials, soil_name)
+    println("  Material $(idx): $(soil_name) - Lime content: $(reaction_props.lime_content)")
 end
 
 # Modify material assignments for testing
@@ -45,9 +45,9 @@ println("LIME CONCENTRATION VERIFICATION WITH MULTIPLE MATERIALS")
 println("="^64)
 
 # Get expected lime contents
-lime_soil1 = get_soil_properties(materials, "Soil 1").lime_content
-lime_soil2 = get_soil_properties(materials, "Soil 2").lime_content
-lime_soil3 = get_soil_properties(materials, "Soil 3").lime_content
+lime_soil1 = get_reaction_properties(materials, "Soil 1").lime_content
+lime_soil2 = get_reaction_properties(materials, "Soil 2").lime_content
+lime_soil3 = get_reaction_properties(materials, "Soil 3").lime_content
 
 println("\nExpected lime contents:")
 println("  Soil 1: $(lime_soil1)")

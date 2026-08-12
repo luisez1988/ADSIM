@@ -230,7 +230,8 @@ the lime content from that material, and assigns it to all nodes in the element.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing element-material assignments
-- `materials`: Material data structure containing soil properties with lime content
+- `materials`: Material data structure containing the per-material reaction inputs
+  (lime content, residual lime) and the soil properties they are combined with
 
 # Note
 - Modifies global variable `C_lime`
@@ -251,18 +252,23 @@ function apply_initial_lime_concentration!(mesh, materials)
             
             # Get the soil properties for this material
             soil_props = get_soil_properties(materials, soil_name)
-            
-            if soil_props !== nothing
-                # Get lime content from material
-                β_l = soil_props.lime_content
-                G_s = soil_props.specific_gravity
-                n=soil_props.porosity                
-                M_lime=74.093   # Molar mass of Ca(OH)2 in g/mol
-                #Calculate lime concentration in mol/m^3 
-                lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3  
 
-                #Calculatte reidual lime 
-                residual_percent= soil_props.residual_lime
+            # Get the reaction inputs for this material. β_l and the residual
+            # lime fraction live alongside the kinetics rather than in the soil
+            # block, so they are looked up by the same soil name.
+            reaction_props = get_reaction_properties(materials, soil_name)
+
+            if soil_props !== nothing && reaction_props !== nothing
+                # Get lime content from the reaction inputs
+                β_l = reaction_props.lime_content
+                G_s = soil_props.specific_gravity
+                n=soil_props.porosity
+                M_lime=74.093   # Molar mass of Ca(OH)2 in g/mol
+                #Calculate lime concentration in mol/m^3
+                lime_concentration= (β_l * G_s * (1 - n) * 1e6 ) / M_lime #Asumes ρ_w= 1000 kg/m^3
+
+                #Calculatte reidual lime
+                residual_percent= reaction_props.residual_lime
                 C_lime_residual[material_idx] = residual_percent * lime_concentration
 
                 #Calculate Caco3 max for degree of carbonation

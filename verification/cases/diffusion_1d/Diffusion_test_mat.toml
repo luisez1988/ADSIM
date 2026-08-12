@@ -17,6 +17,12 @@ dynamic_viscosity = 1.0
 density = 1000
 specific_heat = 1.0
 
+# Reactant properties
+[reactants]
+reaction_enthalpy = -113800.0
+lime_arrhenius_factor = 0.0
+lime_activation_energy = 0.0
+
 # Soil properties
 [soil."Soil 1"]
 # Physical properties
@@ -25,10 +31,11 @@ porosity = 1.0
 saturation = 0.0
 granular_tortuosity = 1.0
 intrinsic_permeability = 1e-20
-lime_content = 0.1
-lime_arrhenius_factor = 0.0
-lime_activation_energy = 0.0
-residual_lime = 0.1
 # Thermal properties
 specific_heat_solids = 1.0
+
+# Reaction properties
+[reaction."Soil 1"]
+lime_content = 0.1
+residual_lime = 0.1
 

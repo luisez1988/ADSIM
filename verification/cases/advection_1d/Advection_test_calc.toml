@@ -24,7 +24,12 @@ reaction_kinetics = 0
 [time_stepping]
 total_simulation_time = 14400
 time_per_step = 600
-courant_number = 0.8
+# calculate_critical_time_step takes min(dt_diffusion, dt_advection), each derived as
+# if its term acted alone. For a single gas the advective flux is itself diffusion-like,
+# so the two operators add: D/tau = 1.6e-5 and R*T*K*C/(mu*theta_g) sum to an effective
+# diffusivity whose Fourier number exceeded 0.5 at courant 0.8, which is what produced
+# the NaN at step 30. The Courant number is reduced to keep the COMBINED operator stable.
+courant_number = 0.15
 
 [data_saving]
 data_saving_interval = 1.0

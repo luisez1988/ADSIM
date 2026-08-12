@@ -294,15 +294,20 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     R_gas = 8.3145                  # J mol⁻¹ K⁻¹
     M_lime = 74.093                 # Molar mass of Ca(OH)2 [g/mol]
 
+    # The kinetics belong to the reaction, so the same pair applies to every material
+    k_o = materials.reactants.arrhenius_factor
+    E_a = materials.reactants.activation_energy
+
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
         # Get material for this element
         material_idx = get_element_material(mesh, elem_id)
 
         if material_idx !== nothing
-            # Get soil properties
+            # Get soil properties and the reaction inputs of the same material
             soil_name = materials.soil_dictionary[material_idx]
             soil = materials.soils[soil_name]
+            reaction = materials.reactions[soil_name]
 
             n = soil.porosity
             θ_w = n * soil.saturation        # Volumetric water content [-]
@@ -310,16 +315,15 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
 
             if θ_w > 0.0 && θ_g > 0.0
                 # Initial reactive lime on the water basis, A*_s at t = 0
-                C_lime_0 = (soil.lime_content * soil.specific_gravity *
+                C_lime_0 = (reaction.lime_content * soil.specific_gravity *
                             (1.0 - n) * 1e6) / M_lime          # [mol/m³ total]
-                A_star_0 = C_lime_0 * (1.0 - soil.residual_lime) / θ_w
+                A_star_0 = C_lime_0 * (1.0 - reaction.residual_lime) / θ_w
 
                 # The rate law is pseudo-first order in the CO2 gas concentration:
                 #   dC_g/dt|rxn = -(θ_w/θ_g) k_T K_H R T min{A_aq,sat, A*_s} C_g
                 # so the bracket below is the decay constant of that equation.
                 A_react = min(lime_solubility(T_ref, ρ_w), A_star_0)
-                k_T = arrhenius_coefficient(soil.arrhenius_factor,
-                                            soil.activation_energy, T_ref)
+                k_T = arrhenius_coefficient(k_o, E_a, T_ref)
 
                 param = (θ_w / θ_g) * k_T * henry_solubility(T_ref) *
                         R_gas * T_ref * A_react
