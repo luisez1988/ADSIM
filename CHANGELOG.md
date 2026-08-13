@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the enthalpy is entered as a positive (endothermic) number, which would
   cool the soil instead of heating it.
 
+### Fixed
+- The standalone executable can be built again. `create_app` needs a package, so
+  the repository now carries a `Project.toml` declaring the name, uuid and
+  dependencies, and `src/ADSIM.jl` defines the `julia_main()` entry point that
+  PackageCompiler calls. Neither existed, so `julia build_app.jl` could not have
+  succeeded.
+- The precompile execution file no longer targets `Reaction_test`, a project with
+  no mesh in `src/data`, which made `main()` exit non-zero and abort the build. It
+  now traces a case that exists, and does so inside a temporary workspace, so a
+  build no longer writes VTK files, probe series or a checkpoint into
+  `src/output/` (the checkpoint would have pushed the next real run into a new
+  stage).
+
 ### Changed
 - The carbonation reaction inputs are separated from the soil properties, and
   split by what they describe:

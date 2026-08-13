@@ -73,9 +73,19 @@ ADSIM is a comprehensive finite element simulation framework designed for modeli
 
 4. **(Optional) Build standalone executable:**
    ```bash
+   julia -e 'using Pkg; Pkg.add("PackageCompiler")'
    julia build_app.jl
    ```
    This creates a self-contained executable in the `ADSIM_app/` folder.
+   The build takes 10-15 minutes and requires step 2 to have been run first, so
+   that `Manifest.toml` exists alongside `Project.toml`.
+
+   Note that the compiled app does not accept Julia's `-t` flag. Set the thread
+   count through the environment instead:
+   ```powershell
+   $env:JULIA_NUM_THREADS = 8
+   .\ADSIM_app\bin\ADSIM.exe <project_name>
+   ```
 
 ### GiD Problem Type Installation
 

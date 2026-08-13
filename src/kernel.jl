@@ -14,9 +14,11 @@
 using Dates
 using Printf
 
-# Load version information
+# Load version information. get_version_string is used by the --version flag in
+# main(), so it is imported here rather than relied on from an enclosing module,
+# which would leave it undefined when kernel.jl runs directly as a script.
 include("version.jl")
-using .ADSIMVersion: get_version
+using .ADSIMVersion: get_version, get_version_string
 
 # Include data reading modules
 include("read_mesh.jl")

@@ -92,13 +92,30 @@ If you want to test locally before releasing:
 
 ```powershell
 # Navigate to project root
-cd c:\Users\zamcr\Dcuments\GitHub\ADSIM
+cd c:\Users\zamcr\Documents\GitHub\ADSIM
+
+# One-time setup: resolve the package environment and install the build tool
+julia --project=. -e "using Pkg; Pkg.instantiate()"
+julia -e "using Pkg; Pkg.add(\"PackageCompiler\")"
 
 # Build the executable
 julia build_app.jl
 
 # This will take 10-15 minutes...
 ```
+
+The build requires, in the project root:
+
+- `Project.toml` declaring the package name, uuid and dependencies, plus the
+  `Manifest.toml` produced by `Pkg.instantiate()`. `create_app` builds a package,
+  not a loose folder of scripts.
+- `julia_main()` in `src/ADSIM.jl`. This is the entry point PackageCompiler calls
+  in the compiled app; `main()` alone is not enough.
+- `PackageCompiler` installed in the environment that runs `build_app.jl`.
+
+`buildscripts/run_cli.jl` traces compilation by running a real analysis. It copies
+its case into a temporary workspace, so a build never writes VTK files, probe
+series or checkpoints into `src/output/`.
 
 ### Test the Executable
 
