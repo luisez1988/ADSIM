@@ -103,8 +103,25 @@ function read_vtk(path::AbstractString)
     return VTKData(time, step, points, scalars, vectors)
 end
 
+# Resolve a per-node value array for `field`: a scalar directly, or a chosen
+# component / magnitude of a vector field.
+function _field_values(vtk::VTKData, field::AbstractString, component::Symbol)
+    if haskey(vtk.scalars, field)
+        return vtk.scalars[field]
+    elseif haskey(vtk.vectors, field)
+        v = vtk.vectors[field]
+        component === :x && return v[:, 1]
+        component === :y && return v[:, 2]
+        component === :z && return v[:, 3]
+        component === :magnitude && return vec(sqrt.(sum(abs2, v; dims=2)))
+        error("Unknown vector component '$component' (use :x, :y, :z or :magnitude)")
+    else
+        error("Field '$field' not found in VTK. Scalars: $(collect(keys(vtk.scalars))); Vectors: $(collect(keys(vtk.vectors)))")
+    end
+end
+
 """
-    line_profile(vtk, field; axis=:y, origin=0.0)
+    line_profile(vtk, field; axis=:y, origin=0.0, component=:magnitude)
 
 Build a 1D profile of `field` along coordinate `axis` (`:x`, `:y` or `:z`),
 which is exactly what a ParaView "Plot Over Line" produced. `position`
@@ -115,11 +132,11 @@ that boundary.
 Returns `(position, value)` sorted by position. Nodes that share the same
 position (e.g. the two columns of a 1D strip mesh) are averaged.
 """
-function line_profile(vtk::VTKData, field::AbstractString; axis::Symbol=:y, origin::Float64=0.0)
-    haskey(vtk.scalars, field) || error("Field '$field' not found in VTK. Available: $(collect(keys(vtk.scalars)))")
+function line_profile(vtk::VTKData, field::AbstractString; axis::Symbol=:y,
+                      origin::Float64=0.0, component::Symbol=:magnitude)
     col = axis === :x ? 1 : axis === :y ? 2 : 3
     coord = vtk.points[:, col]
-    value = vtk.scalars[field]
+    value = _field_values(vtk, field, component)
 
     # Average duplicate coordinates (round to tame float noise like 0.0999999).
     acc = Dict{Float64,Vector{Float64}}()

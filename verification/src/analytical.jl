@@ -65,6 +65,17 @@ function advection_diffusion(x::Float64, t::Float64; C0, Ci, D, v, R=1.0, L=1.0)
     return Ci + (C0 - Ci) * A
 end
 
+# ---- Darcy velocity (steady, uniform) -------------------------------------
+"""
+    darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314)
+
+Steady Darcy flux driven by a fixed concentration difference across a column.
+The gas is ideal (P = C R T), so a difference `dC` over length `L` sets a
+pressure gradient `R T dC / L`, and Darcy's law gives `v = (K/mu) R T dC / L`.
+Independent of position and time (returns the uniform magnitude).
+"""
+darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314) = (K / mu) * R * T * abs(dC) / L
+
 """
     evaluate(spec::Dict, x, t) -> Float64
 
@@ -81,6 +92,10 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
     elseif typ == "advection_diffusion"
         return advection_diffusion(x, t; C0=g("C0"), Ci=g("Ci"), D=g("D"),
                                    v=g("v"), R=g("R", 1.0), L=g("L", 1.0))
+    elseif typ == "darcy_velocity"
+        # Uniform in space and time; x and t are ignored.
+        return darcy_velocity(; K=g("K"), mu=g("mu"), dC=g("dC"),
+                              L=g("L", 1.0), T=g("T", 298.0), R=g("R", 8.314))
     else
         error("Unknown analytical type '$typ'. Add it to Analytical.evaluate.")
     end

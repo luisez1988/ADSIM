@@ -107,6 +107,8 @@ function run_case(name::AbstractString; verbose::Bool=false)
     origin = Float64(get(cfg, "boundary_coord", 0.0))
     tol = Float64(get(cfg, "tolerance", 0.02))
     check_steps = Int.(get(cfg, "check_steps", Int[]))
+    component = Symbol(get(cfg, "component", "magnitude"))  # for vector fields
+    snapshot = get(cfg, "snapshot", "all")                  # "all" or "last" (steady state)
     spec = cfg["analytical"]
 
     try
@@ -120,6 +122,9 @@ function run_case(name::AbstractString; verbose::Bool=false)
     vtks = _collect_vtks(project)
     isempty(vtks) && return CaseResult(name, false, tol, Inf, StepResult[], "no VTK output produced")
 
+    # "last" compares only the final (steady-state) snapshot; "all" every step.
+    snapshot == "last" && (vtks = vtks[end:end])
+
     steps = StepResult[]
     worst = 0.0
     for path in vtks
@@ -128,7 +133,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
         vtk.time <= 0 && continue
         !isempty(check_steps) && !(vtk.time_step in check_steps) && continue
 
-        pos, num = line_profile(vtk, field; axis=axis, origin=origin)
+        pos, num = line_profile(vtk, field; axis=axis, origin=origin, component=component)
         exact = [Analytical.evaluate(spec, x, vtk.time) for x in pos]
 
         r = relative_l2(num, exact)

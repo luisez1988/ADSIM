@@ -93,6 +93,19 @@ type = "diffusion_series"                # dispatch key in Analytical.evaluate
 - **diffusion_1d** — 1D pure diffusion, sine-series (consolidation) solution.
 - **advection_1d** — 1D advection–diffusion, Cleary & Adrian (1973) finite-column
   solution with a first-type inlet boundary.
+- **darcy_1d** — steady Darcy flow. A single gas fills a 1 m column with fixed
+  concentrations at both ends; since the gas is ideal (`P = C R T`), the
+  concentration difference `dC` sets a pressure gradient and the code should
+  return the Darcy flux `v = (K/mu) R T dC / L`. The test compares the magnitude
+  of the computed `Gas_Seepage_Velocity` at steady state against that value.
+
+### Comparing a vector field (e.g. velocity)
+
+`field` may name a VTK **vector** (like `Gas_Seepage_Velocity`) instead of a
+scalar. Add `component = "magnitude"` (or `"x"`/`"y"`/`"z"`) to pick what to
+compare. Use `snapshot = "last"` to score only the final, steady-state snapshot
+instead of every step — handy when the quantity is meaningful only once the run
+has settled.
 
 > The analytical `D` (and `v`, `R`) in each case config must match the solver's
 > **effective** transport coefficients for that input set, not just the raw

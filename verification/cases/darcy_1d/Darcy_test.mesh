@@ -1,0 +1,122 @@
+### ADSIM MESH FILE ###
+### Version: ADSIM_2025 ###
+
+MESH 22 10
+
+coordinates
+0.0 0.0
+0.1 0.0
+0.0 0.1
+0.1 0.1
+0.0 0.2
+0.1 0.2
+0.0 0.3
+0.1 0.3
+0.0 0.4
+0.1 0.4
+0.0 0.5
+0.1 0.5
+0.0 0.6
+0.1 0.6
+0.0 0.7
+0.1 0.7
+0.0 0.8
+0.1 0.8
+0.0 0.9
+0.1 0.9
+0.0 1.0
+0.1 1.0
+end coordinates
+
+elements
+2 4 3 1
+4 6 5 3
+6 8 7 5
+8 10 9 7
+10 12 11 9
+12 14 13 11
+14 16 15 13
+16 18 17 15
+18 20 19 17
+20 22 21 19
+end elements
+
+concentration_bc
+4
+1 1002
+2 1002
+21 998
+22 998
+end concentration_bc
+
+uniform_flow_bc
+22
+1 0.0
+2 0.0
+3 0.0
+4 0.0
+5 0.0
+6 0.0
+7 0.0
+8 0.0
+9 0.0
+10 0.0
+11 0.0
+12 0.0
+13 0.0
+14 0.0
+15 0.0
+16 0.0
+17 0.0
+18 0.0
+19 0.0
+20 0.0
+21 0.0
+22 0.0
+end uniform_flow_bc
+
+absolute_pressure
+0
+end absolute_pressure
+
+initial_concentrations
+10
+1 1001.8
+2 1001.4
+3 1001.0
+4 1000.6
+5 1000.2
+6 999.8
+7 999.4
+8 999.0
+9 998.6
+10 998.2
+end initial_concentrations
+
+initial_temperature
+10
+1 298
+2 298
+3 298
+4 298
+5 298
+6 298
+7 298
+8 298
+9 298
+10 298
+end initial_temperature
+
+materials
+10
+1 1
+2 1
+3 1
+4 1
+5 1
+6 1
+7 1
+8 1
+9 1
+10 1
+end materials
