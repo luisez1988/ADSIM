@@ -58,6 +58,11 @@ restated on a volumetric basis in Eq. (solubility) of the manuscript.
 The correlation is retrograde: solubility falls as temperature rises. It returns
 2.0e1 mol m⁻³ at 298.15 K.
 
+Retained as a diagnostic only. The rate law of `extent_of_reaction_rate` no
+longer caps the dissolved lime at this limit, so this function is not called
+during a run; it remains available for reporting how far above saturation the
+uncapped law operates.
+
 # Arguments
 - `T`: Absolute temperature [K]
 - `ρ_w`: Density of water [kg/m³]
@@ -90,22 +95,42 @@ function arrhenius_coefficient(k_o, E, T)
 end
 
 """
-    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, ρ_w)
+    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E)
 
 Non-negative extent-of-reaction rate r of Eq. (reaction_rate) of the manuscript,
 per unit volume of pore water.
 
-    r = k_T C_aq min{A_aq,sat, A*_s}
+    r = k_T C_aq (A_s - A_r) H(A_s - A_r)
 
-with C_aq from Henry's law, k_T from Arrhenius, and A*_s the reactive lime
-concentration expressed on the water basis.
+with C_aq from Henry's law and k_T from Arrhenius. The law is second order:
+first order in dissolved CO2 and first order in the lime remaining above the
+residual. The Heaviside holds the rate at zero once A_s reaches A_r.
+
+# Difference from the solubility-capped form
+Earlier versions capped the dissolved lime at the portlandite solubility limit,
+r = k_T C_aq min{A_aq,sat, A*_s}. For these mixtures A*_s exceeds A_aq,sat by
+two to three orders of magnitude, so the min returned the constant A_aq,sat for
+all but the last fraction of a percent of conversion and the law was effectively
+zero order in lime: a constant rate followed by an abrupt arrest. Without the cap
+the aqueous lime concentration tracks the remaining solid in proportion, the rate
+decays as lime is consumed, and at fixed temperature the solution is an
+exponential approach to A_r.
+
+The two forms are different chemistry, not two numerical treatments of the same
+assumption. The capped form assumes the pore water is saturated with portlandite
+and the solid acts as a buffered reservoir; the form used here assumes
+dissolution is fast relative to the reaction and never limits it.
+
+`k_o` is not transferable between the two forms. In the capped law it multiplied
+A_aq,sat, of order 2e1 mol per m³ of water; here it multiplies (A_s - A_r), of
+order 1e3 mol per m³ of total volume. A value calibrated against the capped form
+must be refitted. The calibration in `calibration_reactionrate/` fits this form.
 
 # Basis note
-`C_lime` and `C_r` are stored by ADSIM per unit **total** volume, whereas the
-manuscript writes A_s and A_r per unit gas volume. Converting the manuscript's
-A*_s = (θ_g/θ_w)(A_s - A_r) H(A_s - A_r) into the storage basis used here
-substitutes A_s = C_lime/θ_g, so the θ_g factors cancel and the conversion
-reduces to a single division by θ_w. See `docs` note in the manuscript §2.
+`C_lime` and `C_r` are stored per unit total volume and enter on that basis,
+while C_aq is per unit volume of water. Their product is the rate per unit volume
+of water, so the caller still recovers the total-volume rate as θ_w r and the
+downstream conversions are unchanged. `lime_solubility` no longer enters the rate.
 
 # Arguments
 - `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
@@ -115,12 +140,11 @@ reduces to a single division by θ_w. See `docs` note in the manuscript §2.
 - `T`: Absolute temperature [K]
 - `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
 - `E`: Activation energy [J/mol]
-- `ρ_w`: Density of water [kg/m³]
 
 # Returns
 - `r`: Extent-of-reaction rate [mol per m³ of water per s], r >= 0
 """
-function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, ρ_w)
+function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E)
     if θ_w <= 0.0 || C_g_co2 <= 0.0
         return 0.0
     end
@@ -130,19 +154,13 @@ function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, ρ_w)
     # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water]
     C_aq = henry_solubility(T) * R_gas * T * C_g_co2
 
-    # Reactive lime in excess of the shielded residual, on the water basis.
-    # The Heaviside sits inside the min of Eq. (reaction_rate), not as a
-    # multiplicative factor on it, so the rate decays continuously to zero
-    # at A_s = A_r instead of being cut off abruptly.
+    # Lime remaining above the shielded residual, per unit total volume
     Δ_lime = C_lime - C_r
-    A_star = heaviside(Δ_lime) > 0.0 ? Δ_lime / θ_w : 0.0
-
-    # Solubility-limited or solid-limited dissolved lime, whichever binds
-    A_sat = lime_solubility(T, ρ_w)
+    A_react = heaviside(Δ_lime) > 0.0 ? Δ_lime : 0.0
 
     k_T = arrhenius_coefficient(k_o, E, T)
 
-    return k_T * C_aq * min(A_sat, A_star)
+    return k_T * C_aq * A_react
 end
 
 #=
@@ -654,8 +672,6 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         #the gas fluxes consume q_source_sink.
         #______________________________________________________
         if calculate_reaction && co2_gas_idx !== nothing
-            ρ_w = materials.liquid.density  # [kg/m³]
-
             @threads for node_id in 1:Nnodes
                 e = node_owner[node_id]
                 if e == 0
@@ -666,8 +682,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Extent-of-reaction rate r >= 0, per unit volume of water
                 r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_lime[node_id],
                                             props.residual_lime, props.θ_w, T[node_id],
-                                            k_o_reaction, E_reaction,
-                                            ρ_w)
+                                            k_o_reaction, E_reaction)
 
                 #Species rates follow from the stoichiometric coefficients.
                 #Lime is stored per unit total volume, so dA/dt = -θ_w r.

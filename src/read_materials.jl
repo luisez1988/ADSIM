@@ -140,7 +140,10 @@ and lives in [`ReactionProperties`](@ref) instead.
 - `reaction_enthalpy::Float64`: Enthalpy of the carbonation reaction ΔH_r [J/mol CO2].
   Negative is exothermic, following the IUPAC convention.
 - `arrhenius_factor::Float64`: Arrhenius factor k_o of the rate coefficient
-  k_T = k_o exp(-E/RT) [m³/(mol·s)]
+  k_T = k_o exp(-E/RT) [m³/(mol·s)]. In the rate law r = k_T C_aq (A_s - A_r) it
+  multiplies the lime remaining above the residual, per unit total volume. Values
+  fitted against the earlier solubility-capped law must be refitted; see
+  `extent_of_reaction_rate` in `fully_explicit_solver.jl`.
 - `activation_energy::Float64`: Activation energy E of the carbonation reaction [J/mol]
 """
 mutable struct ReactantProperties

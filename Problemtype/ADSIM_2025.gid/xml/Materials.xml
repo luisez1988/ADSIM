@@ -36,11 +36,11 @@
 <!-- material. How much lime each material carries is a mix-design input and  -->
 <!-- lives in the soil blockdata below, under "Reaction properties".          -->
 <!-- ______________________________________________________________________ -->
-<container n="m_reactants" pn="Reactant properties" icon="icon_scientific.png" help="Define the properties of the carbonation reaction Ca(OH)2 + CO2 -> CaCO3 + H2O. These describe the reaction itself and apply to every soil material.">
+<container n="m_reactants" pn="Reactant properties" icon="icon_scientific.png" help="Define the properties of the carbonation reaction Ca(OH)2 + CO2 -> CaCO3 + H2O. These describe the reaction itself and apply to every soil material. The rate law is second order, r = k_T C_aq (A_s - A_r): first order in dissolved CO2 and first order in the lime remaining above the residual.">
 
       <value n="reaction_enthalpy_" pn="Reaction enthalpy [FL/mol]" v="-113800.0" help="Enthalpy of reaction of lime carbonation, per mole of CO2, in J/mol. Enter a NEGATIVE value: carbonation is exothermic and a positive value would cool the soil. The default -113800 follows from Hess's law on the standard enthalpies of formation at 298.15 K, with liquid product water."/>
 
-      <value n="arrhenius_factor_" pn="Arrhenius factor k_o [L^3/(mol.s)]" v="0.0" help="Pre-exponential factor of the carbonation rate coefficient k_T = k_o exp(-E/RT). Calibration parameter."/>
+      <value n="arrhenius_factor_" pn="Arrhenius factor k_o [L^3/(mol.s)]" v="0.0" help="Pre-exponential factor of the carbonation rate coefficient k_T = k_o exp(-E/RT). Calibration parameter. In the rate law r = k_T C_aq (A_s - A_r), k_o multiplies the lime remaining above the residual, expressed per unit total volume. Values calibrated against the earlier solubility-capped law, r = k_T C_aq min(A_aq_sat, A_s*), are not transferable: there k_o multiplied the solubility limit, of order 20 mol per cubic metre of water, against order 1000 mol per cubic metre of total volume here. Refit before use."/>
 
       <value n="activation_energy_" pn="Activation energy E [FL/mol]" v="0.0" help="Activation energy of the carbonation reaction, in J/mol. Calibration parameter."/>
 
@@ -74,7 +74,7 @@
         help="Define how much lime this soil material carries. Used only when reaction kinetics is enabled in the calculation data. The reaction enthalpy and the kinetics are common to all materials and are set under Reactant properties."
       >
       <value n="lime_content_" pn="Lime content [-]" v="0.0" help="Defined as a fraction of the weight of solids."/>
-      <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Defined as a fraction of the lime content."/>
+      <value n="lime_impure_" pn="Residual lime content [-]" v="0.0" help="Lime shielded by precipitated CaCO3 and therefore unavailable to react. Defined as a fraction of the lime content. Under the second-order rate law the degree of carbonation approaches exactly 1 minus this fraction, so it fixes the final plateau."/>
       </container>
     </condition>
   </blockdata>
