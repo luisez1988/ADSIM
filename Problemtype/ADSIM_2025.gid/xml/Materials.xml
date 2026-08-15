@@ -44,6 +44,8 @@
 
       <value n="activation_energy_" pn="Activation energy E [FL/mol]" v="0.0" help="Activation energy of the carbonation reaction, in J/mol. Calibration parameter."/>
 
+      <value n="interfacial_area_beta_" pn="Interfacial area coefficient beta [L^3/mol]" v="0.0" help="Coefficient of the interfacial-area factor a = exp(beta (C_aq - C_aq_atm)), in m3/mol. The factor represents the specific gas-liquid interfacial area, which grows as CO2 is forced into the pore network, and supplies pressure sensitivity that the linear C_aq term cannot. Enter 0 to disable the factor and recover the plain second-order law. The factor is normalised at atmospheric CO2, so a = 1 for a specimen in equilibrium with air and a is large at injection pressures. Beta and the Arrhenius factor k_o are fitted together and are not independent: changing one without refitting the other rescales the rate by exp(beta times the change in C_aq). Calibration parameter."/>
+
 </container>
 
 

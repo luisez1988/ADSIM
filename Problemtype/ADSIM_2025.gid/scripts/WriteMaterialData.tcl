@@ -165,6 +165,15 @@ proc ADSIM::WriteReactantProperties { root } {
     set activation_energy [$reactants_container selectNodes {string(value[@n="activation_energy_"]/@v)}]
     GiD_WriteCalculationFile puts "lime_activation_energy = $activation_energy"
 
+    # Interfacial-area coefficient of the same rate law. Zero disables the factor.
+    # Models saved before this field existed return an empty string, so fall back to
+    # zero rather than writing an unparsable line.
+    set interfacial_area_beta [$reactants_container selectNodes {string(value[@n="interfacial_area_beta_"]/@v)}]
+    if {$interfacial_area_beta == ""} {
+        set interfacial_area_beta 0.0
+    }
+    GiD_WriteCalculationFile puts "lime_interfacial_area_beta = $interfacial_area_beta"
+
     GiD_WriteCalculationFile puts ""
 }
 

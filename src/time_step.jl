@@ -281,9 +281,10 @@ end
 Get the decay constant of the CO2 gas concentration under the reaction term,
 maximised over the mesh, for use in the reactive time scale.
 
-    (θ_w/θ_g) × k_T × K_H × R × T × (A_s - A_r)
+    (θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r)
 
-evaluated with the lime inventory at t = 0.
+evaluated with the lime inventory at t = 0 and the area factor a at the largest
+initial gas concentration in the mesh.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure
@@ -298,9 +299,18 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     R_gas = 8.3145                  # J mol⁻¹ K⁻¹
     M_lime = 74.093                 # Molar mass of Ca(OH)2 [g/mol]
 
-    # The kinetics belong to the reaction, so the same pair applies to every material
+    # The kinetics belong to the reaction, so the same set applies to every material
     k_o = materials.reactants.arrhenius_factor
     E_a = materials.reactants.activation_energy
+    β_area = materials.reactants.interfacial_area_beta
+
+    # The area factor multiplies the rate, so it multiplies the decay constant too
+    # and must enter the time step. It grows with the CO2 gas concentration, so the
+    # largest initial concentration in the mesh gives the shortest step. That value
+    # is maximised over all species, which can only overestimate the CO2 present and
+    # so can only shorten the step: safe for a stability bound.
+    C_g_max = get_maximum_initial_concentration(mesh, length(materials.gas_dictionary))
+    a_max = interfacial_area_factor(C_g_max, β_area)
 
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
@@ -325,9 +335,9 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
                             (1.0 - n) * 1e6) / M_lime          # [mol/m³ total]
                 A_react = C_lime_0 * (1.0 - reaction.residual_lime)
 
-                # Holding the lime fixed, the rate law is first order in the CO2 gas
-                # concentration:
-                #   dC_g/dt|rxn = -(θ_w/θ_g) k_T K_H R T (A_s - A_r) C_g
+                # Holding the lime and the area factor fixed, the rate law is first
+                # order in the CO2 gas concentration:
+                #   dC_g/dt|rxn = -(θ_w/θ_g) k_T a K_H R T (A_s - A_r) C_g
                 # so the bracket below is the decay constant of that equation.
                 #
                 # The solubility cap was removed from the rate law, so A_react is now
@@ -336,7 +346,7 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
                 # the reactive time scale is correspondingly shorter.
                 k_T = arrhenius_coefficient(k_o, E_a, T_ref)
 
-                param = (θ_w / θ_g) * k_T * henry_solubility(T_ref) *
+                param = (θ_w / θ_g) * k_T * a_max * henry_solubility(T_ref) *
                         R_gas * T_ref * A_react
                 param_max = max(param_max, param)
             end
@@ -380,7 +390,7 @@ end
 Calculate the critical time step based on three stability criteria:
 1. Diffusive time scale: h_min² × τ / (θ_g × D_max)
 2. Advective time scale: h_min² × (μ_g / (C_g^i × K × T × R))_min
-3. Reactive time scale: 1 / ((θ_w/θ_g) × k_T × K_H × R × T × (A_s - A_r))
+3. Reactive time scale: 1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r))
 
 The critical time step is the minimum of these three values.
 
@@ -396,7 +406,7 @@ The critical time step is the minimum of these three values.
 ```
 Δt_crit = min{ h_min² × τ / (θ_g × D_max),
                h_min² × (μ_g / (C_g^i × K × T × R))_min,
-               1 / ((θ_w/θ_g) × k_T × K_H × R × T × (A_s - A_r)) }
+               1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r)) }
 ```
 """
 function calculate_critical_time_step(mesh, materials, T_ref::Float64)

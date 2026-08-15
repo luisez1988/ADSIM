@@ -145,14 +145,20 @@ and lives in [`ReactionProperties`](@ref) instead.
   fitted against the earlier solubility-capped law must be refitted; see
   `extent_of_reaction_rate` in `fully_explicit_solver.jl`.
 - `activation_energy::Float64`: Activation energy E of the carbonation reaction [J/mol]
+- `interfacial_area_beta::Float64`: Interfacial-area coefficient β of the factor
+  a = exp[β (C_aq - C_aq_atm)] [m³/mol]. Zero disables the factor and recovers the
+  plain second-order law, which is the default so that material files written
+  before the factor existed load unchanged. Fitted jointly with `arrhenius_factor`;
+  see `interfacial_area_factor` in `fully_explicit_solver.jl`.
 """
 mutable struct ReactantProperties
     reaction_enthalpy::Float64
     arrhenius_factor::Float64
     activation_energy::Float64
+    interfacial_area_beta::Float64
 
     function ReactantProperties()
-        new(DEFAULT_REACTION_ENTHALPY, 0.0, 0.0)
+        new(DEFAULT_REACTION_ENTHALPY, 0.0, 0.0, 0.0)
     end
 end
 
@@ -339,6 +345,12 @@ function parse_reactant_properties!(materials::MaterialData, reactant_data::Dict
                                     filename::String)
     materials.reactants.reaction_enthalpy =
         Float64(get(reactant_data, "reaction_enthalpy", DEFAULT_REACTION_ENTHALPY))
+
+    # The interfacial-area coefficient postdates the legacy per-material layout, so
+    # it is only ever declared in [reactants] and is read before the branch below.
+    # Absent, it defaults to zero and the area factor stays off.
+    materials.reactants.interfacial_area_beta =
+        Float64(get(reactant_data, "lime_interfacial_area_beta", 0.0))
 
     if haskey(reactant_data, "lime_arrhenius_factor") ||
        haskey(reactant_data, "lime_activation_energy")

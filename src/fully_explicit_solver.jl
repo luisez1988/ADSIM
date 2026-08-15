@@ -95,16 +95,84 @@ function arrhenius_coefficient(k_o, E, T)
 end
 
 """
-    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E)
+    interfacial_area_factor(C_g_co2, β_area)
+
+Interfacial-area factor a of the rate law, normalised at atmospheric CO2.
+
+    a = exp[β (C_aq - C_aq,atm)]
+
+a stands for the specific gas-liquid interfacial area available to the reaction.
+Forcing CO2 into the pore network increases the area of meniscus in contact with
+the gas, so the rate rises faster with pressure than the linear C_aq term alone
+accounts for. Calibration against the elemental tests gives β of order 0.5
+m³/mol; β = 0 disables the factor and recovers the plain second-order law.
+
+# Reference state
+C_aq,atm = K_H(T_ref) x_CO2 P_atm = 1.40e-2 mol per m³ of water is the dissolved
+CO2 in equilibrium with the free atmosphere, so a = 1 describes a specimen
+sitting in air and a > 1 measures the extra interface that injected CO2 buys.
+Moving this reference multiplies a by a constant and divides k_o by the same
+constant, so β, the residuals and the fit quality are unchanged by the choice;
+only the meaning of k_o changes.
+
+# Temperature
+The factor carries NO temperature dependence: both the Henry constant and the
+ideal-gas conversion are evaluated at T_ref, so a depends on the CO2 gas
+concentration alone. This is deliberate. The interfacial area is set by the
+capillary state of the pore network, not by how warm the specimen is, and
+letting T into this factor produces a strong spurious feedback in either
+direction: through K_H(T) the factor collapses as the specimen self-heats,
+while through the ideal-gas term alone it would grow by an order of magnitude
+over a typical adiabatic rise. The genuine temperature dependence of the rate
+remains, through the Arrhenius coefficient and through C_aq(T) in
+`extent_of_reaction_rate`.
+
+# Pairing with k_o
+β and k_o are fitted together and are not independent. Because a is large at
+injection pressures, k_o is correspondingly small; changing one without
+refitting the other rescales the rate by exp(β ΔC_aq).
+
+# Arguments
+- `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
+- `β_area`: Interfacial-area coefficient β [m³/mol], 0 disables the factor
+
+# Returns
+- `a`: Dimensionless area factor, a > 0
+"""
+function interfacial_area_factor(C_g_co2, β_area)
+    if β_area == 0.0
+        return 1.0
+    end
+
+    R_gas = 8.3145        # J mol⁻¹ K⁻¹
+    T_ref = 298.15        # K, reference temperature of the calibration
+    P_atm = 101325.0      # Pa
+    x_co2_atm = 420e-6    # mol/mol, CO2 mole fraction of air
+
+    # Dissolved CO2 the local gas concentration corresponds to at T_ref, and the
+    # value in equilibrium with the atmosphere. Both per m³ of water.
+    C_aq_ref = henry_solubility(T_ref) * R_gas * T_ref * C_g_co2
+    C_aq_atm = henry_solubility(T_ref) * x_co2_atm * P_atm
+
+    return exp(β_area * (C_aq_ref - C_aq_atm))
+end
+
+"""
+    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
 
 Non-negative extent-of-reaction rate r of Eq. (reaction_rate) of the manuscript,
 per unit volume of pore water.
 
-    r = k_T C_aq (A_s - A_r) H(A_s - A_r)
+    r = k_T a C_aq (A_s - A_r) H(A_s - A_r)
 
-with C_aq from Henry's law and k_T from Arrhenius. The law is second order:
-first order in dissolved CO2 and first order in the lime remaining above the
-residual. The Heaviside holds the rate at zero once A_s reaches A_r.
+with C_aq from Henry's law, k_T from Arrhenius, and a the interfacial-area factor
+of [`interfacial_area_factor`](@ref). The law is second order: first order in
+dissolved CO2 and first order in the lime remaining above the residual. The
+Heaviside holds the rate at zero once A_s reaches A_r.
+
+The area factor supplies pressure sensitivity that the linear C_aq term cannot:
+across the calibration pressures C_aq spans only 1.14x while the fitted rate
+spans an order of magnitude. Setting β_area = 0 removes it.
 
 # Difference from the solubility-capped form
 Earlier versions capped the dissolved lime at the portlandite solubility limit,
@@ -140,11 +208,12 @@ downstream conversions are unchanged. `lime_solubility` no longer enters the rat
 - `T`: Absolute temperature [K]
 - `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
 - `E`: Activation energy [J/mol]
+- `β_area`: Interfacial-area coefficient β [m³/mol], 0 disables the factor
 
 # Returns
 - `r`: Extent-of-reaction rate [mol per m³ of water per s], r >= 0
 """
-function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E)
+function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
     if θ_w <= 0.0 || C_g_co2 <= 0.0
         return 0.0
     end
@@ -159,8 +228,9 @@ function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E)
     A_react = heaviside(Δ_lime) > 0.0 ? Δ_lime : 0.0
 
     k_T = arrhenius_coefficient(k_o, E, T)
+    a = interfacial_area_factor(C_g_co2, β_area)
 
-    return k_T * C_aq * A_react
+    return k_T * a * C_aq * A_react
 end
 
 #=
@@ -491,6 +561,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # carried per element.
     k_o_reaction = materials.reactants.arrhenius_factor    # m³/(mol·s)
     E_reaction = materials.reactants.activation_energy     # J/mol
+    # Interfacial-area coefficient of the same rate law. Fitted jointly with k_o,
+    # so the two must be taken from the same calibration.
+    β_area_reaction = materials.reactants.interfacial_area_beta  # m³/mol
 
     # Constant specific heat for all gases [J/(kg·K)]
     # Using a representative value for common gases at ambient conditions
@@ -515,6 +588,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         log_print(@sprintf("   Reaction enthalpy ΔH_r: %.4g J/mol CO2", ΔH_r))
         log_print(@sprintf("   Arrhenius factor k_o: %.4g m³/(mol·s), activation energy E: %.4g J/mol",
                            k_o_reaction, E_reaction))
+        if β_area_reaction == 0.0
+            log_print("   Interfacial-area coefficient β: 0 (factor disabled, plain second-order law)")
+        else
+            log_print(@sprintf("   Interfacial-area coefficient β: %.4g m³/mol (a = 1 at atmospheric CO2)",
+                               β_area_reaction))
+        end
         if k_o_reaction <= 0.0
             log_print("Warning: reaction kinetics is enabled but lime_arrhenius_factor = 0, " *
                       "so no carbonation will occur. Check that the material file defines a " *
@@ -682,7 +761,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Extent-of-reaction rate r >= 0, per unit volume of water
                 r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_lime[node_id],
                                             props.residual_lime, props.θ_w, T[node_id],
-                                            k_o_reaction, E_reaction)
+                                            k_o_reaction, E_reaction, β_area_reaction)
 
                 #Species rates follow from the stoichiometric coefficients.
                 #Lime is stored per unit total volume, so dA/dt = -θ_w r.

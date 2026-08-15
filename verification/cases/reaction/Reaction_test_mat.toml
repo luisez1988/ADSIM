@@ -24,6 +24,9 @@ reaction_enthalpy = -113800.0
 # k_o with E = 0 (so k_T = k_o). Re-calibrate if the reaction model changed.
 lime_arrhenius_factor = 0.001
 lime_activation_energy = 0.0
+# Interfacial-area coefficient of the factor a = exp(beta (C_aq - C_aq_atm)).
+# Zero disables the factor and gives the plain second-order rate law.
+lime_interfacial_area_beta = 0.0
 
 # Soil properties
 [soil."Soil 1"]
