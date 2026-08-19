@@ -79,7 +79,13 @@ function get_solver_settings(calc_data::Dict)
         "diffusion" => solver["diffusion"],
         "advection" => solver["advection"],
         "gravity" => solver["gravity"],
-        "reaction_kinetics" => solver["reaction_kinetics"]
+        "reaction_kinetics" => solver["reaction_kinetics"],
+        # Heat transport. Optional so calculation files written before the energy
+        # equation still load, and off by default. With neither mechanism active the
+        # temperature field does not evolve at all and the run is isothermal, whatever
+        # reaction enthalpy the material file declares.
+        "heat_conduction" => get(solver, "heat_conduction", 0),
+        "heat_advection" => get(solver, "heat_advection", 0)
     )
 end
 
@@ -182,13 +188,23 @@ function log_analysis_type(solver_settings::Dict)
     solver_settings["advection"] == 1 && push!(components, "Advection")
     solver_settings["gravity"] == 1 && push!(components, "Gravity")
     solver_settings["reaction_kinetics"] == 1 && push!(components, "Reaction Kinetics")
-    
+    solver_settings["heat_conduction"] == 1 && push!(components, "Heat Conduction")
+    solver_settings["heat_advection"] == 1 && push!(components, "Heat Advection")
+
     if isempty(components)
         msg *= "   ✓ Solver: WARNING - No components selected!"
     else
         msg *= "   ✓ Solver: $(join(components, " + "))"
     end
-    
+
+    # Say so explicitly rather than leaving the reader to infer it from two absent
+    # entries in the list above: with no heat transport the temperature is frozen,
+    # so a nonzero reaction enthalpy is deliberately ignored.
+    if solver_settings["reaction_kinetics"] == 1 &&
+       solver_settings["heat_conduction"] == 0 && solver_settings["heat_advection"] == 0
+        msg *= "\n   ✓ Thermal: isothermal (no heat transport active, reaction enthalpy ignored)"
+    end
+
     return msg
 end
 

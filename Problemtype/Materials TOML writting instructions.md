@@ -21,11 +21,15 @@ gas_dictionary_=[gas_1, gas_2, ... gas_n]
 dynamic_viscosity= val
 molar_mass= val
 diff_coeffiecient= val
+thermal_conductivity= val    # optional, defaults to 0
+molar_heat_capacity= val     # optional, defaults to 0
 
 [gas.gas_2]
 dynamic_viscosity= val
 molar_mass= val
 diff_coeffiecient= val
+thermal_conductivity= val    # optional, defaults to 0
+molar_heat_capacity= val     # optional, defaults to 0
 
 .
 .
@@ -35,12 +39,15 @@ diff_coeffiecient= val
 dynamic_viscosity= val
 molar_mass= val
 diff_coeffiecient= val
+thermal_conductivity= val    # optional, defaults to 0
+molar_heat_capacity= val     # optional, defaults to 0
 
 #liquid properties
 [liquid]
 dynamic_viscosity= val
 density= val
 specific_heat= val
+thermal_conductivity= val    # optional, defaults to 0
 
 #reactant properties (chemistry and kinetics of the carbonation reaction,
 #shared by all soils)
@@ -62,6 +69,7 @@ granular_tortuosity= val
 intrinsic_permeability= val
 #thermal properties
 specific_heat_solids= val
+thermal_conductivity_solids= val    # optional, defaults to 0
 
 [soil.soil_2]
 #physical properties
@@ -72,6 +80,7 @@ granular_tortuosity= val
 intrinsic_permeability= val
 #thermal properties
 specific_heat_solids= val
+thermal_conductivity_solids= val    # optional, defaults to 0
 .
 .
 .
@@ -84,6 +93,7 @@ granular_tortuosity= val
 intrinsic_permeability= val
 #thermal properties
 specific_heat_solids= val
+thermal_conductivity_solids= val    # optional, defaults to 0
 
 #reaction properties, one table per soil material, keyed by the same name
 [reaction.soil_1]
@@ -139,3 +149,26 @@ whose soils declare *different* kinetics cannot be represented exactly: the firs
 material's pair is used and the conflict is reported.
 
 
+
+
+## Thermal properties
+
+The four thermal-conductivity/heat-capacity keys above are optional: a material
+file written before the energy equation existed still loads, and a missing key
+simply contributes nothing.
+
+They are consumed only when heat transport is enabled in the calculation file.
+The effective conductivity of the mixture is the volume-weighted average
+
+    lambda_e = (1 - n) lambda_s + theta_w lambda_w + theta_g lambda_g
+
+so `thermal_conductivity_solids` dominates, the solids occupying most of the
+volume. The gas contribution to the mixture heat capacity is assembled from the
+concentrations the solver already carries,
+
+    (rho c)_g = sum over species of C_g^i * molar_heat_capacity_i
+
+which is why the gas capacity is molar rather than per unit mass. A single
+hard-coded value of 1000 J/(kg.K) was previously assumed for every gas; that is
+gone, so a run with heat transport enabled and no `molar_heat_capacity` set will
+carry no gas-phase heat capacity at all.

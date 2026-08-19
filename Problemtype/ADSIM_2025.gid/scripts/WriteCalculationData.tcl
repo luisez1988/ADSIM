@@ -146,6 +146,16 @@ proc ADSIM::WriteSolver { root } {
         # Reaction kinetics
         set reaction_kinetics [$calc_mode_container selectNodes {string(value[@n="reaction_kinetics"]/@v)}]
         GiD_WriteCalculationFile puts "reaction_kinetics = $reaction_kinetics"
+
+        # Heat transport. With both off the temperature is held fixed and the
+        # reaction enthalpy is ignored.
+        set heat_conduction [$calc_mode_container selectNodes {string(value[@n="heat_conduction"]/@v)}]
+        if {$heat_conduction == ""} { set heat_conduction 0 }
+        GiD_WriteCalculationFile puts "heat_conduction = $heat_conduction"
+
+        set heat_advection [$calc_mode_container selectNodes {string(value[@n="heat_advection"]/@v)}]
+        if {$heat_advection == ""} { set heat_advection 0 }
+        GiD_WriteCalculationFile puts "heat_advection = $heat_advection"
     }
     
     GiD_WriteCalculationFile puts ""

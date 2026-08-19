@@ -287,6 +287,51 @@ struct ElementProperties
     residual_lime::Float64
     specific_gravity::Float64
     specific_heat_solids::Float64
+    λ_e::Float64
+end
+
+"""
+    effective_conductivity(soil, materials, n, S_r) -> Float64
+
+Effective thermal conductivity of the mixture, Eq. (fourier) of the manuscript:
+
+    λ_e = (1-n) λ_s + θ_w λ_w + θ_g λ_g
+
+a volume-weighted average of the phase conductivities, assembled the same way as
+the volumetric heat capacity C_mix. This is a parallel average and so an upper
+bound for a granular assembly, since heat must in reality cross grain contacts;
+the manuscript flags λ_e as the natural quantity to calibrate if a simulated
+thermal front comes out over-diffused.
+
+The gas conductivity is averaged over the declared species rather than weighted by
+concentration: λ_g varies little between the gases involved, and the gas term is a
+small fraction of λ_e, so a concentration weighting would add a per-node
+dependency for no accuracy.
+
+# Arguments
+- `soil`: Soil properties of the material
+- `materials`: Material data structure
+- `n`: Porosity [-]
+- `S_r`: Degree of saturation [-]
+
+# Returns
+- Effective thermal conductivity [W/(m·K)]
+"""
+function effective_conductivity(soil, materials, n, S_r)
+    θ_w = n * S_r
+    θ_g = n * (1.0 - S_r)
+
+    λ_g = 0.0
+    if !isempty(materials.gas_dictionary)
+        for gas_name in materials.gas_dictionary
+            λ_g += materials.gases[gas_name].thermal_conductivity
+        end
+        λ_g /= length(materials.gas_dictionary)
+    end
+
+    return (1.0 - n) * soil.thermal_conductivity_solids +
+           θ_w * materials.liquid.thermal_conductivity +
+           θ_g * λ_g
 end
 
 """
@@ -327,6 +372,7 @@ function build_element_properties(mesh, materials, C_lime_residual)
             C_lime_residual[material_idx],
             soil.specific_gravity,
             soil.specific_heat_solids,
+            effective_conductivity(soil, materials, n, S_r),
         )
     end
 
@@ -565,10 +611,20 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # so the two must be taken from the same calibration.
     β_area_reaction = materials.reactants.interfacial_area_beta  # m³/mol
 
-    # Constant specific heat for all gases [J/(kg·K)]
-    # Using a representative value for common gases at ambient conditions
-    c_g_constant = 1000.0  # J/(kg·K)
-    
+    # Molar heat capacity of each gas species [J/(mol·K)], in gas_dictionary order.
+    # This replaces the single hard-coded mass-basis value the solver used to assume
+    # for every gas. The molar form is what Eq. (heat_advection) writes, and it lets
+    # the gas contribution to the mixture be assembled straight from the nodal
+    # concentrations as (ρc)_g = Σ_i C_g^i c̄_p^i, with no density conversion.
+    #
+    # Eq. (vol_heat_capacity) writes the gas term of C_mix on a mass basis and
+    # Eq. (heat_advection) on a molar basis; they are the same quantity, so the molar
+    # form is used for both. Strictly the storage term wants c_v and advection c_p,
+    # but the gas carries of order 1e-3 of the mixture capacity, so the distinction is
+    # far below anything else in the model.
+    c_p_molar = [materials.gases[name].molar_heat_capacity
+                 for name in materials.gas_dictionary]
+
     # Get dimensions
     Nnodes = mesh.num_nodes
     Nelements = mesh.num_elements
@@ -580,6 +636,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     calculate_advection = solver_settings["advection"] == 1
     calculate_gravity = solver_settings["gravity"] == 1
     calculate_reaction = solver_settings["reaction_kinetics"] == 1
+    calculate_heat_conduction = solver_settings["heat_conduction"] == 1
+    calculate_heat_advection = solver_settings["heat_advection"] == 1
+
+    # With neither transport mechanism active the temperature field does not evolve at
+    # all: the run is isothermal and the reaction enthalpy is ignored, however it is
+    # set in the material file. Note this is stronger than the λ_e = 0, v_g = 0 limit
+    # of the manuscript (tex:474), which still applies the local heat source; to get
+    # that adiabatic limit, enable conduction and set the phase conductivities to zero.
+    calculate_heat = calculate_heat_conduction || calculate_heat_advection
 
     # The rate law takes an Arrhenius pair (k_o, E) in place of the single
     # constant κ used before. Material files written for the old input will
@@ -1207,10 +1272,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Evaluated per node using the same element-ownership resolution as the reaction
         # term above: the element loop this replaces also assigned rather than accumulated,
         # so the owning element's properties reproduce it exactly.
-        if calculate_reaction && co2_gas_idx !== nothing
+        if calculate_heat && calculate_reaction && co2_gas_idx !== nothing
             ρ_w = materials.liquid.density
             c_w = materials.liquid.specific_heat
-            c_g = c_g_constant
 
             @threads for node_id in 1:Nnodes
                 e = node_owner[node_id]
@@ -1220,17 +1284,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 props = elem_props[e]
                 ρ_s = props.specific_gravity * ρ_w
 
-                # Calculate gas density at node
-                ρ_g = 0.0
+                # Volumetric heat capacity of the gas mixture at this node,
+                # (ρc)_g = Σ_i C_g^i c̄_p^i per Eq. (heat_advection), already per unit
+                # volume of gas so it enters C_mix weighted by θ_g directly.
+                ρc_g = 0.0
                 for g in 1:NGases
-                    gas_temp = materials.gases[materials.gas_dictionary[g]]
-                    ρ_g += C_g[node_id, g] * gas_temp.molar_mass
+                    ρc_g += C_g[node_id, g] * c_p_molar[g]
                 end
 
                 # Calculate mixture volumetric heat capacity
-                # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*ρ_g*c_g
+                # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*(ρc)_g
                 C_mix = (1.0 - props.porosity) * ρ_s * props.specific_heat_solids +
-                        props.θ_w * ρ_w * c_w + props.θ_g * ρ_g * c_g
+                        props.θ_w * ρ_w * c_w + props.θ_g * ρc_g
 
                 # Heat generation rate from reaction, Eq. (heat_rate): q̇ = ΔH_r * dC_CO2/dt
                 # Both factors are negative (exothermic reaction, CO2 consumed),

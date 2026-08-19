@@ -16,15 +16,23 @@ Structure to store gas-specific properties.
 - `dynamic_viscosity::Float64`: Dynamic viscosity [Pa·s]
 - `molar_mass::Float64`: Molar mass [g/mol]
 - `diff_coefficient::Float64`: Diffusion coefficient [m²/s]
+- `thermal_conductivity::Float64`: Thermal conductivity λ_g [W/(m·K)]
+- `molar_heat_capacity::Float64`: Molar heat capacity at constant pressure c̄_p [J/(mol·K)]
+
+The heat capacity is molar rather than mass-based so the gas contribution to the
+mixture can be assembled straight from the concentrations the solver already
+carries: (ρc)_g = Σ_i C_g^i c̄_p^i, with C_g^i in mol per m³ of gas.
 """
 mutable struct GasProperties
     name::String
     dynamic_viscosity::Float64
     molar_mass::Float64
     diff_coefficient::Float64
-    
+    thermal_conductivity::Float64
+    molar_heat_capacity::Float64
+
     function GasProperties(name::String)
-        new(name, 0.0, 0.0, 0.0)
+        new(name, 0.0, 0.0, 0.0, 0.0, 0.0)
     end
 end
 
@@ -38,14 +46,16 @@ Structure to store liquid phase properties.
 - `dynamic_viscosity::Float64`: Dynamic viscosity [Pa·s]
 - `density::Float64`: Density [kg/m³]
 - `specific_heat::Float64`: Specific heat [J/(kg·K)]
+- `thermal_conductivity::Float64`: Thermal conductivity λ_w [W/(m·K)]
 """
 mutable struct LiquidProperties
     dynamic_viscosity::Float64
     density::Float64
     specific_heat::Float64
-    
+    thermal_conductivity::Float64
+
     function LiquidProperties()
-        new(0.0, 0.0, 0.0)
+        new(0.0, 0.0, 0.0, 0.0)
     end
 end
 
@@ -68,6 +78,7 @@ independent of whether reaction kinetics is switched on.
 - `granular_tortuosity::Float64`: Granular tortuosity [-]
 - `intrinsic_permeability::Float64`: Intrinsic permeability [m²]
 - `specific_heat_solids::Float64`: Specific heat of solids [J/(kg·K)]
+- `thermal_conductivity_solids::Float64`: Thermal conductivity of solids λ_s [W/(m·K)]
 """
 mutable struct SoilProperties
     name::String
@@ -77,9 +88,10 @@ mutable struct SoilProperties
     granular_tortuosity::Float64
     intrinsic_permeability::Float64
     specific_heat_solids::Float64
+    thermal_conductivity_solids::Float64
 
     function SoilProperties(name::String)
-        new(name, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        new(name, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     end
 end
 
@@ -268,7 +280,12 @@ function parse_gas_properties!(materials::MaterialData, gas_data::Dict)
         gas_props.dynamic_viscosity = Float64(gas_info["dynamic_viscosity"])
         gas_props.molar_mass = Float64(gas_info["molar_mass"])
         gas_props.diff_coefficient = Float64(gas_info["diff_coefficient"])
-        
+
+        # Thermal properties. Optional so material files written before the energy
+        # equation still load; zero simply contributes nothing to the mixture.
+        gas_props.thermal_conductivity = Float64(get(gas_info, "thermal_conductivity", 0.0))
+        gas_props.molar_heat_capacity = Float64(get(gas_info, "molar_heat_capacity", 0.0))
+
         materials.gases[gas_name] = gas_props
     end
 end
@@ -288,6 +305,7 @@ function parse_liquid_properties!(materials::MaterialData, liquid_data::Dict)
     materials.liquid.dynamic_viscosity = Float64(liquid_data["dynamic_viscosity"])
     materials.liquid.density = Float64(liquid_data["density"])
     materials.liquid.specific_heat = Float64(liquid_data["specific_heat"])
+    materials.liquid.thermal_conductivity = Float64(get(liquid_data, "thermal_conductivity", 0.0))
 end
 
 
@@ -314,6 +332,8 @@ function parse_soil_properties!(materials::MaterialData, soil_data::Dict)
 
         # Read thermal properties
         soil_props.specific_heat_solids = Float64(soil_info["specific_heat_solids"])
+        soil_props.thermal_conductivity_solids =
+            Float64(get(soil_info, "thermal_conductivity_solids", 0.0))
 
         materials.soils[soil_name] = soil_props
     end

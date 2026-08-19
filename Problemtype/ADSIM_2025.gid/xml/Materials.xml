@@ -15,6 +15,9 @@
       <value n="molar_mass_" pn="Molar mass [M/mol]" v="0.0"/>
 
       <value n="diffusion_coefficient_1" pn="Diffusion coefficient [L^2/T]" v="0.0"/>
+
+      <value n="thermal_conductivity_gas_" pn="Thermal conductivity [FL/(T.L.Tm)]" v="0.0" help="Thermal conductivity of this gas. Contributes to the effective conductivity weighted by the gas volume fraction. Used only when heat conduction is enabled."/>
+      <value n="molar_heat_capacity_" pn="Molar heat capacity [FL/(mol.Tm)]" v="0.0" help="Molar heat capacity at constant pressure. The gas contribution to the mixture heat capacity is assembled as the sum of concentration times this value over the species."/>
   </blockdata>
 </container>
 
@@ -26,6 +29,7 @@
       <value n="Dynamic_viscosity_" pn="Dynamic viscosity [L^2/T]" v="0.0"/>  
       <value n="density_" pn="Density [M/L^3]" v="0.0"/>
       <value n="specific_heat_water_" pn="Specific heat [FL/(M·Tm)]" v="0.0"/>
+      <value n="thermal_conductivity_water_" pn="Thermal conductivity [FL/(T.L.Tm)]" v="0.0" help="Thermal conductivity of the pore water. Used only when heat conduction is enabled."/>
 
 </container>
 
@@ -70,6 +74,7 @@
 
       <container n="soil_thermal" pn="Thermal properties" icon="" help="Define the thermal properties of the soil material.">
       <value n="specific_heat_solid_" pn="Specific heat solid [FL/(M·Tm)]" v="0.0"/>
+      <value n="thermal_conductivity_solid_" pn="Thermal conductivity solid [FL/(T.L.Tm)]" v="0.0" help="Thermal conductivity of the soil solids. Dominates the effective conductivity, since the solids occupy most of the volume. Used only when heat conduction is enabled."/>
       </container>
 
       <container n="soil_reaction" pn="Reaction properties" icon="icon_scientific.png"

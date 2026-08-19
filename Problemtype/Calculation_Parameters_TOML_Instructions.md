@@ -35,11 +35,32 @@ gravity_y_component = -1.0
 
 ## Solver Settings
 
-Define the solver type for the problem.
+Define the solver type and which physics is active.
 ```toml
 [solver]
 solver_type = "2D-Plane"
+diffusion = 1          # gas diffusion
+advection = 1          # gas advection
+gravity = 0            # gravitational flow
+reaction_kinetics = 1  # carbonation reaction
+heat_conduction = 0    # heat conduction through the mixture
+heat_advection = 0     # sensible heat carried by the flowing gas
 ```
+
+Each flag is `1` or `0`. `heat_conduction` and `heat_advection` are optional and
+default to `0`, so calculation files written before the energy equation still
+load.
+
+**With both heat flags at `0` the temperature field does not evolve at all.** The
+run is isothermal and the reaction enthalpy in the material file is ignored,
+whatever value it has. This is the setting to use when the kinetics are wanted
+without the thermal feedback.
+
+Note this is stronger than setting the conductivities to zero. To reproduce a
+purely adiabatic run — the reaction heating each node locally with nothing
+carrying that heat away — enable `heat_conduction` and leave the phase
+conductivities at zero, which makes `lambda_e = 0` and removes the conduction
+term while keeping the local source.
 
 ## Time Stepping Data
 

@@ -10,6 +10,8 @@
 			<value n="advection" pn="Advection" v="0" values="1,0" help="Enable advection component"/>
 			<value n="gravity" pn="Gravity" v="0" values="1,0" help="Enable gravity effects"/>
 			<value n="reaction_kinetics" pn="Reaction kinetics" v="0" values="1,0" help="Enable reaction kinetics"/>
+			<value n="heat_conduction" pn="Heat conduction" v="0" values="1,0" help="Enable heat conduction through the mixture. With both heat options off the temperature is held fixed and the reaction enthalpy is ignored."/>
+			<value n="heat_advection" pn="Heat advection" v="0" values="1,0" help="Enable sensible heat carried by the flowing gas. With both heat options off the temperature is held fixed and the reaction enthalpy is ignored."/>
 		</container>
 	</container>	
 

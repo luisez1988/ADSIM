@@ -100,6 +100,16 @@ proc ADSIM::WriteGasProperties { root } {
         # Diffusion coefficient
         set diff_coef [$gas_block selectNodes {string(value[@n="diffusion_coefficient_1"]/@v)}]
         GiD_WriteCalculationFile puts "diff_coefficient = $diff_coef"
+
+        # Thermal properties
+        set gas_conductivity [$gas_block selectNodes {string(value[@n="thermal_conductivity_gas_"]/@v)}]
+        # Models saved before this field existed return an empty string.
+        if {$gas_conductivity == ""} { set gas_conductivity 0.0 }
+        GiD_WriteCalculationFile puts "thermal_conductivity = $gas_conductivity"
+
+        set molar_cp [$gas_block selectNodes {string(value[@n="molar_heat_capacity_"]/@v)}]
+        if {$molar_cp == ""} { set molar_cp 0.0 }
+        GiD_WriteCalculationFile puts "molar_heat_capacity = $molar_cp"
         
         GiD_WriteCalculationFile puts ""
     }
@@ -131,6 +141,12 @@ proc ADSIM::WriteLiquidProperties { root } {
     # Specific heat
     set spec_heat [$liquid_container selectNodes {string(value[@n="specific_heat_water_"]/@v)}]
     GiD_WriteCalculationFile puts "specific_heat = $spec_heat"
+
+    # Thermal conductivity
+    set water_conductivity [$liquid_container selectNodes {string(value[@n="thermal_conductivity_water_"]/@v)}]
+    # Models saved before this field existed return an empty string.
+    if {$water_conductivity == ""} { set water_conductivity 0.0 }
+    GiD_WriteCalculationFile puts "thermal_conductivity = $water_conductivity"
     
     GiD_WriteCalculationFile puts ""
 }
@@ -247,6 +263,11 @@ proc ADSIM::WriteSoilProperties { root } {
             
             set spec_heat_solid [$first_group selectNodes {string(.//value[@n="specific_heat_solid_"]/@v)}]
             GiD_WriteCalculationFile puts "specific_heat_solids = $spec_heat_solid"
+
+            set solid_conductivity [$first_group selectNodes {string(.//value[@n="thermal_conductivity_solid_"]/@v)}]
+            # Models saved before this field existed return an empty string.
+            if {$solid_conductivity == ""} { set solid_conductivity 0.0 }
+            GiD_WriteCalculationFile puts "thermal_conductivity_solids = $solid_conductivity"
         }
 
         GiD_WriteCalculationFile puts ""
