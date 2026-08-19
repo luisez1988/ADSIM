@@ -1,0 +1,42 @@
+# ADSIM calculation parameters - reaction_0d verification case
+# ADSIM_version = "2025 v0.x.x"
+
+[units]
+geometry_unit = "m"
+mass_unit = "kg"
+pressure_unit = "kPa"
+temperature_unit = "K"
+time_unit = "s"
+
+[gravity]
+gravity_magnitude = 9.81
+gravity_x_component = 0.0
+gravity_y_component = -1.0
+
+[solver]
+solver_type = "2D-Plane"
+diffusion = 1
+advection = 0
+gravity = 0
+reaction_kinetics = 1
+
+[time_stepping]
+# lambda = 5.2348e-3 1/s for this mixture, so the time constant is 191 s.
+# 1000 s is 5.2 time constants: the curve reaches 0.8939 against its 0.9 ceiling.
+total_simulation_time = 1000
+time_per_step = 100
+courant_number = 0.98
+
+[data_saving]
+# Also the probe sampling interval, which is what this case is scored on.
+data_saving_interval = 10.0
+
+[probing]
+# The whole case is read from this node. Every node is equivalent here - the CO2
+# field is pinned on all four - so node 1 is as good as any.
+number_of_nodes = 1
+nodes_to_probe = [1]
+
+# Elements to follow during simulation (data at Gaussian points)
+number_of_elements = 0
+elements_to_probe = []

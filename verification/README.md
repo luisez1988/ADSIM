@@ -88,6 +88,35 @@ type = "diffusion_series"                # dispatch key in Analytical.evaluate
 # ... model parameters ...
 ```
 
+### Scoring a node time series instead of a profile
+
+Some cases are a history at one point rather than a profile at each instant — a
+0-D kinetics test has no spatial variation to plot. Those are scored from the
+node probe CSV instead of the VTK snapshots:
+
+```toml
+source     = "probe"                 # default is "vtk"
+probe_node = 1                       # which node; must appear in [probing]
+field      = "Degree_of_Carbonation" # a probe CSV column, not a VTK field
+```
+
+The calculation file has to actually request that node, or there is nothing to
+read:
+
+```toml
+[probing]
+number_of_nodes = 1
+nodes_to_probe = [1]
+```
+
+Probe rows are written at `data_saving_interval`, a separate cadence from the VTK
+`time_per_step`. The comparison drops `t = 0` and evaluates the analytical
+solution at each sample time with `x = 0`, so the analytical type must ignore its
+position argument (`carbonation_isothermal` and `darcy_velocity` both do). Column
+names come from the probe header — `time`, `Degree_of_Carbonation`,
+`Lime_Concentration`, `Temperature`, `<gas>_Concentration` and so on; a wrong name
+reports the available ones.
+
 ## Analytical references
 
 - **diffusion_1d** — 1D pure diffusion, sine-series (consolidation) solution.
@@ -98,6 +127,21 @@ type = "diffusion_series"                # dispatch key in Analytical.evaluate
   concentration difference `dC` sets a pressure gradient and the code should
   return the Darcy flux `v = (K/mu) R T dC / L`. The test compares the magnitude
   of the computed `Gas_Seepage_Velocity` at steady state against that value.
+- **reaction_0d** — carbonation kinetics with no transport. One element with every
+  node on a fixed-concentration boundary, so the CO2 field never moves, and
+  `reaction_enthalpy = 0` so the run is isothermal and the rate coefficient is
+  constant. The rate law then integrates in closed form to
+  `DoC(t) = (1 - p_r)(1 - exp(-lambda t))` with
+  `lambda = k_T a theta_w K_H R T C_co2` — Eq. (5.4) of
+  `calibration_reactionrate/integrator_mathematics.md`, exact to round-off. The
+  residual is therefore ADSIM's forward-Euler lime update against the true
+  exponential, a first-order error of order `lambda*dt/2`. Halving
+  `courant_number` halves it, which is the real check: 0.056 % → 0.028 % →
+  0.014 % at Courant 0.98 → 0.49 → 0.245.
+
+  Scored on `Degree_of_Carbonation` from the node probe. Do not give this case a
+  nonzero reaction enthalpy without also giving it a thermal boundary condition —
+  the reference stops being valid the moment `T` moves.
 
 ### Comparing a vector field (e.g. velocity)
 

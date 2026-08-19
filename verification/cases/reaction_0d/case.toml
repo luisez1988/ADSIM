@@ -1,0 +1,34 @@
+# Verification case: 0-D carbonation kinetics at constant CO2 and constant T.
+#
+# One element, all four nodes on a fixed-concentration boundary, so the gas field
+# never moves and the only dynamics is lime being consumed. With the reaction
+# enthalpy set to zero in the material file the run is isothermal, the rate
+# coefficient is constant, and the rate law integrates in closed form:
+#
+#     DoC(t) = (1 - p_r) (1 - exp(-lambda t))
+#
+# which is Eq. (5.4) of calibration_reactionrate/integrator_mathematics.md and is
+# exact to round-off. The residual therefore measures ADSIM's forward-Euler lime
+# update against the true exponential - a first-order error of order lambda*dt/2.
+#
+# Scored on the node probe time series rather than the VTK snapshots: this is a
+# time history at one point, not a spatial profile.
+
+project     = "Reaction_0D"
+source      = "probe"                  # read <project>_node<id>_stage<n>.csv
+probe_node  = 1
+field       = "Degree_of_Carbonation"  # a probe CSV column
+tolerance   = 0.005                    # 0.5%; see the note on lambda*dt above
+check_steps = []
+
+# These duplicate the mesh and material files on purpose. If the two drift apart
+# the case fails rather than passing on a coincidence.
+[analytical]
+type    = "carbonation_isothermal"
+k_o     = 1.0e-3     # [reactants].lime_arrhenius_factor
+E       = 0.0        # [reactants].lime_activation_energy
+beta    = 0.0        # [reactants].lime_interfacial_area_beta
+T       = 298.15     # initial_temperature in the mesh
+theta_w = 0.1422     # porosity 0.474 x saturation 0.3
+C_co2   = 45.0       # concentration_bc value in the mesh
+p_r     = 0.1        # [reaction."Soil 1"].residual_lime
