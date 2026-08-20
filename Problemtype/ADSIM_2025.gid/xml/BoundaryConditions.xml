@@ -4,4 +4,6 @@
   <include path="xml/Partial_Pressure_BC.xml"/>
   <include path="xml/Flow_BC.xml"/>
   <include path="xml/Total_Pressure_BC.xml"/>
+  <include path="xml/Temperature_BC.xml"/>
+  <include path="xml/Convective_Heat_BC.xml"/>
 </container>

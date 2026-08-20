@@ -21,6 +21,11 @@ Structure to store all mesh data and associated boundary/initial conditions.
 # - `vacating_gas_bc::Dict{Int, Int}`: Vacating gas index for pressure BC (node_id => gas_index)
 - `initial_concentrations::Dict{Int, Vector{Float64}}`: Initial concentrations (elem_id => [gas1, gas2, ...])
 - `initial_temperature::Dict{Int, Float64}`: Initial temperature (elem_id => temperature)
+- `temperature_bc::Dict{Int, Float64}`: Prescribed temperature (node_id => T), Eq. (temperature_BC)
+- `convective_heat_bc::Dict{Int, Vector{Float64}}`: Convective heat BC (node_id => [h_c, T_inf]),
+  Eq. (conduction_flux_BC). h_c = 0 is an adiabatic boundary, which is also what an
+  unset boundary gives, since zero flux is the natural condition of the weak form.
+  The manuscript requires the two thermal boundary sets to be disjoint.
 - `materials::Dict{Int, Int}`: Material assignment (elem_id => material_index)
 """
 
@@ -35,6 +40,8 @@ mutable struct MeshData
     partial_pressure_bc::Dict{Int, Vector{Float64}}
     initial_concentrations::Dict{Int, Vector{Float64}}
     initial_temperature::Dict{Int, Float64}
+    temperature_bc::Dict{Int, Float64}
+    convective_heat_bc::Dict{Int, Vector{Float64}}
     materials::Dict{Int, Int}
     
     function MeshData()
@@ -47,6 +54,8 @@ mutable struct MeshData
             Dict{Int, Vector{Float64}}(),
             Dict{Int, Vector{Float64}}(),
             Dict{Int, Float64}(),
+            Dict{Int, Float64}(),
+            Dict{Int, Vector{Float64}}(),
             Dict{Int, Int}())
     end
 end
@@ -143,6 +152,14 @@ function read_mesh_file(filename::String)
             elseif line == "initial_temperature"
                 line_idx = parse_initial_temperature!(mesh, lines, line_idx + 1)
                 
+            # Parse prescribed temperature (thermal Dirichlet)
+            elseif line == "temperature_bc"
+                line_idx = parse_temperature_bc!(mesh, lines, line_idx + 1)
+
+            # Parse convective heat boundary (thermal Robin)
+            elseif line == "convective_heat_bc"
+                line_idx = parse_convective_heat_bc!(mesh, lines, line_idx + 1)
+
             # Parse materials
             elseif line == "materials"
                 line_idx = parse_materials!(mesh, lines, line_idx + 1)
@@ -349,6 +366,81 @@ function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_id
         line_idx += 1
     end
     
+    return line_idx
+end
+
+
+"""
+    parse_temperature_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
+
+Parse the `temperature_bc` block: a prescribed nodal temperature, Eq. (temperature_BC).
+
+Format matches every other nodal block — a counter line, then that many
+`node_id value` lines, then `end temperature_bc`.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure to populate
+- `lines::Vector{String}`: All lines of the mesh file
+- `line_idx::Int`: Index of the counter line
+
+# Returns
+- `Int`: Index of the first line after the block
+"""
+function parse_temperature_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
+    counter = parse(Int, strip(lines[line_idx]))
+    line_idx += 1
+
+    for _ in 1:counter
+        parts = split(strip(lines[line_idx]))
+        node_id = parse(Int, parts[1])
+        mesh.temperature_bc[node_id] = parse(Float64, parts[2])
+        line_idx += 1
+    end
+
+    if strip(lines[line_idx]) == "end temperature_bc"
+        line_idx += 1
+    end
+
+    return line_idx
+end
+
+
+"""
+    parse_convective_heat_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
+
+Parse the `convective_heat_bc` block, Eq. (conduction_flux_BC):
+
+    q_d . n = h_c (T - T_inf)
+
+Each data line carries `node_id h_c T_inf`. `h_c = 0` is an adiabatic boundary,
+which is also what leaving the node out entirely gives, since zero flux is the
+natural boundary condition of the weak form.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure to populate
+- `lines::Vector{String}`: All lines of the mesh file
+- `line_idx::Int`: Index of the counter line
+
+# Returns
+- `Int`: Index of the first line after the block
+"""
+function parse_convective_heat_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
+    counter = parse(Int, strip(lines[line_idx]))
+    line_idx += 1
+
+    for _ in 1:counter
+        parts = split(strip(lines[line_idx]))
+        node_id = parse(Int, parts[1])
+        h_c = parse(Float64, parts[2])
+        T_inf = length(parts) >= 3 ? parse(Float64, parts[3]) : 0.0
+        mesh.convective_heat_bc[node_id] = [h_c, T_inf]
+        line_idx += 1
+    end
+
+    if strip(lines[line_idx]) == "end convective_heat_bc"
+        line_idx += 1
+    end
+
     return line_idx
 end
 
@@ -710,15 +802,18 @@ for (elem_id, node_i, node_j, l_e, n_hat) in boundary_edges
 end
 ```
 """
-function identify_boundary_edges(mesh::MeshData)
+function identify_boundary_edges(mesh::MeshData, bc_nodes = keys(mesh.absolute_pressure_bc))
     # Use a Set to avoid duplicate edges
     boundary_edge_set = Set{Tuple{Int, Int, Int}}()  # (element_id, min_node, max_node)
-    
-    # Get all nodes with pressure boundary conditions
-    pressure_bc_nodes = keys(mesh.absolute_pressure_bc)
-    
-    # For each pressure BC node, examine connected elements
-    for node_id in pressure_bc_nodes
+
+    # The node set defaults to the absolute-pressure boundary, which is what this was
+    # originally written for. Making it a parameter lets the thermal boundary reuse the
+    # same edge geometry: an edge belongs to a condition when BOTH its nodes carry that
+    # condition, whichever condition it is.
+    bc_node_set = Set(bc_nodes)
+
+    # For each BC node, examine connected elements
+    for node_id in bc_node_set
         # Get all elements containing this node
         connected_elements = get_node_elements(mesh, node_id)
         
@@ -737,8 +832,8 @@ function identify_boundary_edges(mesh::MeshData)
                 local_node_i = elem_nodes[i]
                 local_node_j = elem_nodes[j]
                 
-                # Check if both nodes have pressure BC
-                if has_pressure_bc(mesh, local_node_i) && has_pressure_bc(mesh, local_node_j)
+                # Check if both nodes carry the condition
+                if (local_node_i in bc_node_set) && (local_node_j in bc_node_set)
                     # Store edge with normalized node ordering to avoid duplicates
                     # (element_id, min_node, max_node) ensures uniqueness
                     min_node = min(local_node_i, local_node_j)
@@ -814,18 +909,20 @@ for (node_id, influence_length) in node_influences.node_influences
 end
 ```
 """
-function get_boundary_node_influences(mesh::MeshData)
+function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absolute_pressure_bc))
     # Initialize the result structure
     influences = BoundaryNodeInfluence()
-    
+
     # Use a Set to avoid processing duplicate edges
     processed_edges = Set{Tuple{Int, Int}}()  # (min_node, max_node)
-    
-    # Get all nodes with pressure boundary conditions
-    pressure_bc_nodes = keys(mesh.absolute_pressure_bc)
-    
-    # For each pressure BC node, examine connected elements
-    for node_id in pressure_bc_nodes
+
+    # Node set is a parameter for the same reason as in identify_boundary_edges: the
+    # convective heat boundary needs the tributary edge length of its own nodes, and
+    # the geometry involved is identical.
+    bc_node_set = Set(bc_nodes)
+
+    # For each BC node, examine connected elements
+    for node_id in bc_node_set
         # Get all elements containing this node
         connected_elements = get_node_elements(mesh, node_id)
         
@@ -840,8 +937,8 @@ function get_boundary_node_influences(mesh::MeshData)
                 local_node_i = elem_nodes[i]
                 local_node_j = elem_nodes[j]
                 
-                # Check if both nodes have pressure BC
-                if has_pressure_bc(mesh, local_node_i) && has_pressure_bc(mesh, local_node_j)
+                # Check if both nodes carry the condition
+                if (local_node_i in bc_node_set) && (local_node_j in bc_node_set)
                     # Create normalized edge identifier to avoid duplicates
                     min_node = min(local_node_i, local_node_j)
                     max_node = max(local_node_i, local_node_j)

@@ -583,6 +583,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
     global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
+    global T_boundary, thermal_node_influences
     global boundary_node_influences
     global q_boundary
 
@@ -1435,14 +1436,33 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 q_react_T .+= qr_T_chunk[c]
             end
 
-            # Update, Eq. (update_Temp). q_ext_T is still zero until the thermal
-            # boundary conditions land.
+            # Convective (Robin) boundary, Eq. (conduction_flux_BC):
+            #     q_d . n = h_c (T - T_inf)
+            # The weak form carries this as -∫(q_d.n) ω dS over the boundary, so a node
+            # whose temperature is above ambient loses heat. The edge integral is lumped
+            # onto the nodes with the tributary edge lengths computed once at start-up,
+            # the same geometry the pressure boundary uses. h_c = 0 gives an adiabatic
+            # edge, which is also what leaving a boundary unset gives, since zero flux is
+            # the natural condition of the weak form.
+            q_ext_T .= 0.0
+            for (node_id, params) in mesh.convective_heat_bc
+                h_c = params[1]
+                T_inf = params[2]
+                le = get(thermal_node_influences, node_id, 0.0)
+                q_ext_T[node_id] -= h_c * (T[node_id] - T_inf) * le
+            end
+
+            # Update, Eq. (update_Temp)
             @threads for i in 1:Nnodes
                 if M_T[i] > 0.0
                     dT_dt[i] = (q_ext_T[i] - q_cond_T[i] - q_adv_T[i] + q_react_T[i]) / M_T[i]
                 else
                     dT_dt[i] = 0.0
                 end
+                # A prescribed node holds its value: gate the RATE, so nothing downstream
+                # can move it and dT_dt reports zero there rather than a rate that is
+                # computed and then discarded.
+                dT_dt[i] *= T_boundary[i]
             end
 
             for i in 1:Nnodes

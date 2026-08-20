@@ -9,7 +9,7 @@
 
 module Analytical
 
-export erfc, diffusion_series, advection_diffusion, conduction_cosine, carbonation_isothermal, evaluate
+export erfc, diffusion_series, advection_diffusion, conduction_cosine, linear_profile, carbonation_isothermal, evaluate
 
 # ---- erf / erfc -----------------------------------------------------------
 # Abramowitz & Stegun 7.1.26 rational approximation (|error| < 1.5e-7),
@@ -104,6 +104,20 @@ function conduction_cosine(x::Float64, t::Float64; T0, A, alpha, L=1.0)
     return T0 + A * cos(pi * x / L) * exp(-alpha * pi^2 * t / L^2)
 end
 
+# ---- Steady linear profile ------------------------------------------------
+"""
+    linear_profile(x; v0, vL, L=1.0)
+
+Straight line from `v0` at x = 0 to `vL` at x = L, independent of time.
+
+This is the steady state of pure conduction between two prescribed temperatures with
+no source: the second derivative vanishes, so the profile is exactly linear. Being
+exact rather than a truncated series, it is a strict check — the discrete operator
+has to return zero residual on a linear field, so any error in the conductivity, the
+gradient operator or the Dirichlet gate is visible immediately.
+"""
+linear_profile(x::Float64; v0, vL, L=1.0) = v0 + (vL - v0) * x / L
+
 # ---- Isothermal carbonation (0-D, constant CO2) ---------------------------
 """
     carbonation_isothermal(t; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145)
@@ -190,6 +204,9 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
                               L=g("L", 1.0), T=g("T", 298.0), R=g("R", 8.314))
     elseif typ == "conduction_cosine"
         return conduction_cosine(x, t; T0=g("T0"), A=g("A"), alpha=g("alpha"), L=g("L", 1.0))
+    elseif typ == "linear_profile"
+        # Steady state: time is ignored.
+        return linear_profile(x; v0=g("v0"), vL=g("vL"), L=g("L", 1.0))
     elseif typ == "carbonation_isothermal"
         # Uniform in space; x is ignored, t is the probe sample time.
         return carbonation_isothermal(t; k_o=g("k_o"), E=g("E", 0.0), beta=g("beta", 0.0),

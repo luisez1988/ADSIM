@@ -1,0 +1,27 @@
+# Verification case: steady conduction with a CONVECTIVE (Robin) boundary.
+#
+# Dirichlet 350 K at y = 0, convective q_d.n = h_c (T - T_inf) at y = L with
+# h_c = 10 W/(m2.K) and T_inf = 250 K. With no source the steady state is still
+# exactly linear, and the slope is fixed by the flux balance at the convective end:
+#
+#     -lambda_e m = h_c (T(L) - T_inf),   T(y) = 350 + m y
+#     m    = -h_c (350 - T_inf) / (lambda_e + h_c L) = -89.206066 K/m
+#     T(L) = 260.793934 K
+#
+# So this pins the Robin term quantitatively: get h_c, the tributary edge length or
+# the sign wrong and the end temperature moves. Setting h_c = 0 would make the end
+# adiabatic and the whole bar relax to 350 K, so the case also distinguishes an
+# active convective boundary from an absent one.
+
+project        = "Conduction_Robin_test"
+field          = "Temperature"
+axis           = "y"
+boundary_coord = 0.0
+tolerance      = 0.005
+check_steps    = [10]
+
+[analytical]
+type = "linear_profile"
+v0   = 350.0
+vL   = 260.793934
+L    = 1.0

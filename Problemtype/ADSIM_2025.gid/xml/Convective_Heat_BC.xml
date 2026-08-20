@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?><!-- -*- coding: utf-8; mode: SGML -*- -->
+
+<condition n="convective_heat_boundary" pn="Convective Heat" icon="icon_temperature_bc.png" ov="point,line,surface" help="Convective (Newton cooling) heat boundary: the conductive flux leaving the surface is h_c (T - T_ambient). Enter h_c = 0 for an insulated surface, which is also what leaving the boundary unset gives. Do not apply this and a prescribed temperature to the same entity - the two thermal boundary sets must be disjoint.">
+	<value n="heat_transfer_coefficient" pn="Heat transfer coefficient h_c [FL/(T.L^2.Tm)]" v="0.0" help="Surface heat transfer coefficient in W/(m2.K). Zero gives an adiabatic surface."/>
+	<value n="ambient_temperature" pn="Ambient temperature [Tm]" v="298.15" help="Temperature of the surroundings the surface exchanges heat with."/>
+</condition>

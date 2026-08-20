@@ -23,6 +23,14 @@ global P::Vector{Float64} = Float64[]
 global T::Vector{Float64} = Float64[]
 global v::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global P_boundary::Matrix{Int} = Matrix{Int}(undef, 0, 0)
+# Thermal Dirichlet mask, the temperature counterpart of P_boundary:
+# 1 = free node, 0 = prescribed temperature. EVERY write to T must be gated by this,
+# including any correction term. The concentration path was bitten by exactly that:
+# the Lagrange correction was added after the P_boundary gate and walked prescribed
+# concentrations off their boundary values.
+global T_boundary::Vector{Int} = Int[]
+# Tributary edge length of each convective-heat boundary node, for the Robin integral
+global thermal_node_influences::Dict{Int, Float64} = Dict{Int, Float64}()
 global λ_bc::Vector{Float64} = Float64[]
 
 # Boundary node influence lengths
@@ -72,6 +80,7 @@ The exclamation mark indicates it modifies global variables.
 function zero_variables!(mesh, materials)
     global NDim, Nnodes, Nelements, NSoils, NGases
     global C_g, P, T, v, P_boundary, λ_bc, boundary_node_influences
+    global T_boundary, thermal_node_influences
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
     global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
@@ -89,11 +98,16 @@ function zero_variables!(mesh, materials)
     T = zeros(Float64, Nnodes)
     v = zeros(Float64, Nnodes, NDim)
     P_boundary = ones(Int, Nnodes, NGases)  # 1 = free node, 0 = concentration BC node
+    T_boundary = ones(Int, Nnodes)          # 1 = free node, 0 = prescribed temperature
     λ_bc = zeros(Float64, Nnodes)  # Lagrange multipliers for pressure BCs
     
     # Calculate and store boundary node influence lengths
     boundary_influences = get_boundary_node_influences(mesh)
     boundary_node_influences = boundary_influences.node_influences
+
+    # Same geometry, but over the convective-heat boundary nodes
+    thermal_influences = get_boundary_node_influences(mesh, keys(mesh.convective_heat_bc))
+    thermal_node_influences = thermal_influences.node_influences
     
     # Allocate and initialize reactive species
     C_lime = zeros(Float64, Nnodes)
@@ -192,6 +206,28 @@ function apply_initial_temperature!(mesh)
         for node_id in element_nodes
             T[node_id] = temperature
         end
+    end
+end
+
+
+"""
+    apply_temperature_bc!(mesh::MeshData)
+
+Apply prescribed nodal temperatures, Eq. (temperature_BC), and mark those nodes in
+`T_boundary` so the solver never writes to them again.
+
+Called after `apply_initial_temperature!`, so a prescribed value overrides the
+element-based initial condition at the same node.
+
+# Note
+- Modifies global variables `T` and `T_boundary`
+"""
+function apply_temperature_bc!(mesh)
+    global T, T_boundary
+
+    for (node_id, temperature) in mesh.temperature_bc
+        T[node_id] = temperature
+        T_boundary[node_id] = 0   # frozen from here on
     end
 end
 
@@ -368,6 +404,7 @@ This is a convenience function that calls all individual application functions.
 function apply_all_initial_conditions!(mesh, materials)
     apply_initial_concentrations!(mesh)
     apply_initial_temperature!(mesh)
+    apply_temperature_bc!(mesh)
     apply_concentration_bc!(mesh)
     apply_partial_pressure_bc!(mesh)
     apply_pressure_bc!(mesh)

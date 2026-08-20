@@ -46,6 +46,10 @@ proc ADSIM::WriteMeshFile { filename } {
     
     # Write initial temperature
     ADSIM::WriteMeshInitialTemperature $root
+
+    # Write thermal boundary conditions
+    ADSIM::WriteMeshTemperatureBC $root
+    ADSIM::WriteMeshConvectiveHeatBC $root
     
     # Write material assignation
     ADSIM::WriteMeshMaterials $root
@@ -230,6 +234,59 @@ proc ADSIM::WriteMeshFlowBC { root } {
 #===============================================================================
 # Write absolute pressure boundary conditions
 #===============================================================================
+#===============================================================================
+# Write prescribed temperature boundary conditions (thermal Dirichlet)
+#
+# Emits the raw per-group value; the solver does any weighting. Same shape as the
+# pressure BC writer above.
+#===============================================================================
+proc ADSIM::WriteMeshTemperatureBC { root } {
+    GiD_WriteCalculationFile puts "temperature_bc"
+
+    set formats ""
+    foreach ov_type {line point surface} {
+        set xp [format_xpath {container[@n="BC"]/condition[@n="temperature_boundary"]/group[@ov=%s]} $ov_type]
+        foreach gNode [$root selectNodes $xp] {
+            set v1 [$gNode selectNodes {string(value[@n="prescribed_temperature"]/@v)}]
+            dict set formats [$gNode @n] "%d $v1
+"
+        }
+    }
+
+    set counter [GiD_WriteCalculationFile nodes -count $formats]
+    GiD_WriteCalculationFile puts $counter
+    GiD_WriteCalculationFile nodes $formats
+    GiD_WriteCalculationFile puts "end temperature_bc"
+    GiD_WriteCalculationFile puts ""
+}
+
+#===============================================================================
+# Write convective heat boundary conditions (thermal Robin)
+#
+# Each node line carries "node_id h_c T_ambient". h_c = 0 is an insulated surface.
+#===============================================================================
+proc ADSIM::WriteMeshConvectiveHeatBC { root } {
+    GiD_WriteCalculationFile puts "convective_heat_bc"
+
+    set formats ""
+    foreach ov_type {line point surface} {
+        set xp [format_xpath {container[@n="BC"]/condition[@n="convective_heat_boundary"]/group[@ov=%s]} $ov_type]
+        foreach gNode [$root selectNodes $xp] {
+            set v1 [$gNode selectNodes {string(value[@n="heat_transfer_coefficient"]/@v)}]
+            set v2 [$gNode selectNodes {string(value[@n="ambient_temperature"]/@v)}]
+            if {$v2 == ""} { set v2 298.15 }
+            dict set formats [$gNode @n] "%d $v1 $v2
+"
+        }
+    }
+
+    set counter [GiD_WriteCalculationFile nodes -count $formats]
+    GiD_WriteCalculationFile puts $counter
+    GiD_WriteCalculationFile nodes $formats
+    GiD_WriteCalculationFile puts "end convective_heat_bc"
+    GiD_WriteCalculationFile puts ""
+}
+
 proc ADSIM::WriteMeshPressureBC { root } {
     GiD_WriteCalculationFile puts "absolute_pressure"
 

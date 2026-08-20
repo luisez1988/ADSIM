@@ -1,0 +1,26 @@
+# Verification case: steady 1D conduction between two prescribed temperatures.
+#
+# With no source, the steady state of pure conduction between fixed end temperatures
+# is exactly linear, T(y) = T_hot + (T_cold - T_hot) y / L. That is a sharper check
+# than a decaying transient: the FEM conduction operator has to reproduce a linear
+# field with zero residual, so an error in lambda_e, in the gradient operator, or in
+# the Dirichlet gate shows up straight away.
+#
+# The interior starts uniform at 300 K, so the run has to transport heat to reach the
+# answer rather than beginning there.
+#
+# This is also the case that exercises the thermal Dirichlet boundary: the prescribed
+# nodes must hold 350 K and 250 K exactly for the whole run.
+
+project        = "Conduction_BC_test"
+field          = "Temperature"
+axis           = "y"
+boundary_coord = 0.0
+tolerance      = 0.005
+check_steps    = [10]        # compare at the last saved step, i.e. at steady state
+
+[analytical]
+type   = "linear_profile"
+v0     = 350.0       # value at y = 0
+vL     = 250.0       # value at y = L
+L      = 1.0
