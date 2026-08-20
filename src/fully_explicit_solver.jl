@@ -761,6 +761,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     q_diffusion = zeros(Float64, Nnodes, NGases)
     q_advection = zeros(Float64, Nnodes, NGases)
     q_gravitational = zeros(Float64, Nnodes, NGases)
+    # Thermal contribution to the pressure gradient, Eq. (thermal_pressure_flux).
+    # Kept separate from q_advection, which it shares a sign and a flag with, because
+    # the manuscript reports the relative magnitude of the two (tex:263).
+    q_thermal_press = zeros(Float64, Nnodes, NGases)
     total_rate = zeros(Float64, Nnodes)   # Boundary rate of change
     q_source_sink = zeros(Float64, Nnodes) # Only for CO2 for now
 
@@ -779,10 +783,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     qd_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
     qa_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
     qg_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
+    qT_chunk = [zeros(Float64, Nnodes, NGases) for _ in 1:nchunks]
     v_chunk = [zeros(Float64, Nnodes, NDim) for _ in 1:nchunks]
 
     # Per-element scratch, one set per chunk. Sized 4 for the nodes of a quad element.
     q_aux_chunk = [zeros(4) for _ in 1:nchunks]
+    qT_aux_chunk = [zeros(4) for _ in 1:nchunks]
     ρ_g_chunk = [zeros(4) for _ in 1:nchunks]
 
     # Energy equation: nodal heat source and the per-chunk accumulators for the
@@ -791,6 +797,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     MT_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qd_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qr_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
+    qa_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
 
     # Gauss-point Darcy velocity, cached per element and Gauss point. Presently written
     # for the nodal projection only; the thermal advective flux of the energy equation
@@ -806,12 +813,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         q_diffusion .= 0.0
         q_advection .= 0.0
         q_gravitational .= 0.0
+        q_thermal_press .= 0.0
         total_rate .= 0.0
         q_source_sink .= 0.0
         for c in 1:nchunks
             qd_chunk[c] .= 0.0
             qa_chunk[c] .= 0.0
             qg_chunk[c] .= 0.0
+            qT_chunk[c] .= 0.0
         end
 
         #______________________________________________________
@@ -862,7 +871,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             qd_c = qd_chunk[c]
             qa_c = qa_chunk[c]
             qg_c = qg_chunk[c]
+            qT_c = qT_chunk[c]
             q_aux = q_aux_chunk[c]
+            qT_aux = qT_aux_chunk[c]
             ρ_g_buf = ρ_g_chunk[c]
 
             for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1] #loop elements
@@ -919,6 +930,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 if calculate_advection
                     #Zero nodal advection fluxes (per-chunk buffer)
                     fill!(q_aux, 0.0)
+                    fill!(qT_aux, 0.0)
 
                     # loop Gauss points
                     for p in 1:4
@@ -944,10 +956,19 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * det(J) * W_p / μ_g^p
                         #Contract right to left: dN_dx * (dN_dx' * C_t) avoids forming the 4×4 product
                         q_aux .+= (R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g) .* (dN_dx * (dN_dx' * C_t))
+
+                        #Thermal contribution to the pressure gradient, Eq. (thermal_pressure_flux).
+                        #Same element operator as the advective flux above with the roles of T and
+                        #Σ_j C_g^j exchanged: there T is the Gauss-point scalar and the total
+                        #concentration is differentiated, here it is the other way round. So this
+                        #adds one contraction and no new element matrices (tex:368).
+                        C_tot_gp = N_p' * C_t
+                        qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * detJ * Wp / μ_g) .* (dN_dx * (dN_dx' * T_e))
                     end
-                    for i in 1:4 #loop nodes in element       
+                    for i in 1:4 #loop nodes in element
                         node_id = nodes[i] #global node id
                         qa_c[node_id, gas_idx] +=  q_aux[i]
+                        qT_c[node_id, gas_idx] += qT_aux[i]
                     end
                 end
                 #______________________________________________________
@@ -1010,6 +1031,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             q_diffusion .+= qd_chunk[c]
             q_advection .+= qa_chunk[c]
             q_gravitational .+= qg_chunk[c]
+            q_thermal_press .+= qT_chunk[c]
         end
 
         # Loop over all gases to form the rate of change
@@ -1019,7 +1041,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
             # calculate rate of change dC/dt = q_net / M
             for i in 1:Nnodes
-                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] - q_advection[i, gas_idx] - q_gravitational[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
+                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] -
+                                        q_advection[i, gas_idx] - q_thermal_press[i, gas_idx] -
+                                        q_gravitational[i, gas_idx]) * P_boundary[i, gas_idx]) / M[i]
 
                 if gas_name == "CO2" && calculate_reaction
                     #reaction contribution to the CO2 gas-phase rate [mol/(m³ gas·s)]
@@ -1085,46 +1109,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
-        #Loop gases again to apply Lagrangian correction and update concentrations
-        @threads for gas_idx in 1:NGases
-            # Get gas name for warnings
-            gas_name = materials.gas_dictionary[gas_idx]
-            
-            # Update concentrations: C^(n+1) = C^n + dt * dC/dt
-            for i in 1:Nnodes
-                # Apply Lagrangian correction only at nodes with boundary influence, and
-                # only to gases that are actually free at this node. P_boundary already
-                # zeroes dC_g_dt for a prescribed gas; without the same factor here the
-                # correction would be added straight through that gate and would walk the
-                # prescribed concentration away from its boundary value every step. The
-                # drift only shows up once the reaction is active, because λ is built from
-                # total_rate, which carries the CO2 sink term.
-                lagrangian_correction = 0.0
-                if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
-                    lagrangian_correction = (λ_bc[i] / M[i]) * P_boundary[i, gas_idx]
-                end
-
-                C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
-                
-                # Ensure non-negative and numerically stable concentrations
-                C_MIN = 1e-12
-                if C_g[i, gas_idx] < C_MIN
-                    if C_g[i, gas_idx] < 0.0 && !get(negative_conc_warned, gas_idx, false)
-                        log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
-                        negative_conc_warned[gas_idx] = true
-                    end
-                    C_g[i, gas_idx] = 0.0
-                end
-            end
-
-            # Debug: Check for NaN values
-            if any(isnan.(C_g[:, gas_idx]))
-                nan_nodes = findall(isnan.(C_g[:, gas_idx]))
-                log_print("ERROR: NaN detected in gas $gas_name at step $step, nodes: $nan_nodes")
-                error("Simulation failed due to NaN values")
-            end
-        end
-        
+        # Gas velocities are computed HERE, before the concentration update, so the
+        # whole right-hand side is level k: v^k is built from p^k and C_g^k. The
+        # manuscript's algorithm listing places it at this point for the same reason,
+        # and the thermal advective flux downstream consumes v^k rather than a value
+        # mixing the old pressure with the new concentrations.
         # Calculate nodal gas velocities using Darcy's law
         #zero the velocity vector
         v .= 0.0
@@ -1246,6 +1235,47 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
+        #Loop gases again to apply Lagrangian correction and update concentrations
+        @threads for gas_idx in 1:NGases
+            # Get gas name for warnings
+            gas_name = materials.gas_dictionary[gas_idx]
+            
+            # Update concentrations: C^(n+1) = C^n + dt * dC/dt
+            for i in 1:Nnodes
+                # Apply Lagrangian correction only at nodes with boundary influence, and
+                # only to gases that are actually free at this node. P_boundary already
+                # zeroes dC_g_dt for a prescribed gas; without the same factor here the
+                # correction would be added straight through that gate and would walk the
+                # prescribed concentration away from its boundary value every step. The
+                # drift only shows up once the reaction is active, because λ is built from
+                # total_rate, which carries the CO2 sink term.
+                lagrangian_correction = 0.0
+                if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
+                    lagrangian_correction = (λ_bc[i] / M[i]) * P_boundary[i, gas_idx]
+                end
+
+                C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
+                
+                # Ensure non-negative and numerically stable concentrations
+                C_MIN = 1e-12
+                if C_g[i, gas_idx] < C_MIN
+                    if C_g[i, gas_idx] < 0.0 && !get(negative_conc_warned, gas_idx, false)
+                        log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
+                        negative_conc_warned[gas_idx] = true
+                    end
+                    C_g[i, gas_idx] = 0.0
+                end
+            end
+
+            # Debug: Check for NaN values
+            if any(isnan.(C_g[:, gas_idx]))
+                nan_nodes = findall(isnan.(C_g[:, gas_idx]))
+                log_print("ERROR: NaN detected in gas $gas_name at step $step, nodes: $nan_nodes")
+                error("Simulation failed due to NaN values")
+            end
+        end
+        
+
         # Update reaction kinetic terms for lime concentration
         if calculate_reaction
             for i in 1:Nnodes
@@ -1303,10 +1333,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
             M_T .= 0.0
             q_cond_T .= 0.0
+            q_adv_T .= 0.0
             q_react_T .= 0.0
             for c in 1:nchunks
                 MT_chunk[c] .= 0.0
                 qd_T_chunk[c] .= 0.0
+                qa_T_chunk[c] .= 0.0
                 qr_T_chunk[c] .= 0.0
             end
 
@@ -1314,6 +1346,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             @threads for c in 1:nchunks
                 MT_c = MT_chunk[c]
                 qd_c = qd_T_chunk[c]
+                qa_c_T = qa_T_chunk[c]
                 qr_c = qr_T_chunk[c]
 
                 for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
@@ -1360,6 +1393,26 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             end
                         end
 
+                        # Advective flux, Eq. (thermal_advective_flux). Consumes the
+                        # Gauss-point velocity cached when v was computed, which is why
+                        # that value is retained rather than discarded after projection
+                        # (tex:473). The leading minus is the manuscript's: it is adopted
+                        # so every nodal flux in Eq. (FEM_compact_energy) is a quantity to
+                        # be subtracted, matching the mass equation.
+                        if calculate_heat_advection
+                            ρc_gp = ρc_g_gp
+                            T_gp_T = 0.0
+                            for i in 1:4
+                                T_gp_T += N_p[i] * T_e[i]
+                            end
+                            dN_dx_a = ShapeFunctions.get_dN_dx(e, p)
+                            vg = @view v_gp_cache[e, p, :]
+                            adv = dN_dx_a * vg          # [4 nodes]
+                            for i in 1:4
+                                qa_c_T[nodes[i]] += -ρc_gp * T_gp_T * adv[i] * dV
+                            end
+                        end
+
                         # Reactive flux, Eq. (thermal_reactive_flux)
                         if calculate_reaction
                             Q_gp = 0.0
@@ -1378,10 +1431,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             for c in 1:nchunks
                 M_T .+= MT_chunk[c]
                 q_cond_T .+= qd_T_chunk[c]
+                q_adv_T .+= qa_T_chunk[c]
                 q_react_T .+= qr_T_chunk[c]
             end
 
-            # Update, Eq. (update_Temp). q_adv_T and q_ext_T are still zero.
+            # Update, Eq. (update_Temp). q_ext_T is still zero until the thermal
+            # boundary conditions land.
             @threads for i in 1:Nnodes
                 if M_T[i] > 0.0
                     dT_dt[i] = (q_ext_T[i] - q_cond_T[i] - q_adv_T[i] + q_react_T[i]) / M_T[i]
