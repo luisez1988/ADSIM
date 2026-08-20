@@ -447,18 +447,79 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64)
         dt_reaction = 1.0 / (2 * reaction_param_max)
     end
     
+    # Thermal conduction time scale, h_min^2 C_mix / (4 λ_e): the fourth entry of
+    # Eq. (time_step). Without it the energy equation would be an unbounded diffusive
+    # operator, since nothing else in this function knows about λ_e — a
+    # conduction-only run would take a step set by the gas criteria and blow up.
+    dt_conduction = get_minimum_conduction_time_scale(mesh, materials, h_min)
+
     # Determine limiting time scale based on which is smallest
-    limiting_scale = "Unknown"
-    if dt_diffusion <= dt_advection && dt_diffusion <= dt_reaction
-        limiting_scale = "Diffusive"
-    elseif dt_advection <= dt_diffusion && dt_advection <= dt_reaction
-        limiting_scale = "Advective"
-    else
-        limiting_scale = "Reactive"
+    dt_min = min(dt_diffusion, dt_advection, dt_reaction, dt_conduction)
+    limiting_scale = dt_min == dt_diffusion ? "Diffusive" :
+                     dt_min == dt_advection ? "Advective" :
+                     dt_min == dt_reaction  ? "Reactive"  : "Thermal conduction"
+
+    return dt_min, limiting_scale
+end
+
+
+"""
+    get_minimum_conduction_time_scale(mesh, materials, h_min) -> Float64
+
+Smallest explicit stability limit of the heat conduction operator across the mesh,
+
+    Δt <= h_min^2 C_mix / (4 λ_e)
+
+the fourth entry of Eq. (time_step). Returns `Inf` where no material conducts, so a
+run without conduction is unaffected.
+
+Note this bounds conduction acting alone. Where gas diffusion, gas advection and
+conduction are all active they are diffusion-like operators on the same node and
+their stability limits do not simply combine by taking a minimum; that is a known
+gap, recorded against Phase 7.
+
+# Arguments
+- `mesh`: Mesh data structure
+- `materials`: Material data structure
+- `h_min::Float64`: Smallest characteristic element size [m]
+
+# Returns
+- `Float64`: Limiting conduction time step [s], or `Inf` if λ_e is zero everywhere
+"""
+function get_minimum_conduction_time_scale(mesh, materials, h_min::Float64)
+    dt_min = Inf
+    NGases = length(materials.gas_dictionary)
+
+    # Gas contribution to C_mix, from the largest initial concentration present
+    C_g_max = get_maximum_initial_concentration(mesh, NGases)
+    ρc_g = 0.0
+    λ_g = 0.0
+    for gas_name in materials.gas_dictionary
+        ρc_g += C_g_max * materials.gases[gas_name].molar_heat_capacity
+        λ_g += materials.gases[gas_name].thermal_conductivity
     end
-    
-    # Return minimum of all three time scales and the limiting scale
-    return min(dt_diffusion, dt_advection, dt_reaction), limiting_scale
+    NGases > 0 && (λ_g /= NGases)
+
+    for soil_name in materials.soil_dictionary
+        soil = materials.soils[soil_name]
+        n = soil.porosity
+        θ_w = n * soil.saturation
+        θ_g = n * (1.0 - soil.saturation)
+
+        λ_e = (1.0 - n) * soil.thermal_conductivity_solids +
+              θ_w * materials.liquid.thermal_conductivity + θ_g * λ_g
+        λ_e > 0.0 || continue
+
+        ρ_s = soil.specific_gravity * materials.liquid.density
+        C_mix = (1.0 - n) * ρ_s * soil.specific_heat_solids +
+                θ_w * materials.liquid.density * materials.liquid.specific_heat +
+                θ_g * ρc_g
+        C_mix > 0.0 || continue
+
+        dt_min = min(dt_min, h_min^2 * C_mix / (4.0 * λ_e))
+    end
+
+    return dt_min
 end
 
 

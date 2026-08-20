@@ -582,6 +582,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     global C_g, P, T, v, P_boundary, λ_bc
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
+    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
     global boundary_node_influences
     global q_boundary
 
@@ -783,6 +784,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # Per-element scratch, one set per chunk. Sized 4 for the nodes of a quad element.
     q_aux_chunk = [zeros(4) for _ in 1:nchunks]
     ρ_g_chunk = [zeros(4) for _ in 1:nchunks]
+
+    # Energy equation: nodal heat source and the per-chunk accumulators for the
+    # lumped thermal capacity and the conductive and reactive fluxes.
+    Q_dot_T = zeros(Float64, Nnodes)
+    MT_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
+    qd_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
+    qr_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
 
     # Gauss-point Darcy velocity, cached per element and Gauss point. Presently written
     # for the nodal projection only; the thermal advective flux of the energy equation
@@ -1267,55 +1275,124 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
-        # Calculate temperature change due to reaction (after all gas fluxes are calculated)
+        #______________________________________________________
+        # Energy equation, Eq. (FEM_compact_energy):
         #
-        # Evaluated per node using the same element-ownership resolution as the reaction
-        # term above: the element loop this replaces also assigned rather than accumulated,
-        # so the owning element's properties reproduce it exactly.
-        if calculate_heat && calculate_reaction && co2_gas_idx !== nothing
+        #     M^L_T · dT/dt = q̃_ext - q̃_d - q̃_a + q̃_r
+        #
+        # Assembled in the order of the manuscript's algorithm listing: heat rate,
+        # lumped capacity, conductive flux, reactive flux, boundary conditions,
+        # update. Runs whether or not the reaction is active, since heat must
+        # conduct on its own; the reactive flux simply contributes nothing when it
+        # is not.
+        #______________________________________________________
+        if calculate_heat
             ρ_w = materials.liquid.density
             c_w = materials.liquid.specific_heat
 
-            @threads for node_id in 1:Nnodes
-                e = node_owner[node_id]
-                if e == 0
-                    continue
+            # Volumetric heat source at the nodes, Q̇ = θ_w q̇ per Eq. (heat_rate),
+            # already on the total-volume basis: q̇ = -ΔH_r r and dC_lime_dt = -θ_w r,
+            # so θ_w q̇ = ΔH_r dC_lime_dt exactly.
+            if calculate_reaction
+                @threads for i in 1:Nnodes
+                    Q_dot_T[i] = ΔH_r * dC_lime_dt[i]
                 end
-                props = elem_props[e]
-                ρ_s = props.specific_gravity * ρ_w
+            else
+                Q_dot_T .= 0.0
+            end
 
-                # Volumetric heat capacity of the gas mixture at this node,
-                # (ρc)_g = Σ_i C_g^i c̄_p^i per Eq. (heat_advection), already per unit
-                # volume of gas so it enters C_mix weighted by θ_g directly.
-                ρc_g = 0.0
-                for g in 1:NGases
-                    ρc_g += C_g[node_id, g] * c_p_molar[g]
-                end
+            M_T .= 0.0
+            q_cond_T .= 0.0
+            q_react_T .= 0.0
+            for c in 1:nchunks
+                MT_chunk[c] .= 0.0
+                qd_T_chunk[c] .= 0.0
+                qr_T_chunk[c] .= 0.0
+            end
 
-                # Calculate mixture volumetric heat capacity
-                # C_mix = (1-n)ρ_s*c_s + θ_w*ρ_w*c_w + θ_g*(ρc)_g
-                C_mix = (1.0 - props.porosity) * ρ_s * props.specific_heat_solids +
-                        props.θ_w * ρ_w * c_w + props.θ_g * ρc_g
+            # Element assembly, chunked exactly like the gas fluxes
+            @threads for c in 1:nchunks
+                MT_c = MT_chunk[c]
+                qd_c = qd_T_chunk[c]
+                qr_c = qr_T_chunk[c]
 
-                # Heat generation rate from reaction, Eq. (heat_rate): q̇ = ΔH_r * dC_CO2/dt
-                # Both factors are negative (exothermic reaction, CO2 consumed),
-                # so q̇ > 0 and represents heat released. dC_lime_dt is the molar
-                # rate per unit total volume, which matches the basis of C_mix
-                # and equals dC_CO2/dt on the same basis by 1:1 stoichiometry.
-                if C_mix > 0.0
-                    q_dot = ΔH_r * dC_lime_dt[node_id]
+                for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
+                    nodes = mesh.elements[e, :]
+                    props = elem_props[e]
+                    ρ_s = props.specific_gravity * ρ_w
+                    solid_water = (1.0 - props.porosity) * ρ_s * props.specific_heat_solids +
+                                  props.θ_w * ρ_w * c_w
 
-                    # Calculate temperature rate of change
-                    dT_dt[node_id] = q_dot / C_mix
-                else
-                    dT_dt[node_id] = 0.0
+                    T_e = [T[nodes[i]] for i in 1:4]
+
+                    for p in 1:4
+                        N_p = ShapeFunctions.shape_funcs.N[p]
+                        detJ = ShapeFunctions.get_detJ(e, p)
+                        Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
+                        dV = detJ * Wp
+
+                        # (ρc)_g at the Gauss point, Eq. (heat_advection), per unit
+                        # volume of gas so it enters C_mix weighted by θ_g
+                        ρc_g_gp = 0.0
+                        for g in 1:NGases
+                            C_gp = 0.0
+                            for i in 1:4
+                                C_gp += N_p[i] * C_g[nodes[i], g]
+                            end
+                            ρc_g_gp += C_gp * c_p_molar[g]
+                        end
+                        C_mix_gp = solid_water + props.θ_g * ρc_g_gp
+
+                        # Lumped thermal capacity, Eq. (lumped_capacity)
+                        for i in 1:4
+                            MT_c[nodes[i]] += C_mix_gp * N_p[i] * dV
+                        end
+
+                        # Conductive flux, Eq. (thermal_conductive_flux). Same
+                        # contraction shape as the diffusive gas flux, so it reuses the
+                        # cached dN_dx and the right-to-left association.
+                        if calculate_heat_conduction && props.λ_e > 0.0
+                            dN_dx = ShapeFunctions.get_dN_dx(e, p)
+                            gradT = dN_dx' * T_e
+                            qd_gp = dN_dx * gradT
+                            for i in 1:4
+                                qd_c[nodes[i]] += props.λ_e * qd_gp[i] * dV
+                            end
+                        end
+
+                        # Reactive flux, Eq. (thermal_reactive_flux)
+                        if calculate_reaction
+                            Q_gp = 0.0
+                            for i in 1:4
+                                Q_gp += N_p[i] * Q_dot_T[nodes[i]]
+                            end
+                            for i in 1:4
+                                qr_c[nodes[i]] += Q_gp * N_p[i] * dV
+                            end
+                        end
+                    end
                 end
             end
 
-            # Update temperature: T^(n+1) = T^n + dt * dT/dt
+            # Reduce in fixed chunk order
+            for c in 1:nchunks
+                M_T .+= MT_chunk[c]
+                q_cond_T .+= qd_T_chunk[c]
+                q_react_T .+= qr_T_chunk[c]
+            end
+
+            # Update, Eq. (update_Temp). q_adv_T and q_ext_T are still zero.
+            @threads for i in 1:Nnodes
+                if M_T[i] > 0.0
+                    dT_dt[i] = (q_ext_T[i] - q_cond_T[i] - q_adv_T[i] + q_react_T[i]) / M_T[i]
+                else
+                    dT_dt[i] = 0.0
+                end
+            end
+
             for i in 1:Nnodes
                 T[i] += dt * dT_dt[i]
-                
+
                 # Ensure physically reasonable temperatures (above absolute zero)
                 if T[i] < 0.0
                     log_print("Warning: Temperature below absolute zero at node $i. Setting to 0.0 K.")

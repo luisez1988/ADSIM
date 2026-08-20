@@ -1,0 +1,38 @@
+# Verification case: 1D heat conduction, nothing else active.
+#
+# A bar insulated at both ends, starting from a single cosine mode. That mode is
+# the fundamental eigenfunction of the Laplacian under zero-flux boundaries, so it
+# decays without changing shape:
+#
+#     T(y,t) = T0 + A cos(pi y / L) exp(-alpha pi^2 t / L^2)
+#
+# Zero flux is the natural boundary condition of the weak form, so leaving the
+# thermal boundary unset IS an insulated end. That is what lets this case exist
+# before thermal boundary conditions are implemented.
+#
+# Gas diffusion, gas advection, gravity and the reaction are all switched off, and
+# the material data is chosen so the conduction criterion is the one that sets the
+# time step. So this measures the conduction operator and the lumped thermal
+# capacity and nothing else.
+
+project        = "Conduction_test"
+field          = "Temperature"
+axis           = "y"
+boundary_coord = 0.0                   # positions measured from y = 0
+# The measured error is 0.010 %, so this leaves an order of magnitude of headroom
+# and would still catch any real regression in the conduction operator. It was 0.79 %
+# until apply_initial_temperature! was made to iterate elements in sorted order;
+# before that the initial condition at every shared node depended on Dict iteration
+# order, which put a permanent 2.2 K offset on the mean of an insulated bar.
+tolerance      = 0.001
+check_steps    = []
+
+[analytical]
+type  = "conduction_cosine"
+T0    = 300.0        # mean the bar relaxes to
+A     = 50.0         # initial amplitude of the mode
+L     = 1.0          # bar length, matches the mesh
+# alpha = lambda_e / C_mix, both assembled from the material file:
+#   lambda_e = 0.6*2.0 + 0.4*0.025      = 1.21     W/(m.K)
+#   C_mix    = 0.6*2650*800 + 0.4*41*29.1 = 1.2725e6 J/(m3.K)
+alpha = 9.5090e-7

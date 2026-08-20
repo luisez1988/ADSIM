@@ -39,6 +39,18 @@ global dC_g_dt::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global dT_dt::Vector{Float64} = Float64[]
 global dC_lime_dt::Vector{Float64} = Float64[]
 
+# Energy equation. M_T is the lumped thermal capacity of Eq. (lumped_capacity),
+# rebuilt every step because C_mix depends on the current gas concentrations. The
+# rest are the nodal thermal fluxes of Eq. (FEM_compact_energy):
+#     M^L_T dT/dt = q_ext_T - q_cond_T - q_adv_T + q_react_T
+# q_adv_T and q_ext_T are allocated here but stay zero until thermal advection and
+# the thermal boundary conditions are implemented.
+global M_T::Vector{Float64} = Float64[]
+global q_cond_T::Vector{Float64} = Float64[]
+global q_adv_T::Vector{Float64} = Float64[]
+global q_react_T::Vector{Float64} = Float64[]
+global q_ext_T::Vector{Float64} = Float64[]
+
 #Analysis variables for soil carbonation
 global binder_content::Vector{Float64} = Float64[]
 global degree_of_carbonation::Vector{Float64} = Float64[]
@@ -62,6 +74,7 @@ function zero_variables!(mesh, materials)
     global C_g, P, T, v, P_boundary, λ_bc, boundary_node_influences
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
+    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
     
     # Set dimensions
     NDim = 2  # Number of spatial dimensions - TODO: generalize for 3D
@@ -90,7 +103,15 @@ function zero_variables!(mesh, materials)
     # Allocate and initialize time derivatives
     dC_g_dt = zeros(Float64, Nnodes, NGases)
     dT_dt = zeros(Float64, Nnodes)
-    dC_lime_dt = zeros(Float64, Nnodes)    
+    dC_lime_dt = zeros(Float64, Nnodes)
+
+    # Energy equation arrays
+    M_T = zeros(Float64, Nnodes)
+    q_cond_T = zeros(Float64, Nnodes)
+    q_adv_T = zeros(Float64, Nnodes)
+    q_react_T = zeros(Float64, Nnodes)
+    q_ext_T = zeros(Float64, Nnodes)
+
 
     # Allocate analysis variables
     binder_content = zeros(Float64, Nnodes)
@@ -121,8 +142,13 @@ assigns them to all nodes within those elements.
 function apply_initial_concentrations!(mesh)
     global C_g, NGases
     
-    # Apply element-based initial concentrations to nodes
-    for (elem_id, concentrations) in mesh.initial_concentrations
+    # Apply element-based initial concentrations to nodes.
+    # Iterate in ascending element order rather than in the Dict's own order: a node
+    # shared by several elements keeps whichever value is written last, so Dict
+    # iteration order would decide the initial condition at every shared node. Sorting
+    # makes that rule "highest element index wins", which is stable and reproducible.
+    for elem_id in sort(collect(keys(mesh.initial_concentrations)))
+        concentrations = mesh.initial_concentrations[elem_id]
         # Get nodes of this element
         element_nodes = get_element_nodes(mesh, elem_id)
         
@@ -154,8 +180,11 @@ assigns them to all nodes within those elements.
 function apply_initial_temperature!(mesh)
     global T
     
-    # Apply element-based initial temperatures to nodes
-    for (elem_id, temperature) in mesh.initial_temperature
+    # Apply element-based initial temperatures to nodes.
+    # Ascending element order for the same reason as the concentrations above: the
+    # last write to a shared node wins, so the ordering must not be left to the Dict.
+    for elem_id in sort(collect(keys(mesh.initial_temperature)))
+        temperature = mesh.initial_temperature[elem_id]
         # Get nodes of this element
         element_nodes = get_element_nodes(mesh, elem_id)
         

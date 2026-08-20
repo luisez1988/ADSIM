@@ -1,0 +1,49 @@
+# ADSIM calculation parameters - conduction_1d verification case
+# ADSIM_version = "2025 v0.x.x"
+#
+# Heat conduction alone: no gas diffusion, no gas advection, no gravity, no
+# reaction. The bar is insulated at both ends, which needs no boundary condition —
+# zero flux is the natural boundary condition of the weak form, so leaving the
+# thermal boundary unset is exactly an insulated end.
+
+[units]
+geometry_unit = "m"
+mass_unit = "kg"
+pressure_unit = "kPa"
+temperature_unit = "K"
+time_unit = "s"
+
+[gravity]
+gravity_magnitude = 9.81
+gravity_x_component = 0.0
+gravity_y_component = -1.0
+
+[solver]
+solver_type = "2D-Plane"
+diffusion = 0
+advection = 0
+gravity = 0
+reaction_kinetics = 0
+heat_conduction = 1
+heat_advection = 0
+
+[time_stepping]
+# alpha = 9.509e-7 m2/s, L = 1 m, so the fundamental mode decays with time
+# constant L^2/(alpha pi^2) = 1.0655e5 s. Two time constants leaves the amplitude
+# at exp(-2) = 13.5 % of its initial value, which is enough to see the decay
+# without dropping into round-off.
+total_simulation_time = 210000
+time_per_step = 21000
+# The conduction limit is h^2 C_mix/(4 lambda_e) = 657 s and is the binding one.
+courant_number = 0.9
+
+[data_saving]
+data_saving_interval = 21000.0
+
+[probing]
+# This case is a spatial profile, so it is scored from the VTK snapshots.
+number_of_nodes = 0
+nodes_to_probe = []
+
+number_of_elements = 0
+elements_to_probe = []

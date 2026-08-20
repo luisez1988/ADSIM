@@ -9,7 +9,7 @@
 
 module Analytical
 
-export erfc, diffusion_series, advection_diffusion, carbonation_isothermal, evaluate
+export erfc, diffusion_series, advection_diffusion, conduction_cosine, carbonation_isothermal, evaluate
 
 # ---- erf / erfc -----------------------------------------------------------
 # Abramowitz & Stegun 7.1.26 rational approximation (|error| < 1.5e-7),
@@ -75,6 +75,34 @@ pressure gradient `R T dC / L`, and Darcy's law gives `v = (K/mu) R T dC / L`.
 Independent of position and time (returns the uniform magnitude).
 """
 darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314) = (K / mu) * R * T * abs(dC) / L
+
+# ---- Heat conduction in an insulated bar ---------------------------------
+"""
+    conduction_cosine(x, t; T0, A, alpha, L=1.0)
+
+Temperature in a 1-D bar insulated at both ends, starting from a single cosine
+mode. cos(pi x / L) is the fundamental eigenfunction of the Laplacian under
+zero-flux boundaries, so it decays without changing shape:
+
+    T(x,t) = T0 + A cos(pi x / L) exp(-alpha pi^2 t / L^2)
+
+with `alpha = lambda_e / C_mix` the thermal diffusivity of the mixture. Zero flux
+is the natural boundary condition of the weak form, so an unset thermal boundary
+is exactly an insulated end — no boundary condition machinery is required, which
+is what lets this case run before thermal boundary conditions exist.
+
+# Arguments (keyword)
+- `T0`: mean temperature the bar relaxes to [K]
+- `A`: initial amplitude of the mode [K]
+- `alpha`: thermal diffusivity lambda_e / C_mix [m²/s]
+- `L`: bar length [m]
+
+# Returns
+- Temperature at position `x` and time `t` [K]
+"""
+function conduction_cosine(x::Float64, t::Float64; T0, A, alpha, L=1.0)
+    return T0 + A * cos(pi * x / L) * exp(-alpha * pi^2 * t / L^2)
+end
 
 # ---- Isothermal carbonation (0-D, constant CO2) ---------------------------
 """
@@ -160,6 +188,8 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
         # Uniform in space and time; x and t are ignored.
         return darcy_velocity(; K=g("K"), mu=g("mu"), dC=g("dC"),
                               L=g("L", 1.0), T=g("T", 298.0), R=g("R", 8.314))
+    elseif typ == "conduction_cosine"
+        return conduction_cosine(x, t; T0=g("T0"), A=g("A"), alpha=g("alpha"), L=g("L", 1.0))
     elseif typ == "carbonation_isothermal"
         # Uniform in space; x is ignored, t is the probe sample time.
         return carbonation_isothermal(t; k_o=g("k_o"), E=g("E", 0.0), beta=g("beta", 0.0),
