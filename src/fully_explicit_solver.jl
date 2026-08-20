@@ -582,7 +582,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     global C_g, P, T, v, P_boundary, λ_bc
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
-    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
+    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T, q_heat
     global T_boundary, thermal_node_influences
     global boundary_node_influences
     global q_boundary
@@ -799,6 +799,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     qd_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qr_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qa_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
+    # Heat flux projection: the flux itself and the normalising weight of
+    # Eq. (nodal_velocities), whose denominator is sum(N |detJ| W)
+    qh_chunk = [zeros(Float64, Nnodes, NDim) for _ in 1:nchunks]
+    qhw_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
+    heat_flux_weight = zeros(Float64, Nnodes)
 
     # Gauss-point Darcy velocity, cached per element and Gauss point. Presently written
     # for the nodal projection only; the thermal advective flux of the energy equation
@@ -1336,11 +1341,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             q_cond_T .= 0.0
             q_adv_T .= 0.0
             q_react_T .= 0.0
+            q_heat .= 0.0
+            heat_flux_weight .= 0.0
             for c in 1:nchunks
                 MT_chunk[c] .= 0.0
                 qd_T_chunk[c] .= 0.0
                 qa_T_chunk[c] .= 0.0
                 qr_T_chunk[c] .= 0.0
+                qh_chunk[c] .= 0.0
+                qhw_chunk[c] .= 0.0
             end
 
             # Element assembly, chunked exactly like the gas fluxes
@@ -1349,6 +1358,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 qd_c = qd_T_chunk[c]
                 qa_c_T = qa_T_chunk[c]
                 qr_c = qr_T_chunk[c]
+                qh_c = qh_chunk[c]
+                qhw_c = qhw_chunk[c]
 
                 for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
                     nodes = mesh.elements[e, :]
@@ -1414,6 +1425,30 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             end
                         end
 
+                        # Total heat flux at this Gauss point, for output:
+                        #   q_d = -lambda_e grad(T)          Eq. (fourier)
+                        #   q_a = (rho c)_g T v_g            Eq. (heat_advection)
+                        # Projected to the nodes below. Diagnostic only - the solver
+                        # itself works with the nodal flux vectors, not with this.
+                        dN_dx_h = ShapeFunctions.get_dN_dx(e, p)
+                        gradT_h = dN_dx_h' * T_e                # [NDim]
+                        T_gp_h = 0.0
+                        for i in 1:4
+                            T_gp_h += N_p[i] * T_e[i]
+                        end
+                        for i in 1:4
+                            nd = nodes[i]
+                            wN = N_p[i] * dV
+                            qhw_c[nd] += wN
+                            for d in 1:NDim
+                                q_flux = -props.λ_e * gradT_h[d]
+                                if calculate_heat_advection
+                                    q_flux += ρc_g_gp * T_gp_h * v_gp_cache[e, p, d]
+                                end
+                                qh_c[nd, d] += q_flux * wN
+                            end
+                        end
+
                         # Reactive flux, Eq. (thermal_reactive_flux)
                         if calculate_reaction
                             Q_gp = 0.0
@@ -1434,6 +1469,19 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 q_cond_T .+= qd_T_chunk[c]
                 q_adv_T .+= qa_T_chunk[c]
                 q_react_T .+= qr_T_chunk[c]
+                q_heat .+= qh_chunk[c]
+                heat_flux_weight .+= qhw_chunk[c]
+            end
+
+            # Normalise the projected flux, Eq. (nodal_velocities): dividing by
+            # sum(N |detJ| W) maps a flux that is uniform over an element onto the nodes
+            # without changing its magnitude, which plain tributary weighting would not.
+            for i in 1:Nnodes
+                if heat_flux_weight[i] > 0.0
+                    for d in 1:NDim
+                        q_heat[i, d] /= heat_flux_weight[i]
+                    end
+                end
             end
 
             # Convective (Robin) boundary, Eq. (conduction_flux_BC):
@@ -1565,6 +1613,9 @@ Write VTK output file for the current time step.
 - `total_concentration`: Total gas concentration vector
 """
 function write_output_vtk(mesh, materials, step::Int, time::Float64, project_name, total_concentration)
+    global C_g, P, T, v, dC_g_dt, dT_dt, dC_lime_dt
+    global C_lime, C_caco3, degree_of_carbonation, binder_content, q_heat
+
     output_dir = "output"
     filename = joinpath(output_dir, project_name)
     
@@ -1573,23 +1624,19 @@ function write_output_vtk(mesh, materials, step::Int, time::Float64, project_nam
 
     
     # Call VTK writer
-    WriteVTK.write_vtk_file(
-        filename,
-        step,
-        time,
-        mesh,
-        C_g,
-        gas_names,
-        total_concentration,
-        P,
-        dC_g_dt,
-        dC_lime_dt,
-        C_lime,
-        C_caco3,
-        degree_of_carbonation,
-        binder_content,
-        v,
-        T,
-        dT_dt
-    )
+    WriteVTK.write_vtk_file(filename, step, time, mesh, gas_names, (
+        concentrations            = C_g,
+        total_concentration       = total_concentration,
+        absolute_pressure         = P,
+        concentration_rates       = dC_g_dt,
+        reaction_rates            = dC_lime_dt,
+        lime_concentration        = C_lime,
+        caco3_concentration       = C_caco3,
+        degree_of_carbonation     = degree_of_carbonation,
+        volumetric_binder_content = binder_content,
+        gas_seepage_velocity      = v,
+        temperature               = T,
+        temperature_rate          = dT_dt,
+        heat_flux                 = q_heat,
+    ))
 end

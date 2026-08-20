@@ -19,101 +19,51 @@ using ..ADSIMVersion: get_version
 export write_vtk_file, write_vtk_series
 
 """
-    write_vtk_file(
-        filename::String,
-        time_step::Int,
-        time::Float64,
-        mesh,
-        concentrations::Matrix{Float64},
-        gas_names::Vector{String},
-        total_concentration::Vector{Float64},
-        absolute_pressure::Vector{Float64},
-        concentration_rates::Matrix{Float64},
-        reaction_rates::Vector{Float64},
-        lime_concentration::Vector{Float64},
-        co2_concentration::Vector{Float64},
-        caco3_concentration::Vector{Float64},
-        degree_of_carbonation::Vector{Float64},
-        volumetric_binder_content::Vector{Float64},
-        gas_seepage_velocity::Matrix{Float64},
-        temperature::Vector{Float64},
-        temperature_rate::Vector{Float64}
-    )
+    write_vtk_file(filename, time_step, time, mesh, gas_names, fields::NamedTuple)
 
-Write VTK file for ADSIM simulation results at a specific time step.
+Write one VTK snapshot of the ADSIM state.
 
 # Arguments
-- `filename::String`: Base filename (without extension) for the VTK file
-- `time_step::Int`: Current time step number
-- `time::Float64`: Physical time value
-- `mesh`: Mesh data structure from read_mesh.jl (MeshData type)
-- `concentrations::Matrix{Float64}`: Gas concentrations (Nnodes × Ngases)
-- `gas_names::Vector{String}`: Names of gas species
-- `total_concentration::Vector{Float64}`: Total concentration at nodes
-- `absolute_pressure::Vector{Float64}`: Absolute pressure at nodes
-- `concentration_rates::Matrix{Float64}`: Rate of concentration change (Nnodes × Ngases)
-- `reaction_rates::Vector{Float64}`: Rate of reactions at nodes
-- `lime_concentration::Vector{Float64}`: Lime concentration at nodes
-- `co2_concentration::Vector{Float64}`: CO2 concentration at nodes
-- `caco3_concentration::Vector{Float64}`: CaCO3 concentration at nodes
-- `degree_of_carbonation::Vector{Float64}`: Degree of carbonation (DoC) at nodes
-- `volumetric_binder_content::Vector{Float64}`: Volumetric binder content at nodes
-- `gas_seepage_velocity::Matrix{Float64}`: Gas velocity vectors (Nnodes × ndim)
-- `temperature::Vector{Float64}`: Temperature at nodes
-- `temperature_rate::Vector{Float64}`: Rate of temperature change at nodes
+- `filename::String`: Base filename (without extension or step number)
+- `time_step::Int`: Output counter, used for the `_NNNNNN` suffix
+- `time::Float64`: Physical time of the snapshot
+- `mesh`: Mesh data structure
+- `gas_names::Vector{String}`: Gas species names, in solver order
+- `fields::NamedTuple`: The nodal fields to write, by name:
+  `concentrations`, `total_concentration`, `absolute_pressure`,
+  `concentration_rates`, `reaction_rates`, `lime_concentration`,
+  `caco3_concentration`, `degree_of_carbonation`, `volumetric_binder_content`,
+  `gas_seepage_velocity`, `temperature`, `temperature_rate`, `heat_flux`
 
-# Returns
-- `nothing`: Writes VTU file to disk
+The fields are named rather than positional because most of them share a type:
+thirteen were bare `Vector{Float64}` or `Matrix{Float64}`, so a transposed pair
+would have been written under the wrong label with nothing to catch it. That had
+already happened once.
 
-# Output
-- Writes a VTU (XML VTK Unstructured Grid) file compatible with ParaView
-- For 2D simulations, velocity has 2 components (x, y)
-- For 3D simulations, velocity has 3 components (x, y, z)
-
-# Example
-```julia
-mesh = read_mesh_file("problem.mesh")
-write_vtk_file(
-    "output/simulation",
-    0,
-    0.0,
-    mesh,
-    concentrations,
-    gas_names,
-    total_concentration,
-    absolute_pressure,
-    concentration_rates,
-    reaction_rates,
-    lime_concentration,
-    co2_concentration,
-    caco3_concentration,
-    degree_of_carbonation,
-    volumetric_binder_content,
-    gas_seepage_velocity,
-    temperature,
-    temperature_rate
-)
-```
+# Note
+Vector fields (`gas_seepage_velocity`, `heat_flux`) are padded to three components,
+as VTK requires, regardless of the mesh dimensionality.
 """
-function write_vtk_file(
-    filename::String,
-    time_step::Int,
-    time::Float64,
-    mesh,
-    concentrations::Matrix{Float64},
-    gas_names::Vector{String},
-    total_concentration::Vector{Float64},
-    absolute_pressure::Vector{Float64},
-    concentration_rates::Matrix{Float64},
-    reaction_rates::Vector{Float64},
-    lime_concentration::Vector{Float64},    
-    caco3_concentration::Vector{Float64},
-    degree_of_carbonation::Vector{Float64},
-    volumetric_binder_content::Vector{Float64},
-    gas_seepage_velocity::Matrix{Float64},
-    temperature::Vector{Float64},
-    temperature_rate::Vector{Float64}
-)
+function write_vtk_file(filename::String, time_step::Int, time::Float64, mesh,
+                        gas_names::Vector{String}, fields::NamedTuple)
+    # Fields arrive as a NamedTuple rather than as sixteen positional arguments.
+    # Thirteen of them were bare Vector{Float64} or Matrix{Float64}, so any two could
+    # be swapped with no complaint from the compiler - and that had already happened,
+    # with `reaction_rates` being fed dC_lime_dt. A mismatched name is now an error at
+    # the call site instead of a silently mislabelled output field.
+    concentrations            = fields.concentrations
+    total_concentration       = fields.total_concentration
+    absolute_pressure         = fields.absolute_pressure
+    concentration_rates       = fields.concentration_rates
+    reaction_rates            = fields.reaction_rates
+    lime_concentration        = fields.lime_concentration
+    caco3_concentration       = fields.caco3_concentration
+    degree_of_carbonation     = fields.degree_of_carbonation
+    volumetric_binder_content = fields.volumetric_binder_content
+    gas_seepage_velocity      = fields.gas_seepage_velocity
+    temperature               = fields.temperature
+    temperature_rate          = fields.temperature_rate
+    heat_flux                 = fields.heat_flux
     # Create output filename
     output_file = "$(filename)_$(lpad(time_step, 6, '0')).vtk"
     
@@ -161,6 +111,10 @@ function write_vtk_file(
         
         # Write velocity field (2D or 3D based on mesh)
         write_vtk_vector_field(io, "Gas_Seepage_Velocity", gas_seepage_velocity, ndim)
+
+        # Total heat flux q_d + q_a, Eqs. (fourier) and (heat_advection), projected
+        # from the Gauss points. Zero throughout when heat transport is disabled.
+        write_vtk_vector_field(io, "Heat_Flux", heat_flux, ndim)
     end
     
     println("      Wrote VTK file: $output_file")

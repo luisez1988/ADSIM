@@ -58,6 +58,9 @@ global q_cond_T::Vector{Float64} = Float64[]
 global q_adv_T::Vector{Float64} = Float64[]
 global q_react_T::Vector{Float64} = Float64[]
 global q_ext_T::Vector{Float64} = Float64[]
+# Total heat flux q_d + q_a at the nodes, for output only. Projected from the Gauss
+# points with the normalised transfer of Eq. (nodal_velocities).
+global q_heat::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 
 #Analysis variables for soil carbonation
 global binder_content::Vector{Float64} = Float64[]
@@ -83,7 +86,7 @@ function zero_variables!(mesh, materials)
     global T_boundary, thermal_node_influences
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
     global dC_g_dt, dT_dt, dC_lime_dt
-    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T
+    global M_T, q_cond_T, q_adv_T, q_react_T, q_ext_T, q_heat
     
     # Set dimensions
     NDim = 2  # Number of spatial dimensions - TODO: generalize for 3D
@@ -125,6 +128,7 @@ function zero_variables!(mesh, materials)
     q_adv_T = zeros(Float64, Nnodes)
     q_react_T = zeros(Float64, Nnodes)
     q_ext_T = zeros(Float64, Nnodes)
+    q_heat = zeros(Float64, Nnodes, NDim)
 
 
     # Allocate analysis variables

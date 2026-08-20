@@ -409,55 +409,106 @@ The critical time step is the minimum of these three values.
                1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r)) }
 ```
 """
-function calculate_critical_time_step(mesh, materials, T_ref::Float64)
+function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_settings = nothing)
     # Find minimum characteristic length
     h_min = find_minimum_characteristic_length(mesh)
-    
+
+    # Which mechanisms are actually active. A criterion for a term the solver is not
+    # assembling must not bound the step: a diffusion-only run was previously reporting
+    # "Advective" as its limiting scale, because every criterion was evaluated whether
+    # or not its term was switched on. Defaults to all-on when no settings are supplied.
+    on(key) = solver_settings === nothing || get(solver_settings, key, 1) == 1
+    use_diffusion   = on("diffusion")
+    use_advection   = on("advection")
+    use_reaction    = on("reaction_kinetics")
+    use_conduction  = on("heat_conduction")
+
     # Get maximum diffusion coefficient
     D_max = get_maximum_diffusion_coefficient(materials)
-    
-    # Get minimum gas volume fraction
-    θ_g_min = get_minimum_gas_volume_fraction(materials)
-    
-    # Calculate diffusive time scale
-    # Note: τ (tortuosity) is stored as granular_tortuosity
-    # For simplicity, use the minimum tortuosity from all soils
+
+    # Minimum tortuosity across all soils
     τ_min = Inf
     for soil_name in materials.soil_dictionary
         soil = materials.soils[soil_name]
         τ_min = min(τ_min, soil.granular_tortuosity)
     end
-    
-    dt_diffusion = Inf
-    if D_max > 0.0 && θ_g_min > 0.0
-        dt_diffusion = (h_min^2 * τ_min) / (4 * θ_g_min * D_max)
-    end
-    
-    # Calculate advective time scale
-    dt_advection = Inf
-    permeability_ratio_min = get_minimum_permeability_ratio(mesh, materials, T_ref)
-    if permeability_ratio_min < Inf
-        dt_advection = h_min^2 * permeability_ratio_min
-    end
-    
-    # Calculate reactive time scale
-    dt_reaction = Inf
-    reaction_param_max = get_maximum_reaction_parameters(mesh, materials, T_ref)
-    if reaction_param_max > 0.0
-        dt_reaction = 1.0 / (2 * reaction_param_max)
-    end
-    
-    # Thermal conduction time scale, h_min^2 C_mix / (4 λ_e): the fourth entry of
-    # Eq. (time_step). Without it the energy equation would be an unbounded diffusive
-    # operator, since nothing else in this function knows about λ_e — a
-    # conduction-only run would take a step set by the gas criteria and blow up.
-    dt_conduction = get_minimum_conduction_time_scale(mesh, materials, h_min)
 
-    # Determine limiting time scale based on which is smallest
-    dt_min = min(dt_diffusion, dt_advection, dt_reaction, dt_conduction)
-    limiting_scale = dt_min == dt_diffusion ? "Diffusive" :
-                     dt_min == dt_advection ? "Advective" :
-                     dt_min == dt_reaction  ? "Reactive"  : "Thermal conduction"
+    # Gas diffusion.
+    #
+    #     Δt <= h_min^2 τ / (2 D_max)
+    #
+    # theta_g does NOT appear. The discrete equation is
+    #     theta_g M_hat dC/dt = -(theta_g D / tau) K C
+    # so theta_g cancels and the operator is (D/tau) M_hat^-1 K, whose largest
+    # eigenvalue on a uniform quad mesh is 4(D/tau)/h^2. Forward Euler needs
+    # dt <= 2/lambda_max, giving the expression above.
+    #
+    # The earlier form h^2 tau/(4 theta_g D) carried a spurious 1/theta_g and a 4 in
+    # place of a 2. Verified against the true 2/lambda_max of the assembled operator:
+    # this expression matches it to 1.000000 at theta_g = 1.0 and at theta_g = 0.3318,
+    # while the old one was 0.5x and 1.51x of it respectively. That is why a Courant
+    # number above about 0.4 used to go unstable — at theta_g = 0.2 the old criterion
+    # was 2.5x too permissive, so only C_N <= 0.4 was actually stable.
+    dt_diffusion = Inf
+    if use_diffusion && D_max > 0.0
+        dt_diffusion = (h_min^2 * τ_min) / (2 * D_max)
+    end
+
+    # Gas advection
+    dt_advection = Inf
+    if use_advection
+        permeability_ratio_min = get_minimum_permeability_ratio(mesh, materials, T_ref)
+        if permeability_ratio_min < Inf
+            dt_advection = h_min^2 * permeability_ratio_min
+        end
+    end
+
+    # Carbonation reaction
+    dt_reaction = Inf
+    if use_reaction
+        reaction_param_max = get_maximum_reaction_parameters(mesh, materials, T_ref)
+        if reaction_param_max > 0.0
+            dt_reaction = 1.0 / (2 * reaction_param_max)
+        end
+    end
+
+    # Thermal conduction. Same operator structure as gas diffusion with
+    # (theta_g D / tau) -> lambda_e and theta_g -> C_mix, so it carries the same
+    # factor of 2 rather than 4.
+    dt_conduction = Inf
+    if use_conduction
+        dt_conduction = get_minimum_conduction_time_scale(mesh, materials, h_min)
+    end
+
+    # Diffusion-like operators acting on the same node do not combine by taking a
+    # minimum: each limit above is derived as if its term acted alone, but the
+    # eigenvalues add. Combining them as a harmonic sum,
+    #     1/dt_combined = 1/dt_a + 1/dt_b + ...
+    # is the bound for the summed operator and reduces to the single-term limit when
+    # only one is active. Demonstrated on advection_1d, where the molecular and
+    # advective Fourier numbers were 0.315 and 0.439 individually — both stable — but
+    # 0.754 together, and the run produced NaN.
+    inv_sum = 0.0
+    for dtx in (dt_diffusion, dt_advection, dt_conduction)
+        isfinite(dtx) && dtx > 0.0 && (inv_sum += 1.0 / dtx)
+    end
+    dt_diffusive_like = inv_sum > 0.0 ? 1.0 / inv_sum : Inf
+
+    dt_min = min(dt_diffusive_like, dt_reaction)
+
+    # Name the single mechanism that contributes most, so the log points at the term
+    # actually setting the step
+    limiting_scale = "Unknown"
+    if dt_min == dt_reaction
+        limiting_scale = "Reactive"
+    else
+        smallest = min(dt_diffusion, dt_advection, dt_conduction)
+        limiting_scale = smallest == dt_diffusion ? "Diffusive" :
+                         smallest == dt_advection ? "Advective" : "Thermal conduction"
+        if inv_sum > 0.0 && dt_diffusive_like < 0.95 * smallest
+            limiting_scale *= " (combined)"
+        end
+    end
 
     return dt_min, limiting_scale
 end
@@ -468,7 +519,7 @@ end
 
 Smallest explicit stability limit of the heat conduction operator across the mesh,
 
-    Δt <= h_min^2 C_mix / (4 λ_e)
+    Δt <= h_min^2 C_mix / (2 λ_e)
 
 the fourth entry of Eq. (time_step). Returns `Inf` where no material conducts, so a
 run without conduction is unaffected.
@@ -516,7 +567,7 @@ function get_minimum_conduction_time_scale(mesh, materials, h_min::Float64)
                 θ_g * ρc_g
         C_mix > 0.0 || continue
 
-        dt_min = min(dt_min, h_min^2 * C_mix / (4.0 * λ_e))
+        dt_min = min(dt_min, h_min^2 * C_mix / (2.0 * λ_e))
     end
 
     return dt_min
@@ -560,7 +611,8 @@ function calculate_time_step_info(mesh, materials, calc_params::Dict)
 
     
     # Calculate critical time step
-    time_data.critical_dt, limiting_scale = calculate_critical_time_step(mesh, materials, T_ref)
+    time_data.critical_dt, limiting_scale = calculate_critical_time_step(mesh, materials, T_ref,
+                                                    get(calc_params, "solver_settings", nothing))
     
     # Get Courant number from calculation parameters
     time_data.courant_number = calc_params["time_stepping"]["courant_number"]
