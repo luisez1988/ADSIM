@@ -1,29 +1,47 @@
-# ADSIM material file header (need to add disclaimer and license)
-# ADSIM_version = "2025 v0.1.0"
-# File_created = "2025-11-28"
+# ADSIM material file - advection_1d verification case
+#
+# TWO gases, with matched transport properties. Both choices are required, not
+# cosmetic:
+#   dynamic_viscosity equal  - mu is weighted by concentration, so unequal values
+#                              make mu drift as CO2 displaces air, and v drifts with
+#                              it, which is the very thing this case must avoid.
+#   diff_coefficient equal   - unequal values let the TOTAL concentration develop
+#                              structure of its own as the species separate,
+#                              perturbing the pressure gradient that sets v.
+#
+# The permeability is chosen so the 1000 Pa drop across the column gives the target
+# Darcy flux: K = v mu L / dp = 8e-5 * 1.48e-5 * 1 / 1000 = 1.184e-12 m2.
 
-gas_dictionary_ = ["CO2"]
+gas_dictionary_ = ["Air", "CO2"]
 soil_dictionary_ = ["Soil 1"]
 
 # Gas properties
+[gas."Air"]
+dynamic_viscosity = 1.48e-5
+molar_mass = 0.02896
+diff_coefficient = 1.6e-5
+thermal_conductivity = 0.026
+molar_heat_capacity = 29.1
+
 [gas."CO2"]
-dynamic_viscosity = 1e-5
+dynamic_viscosity = 1.48e-5
 molar_mass = 0.04401
 diff_coefficient = 1.6e-5
+thermal_conductivity = 0.0166
+molar_heat_capacity = 37.1
 
 # Liquid properties
 [liquid]
-dynamic_viscosity = 1e-5
+dynamic_viscosity = 1e-3
 density = 1000
-specific_heat = 1.0
+specific_heat = 4184.0
+thermal_conductivity = 0.6
 
-# Reactant properties
+# Reactant properties (the reaction is off in this case)
 [reactants]
-reaction_enthalpy = -113800.0
+reaction_enthalpy = 0.0
 lime_arrhenius_factor = 0.0
 lime_activation_energy = 0.0
-# Interfacial-area coefficient of the factor a = exp(beta (C_aq - C_aq_atm)).
-# Zero disables the factor and gives the plain second-order rate law.
 lime_interfacial_area_beta = 0.0
 
 # Soil properties
@@ -33,17 +51,12 @@ specific_gravity = 2.65
 porosity = 0.5
 saturation = 0.0
 granular_tortuosity = 1.0
-# Chosen so the Darcy velocity matches the v = 8.0e-6 m/s declared in case.toml.
-# The concentration step held at the top of the column (45 against an initial 41)
-# sets dp = R*T*dC = 9910 Pa over L = 1 m, so v = (K/mu)*grad p requires
-# K = v*mu/grad p = 8.0e-6 * 1e-5 / 9910 = 8.07e-15 m^2.
-# Was 1e-15, which produced v = 9.9e-7 m/s, eight times smaller than case.toml assumed.
-intrinsic_permeability = 8.07e-15
+intrinsic_permeability = 1.184e-12
 # Thermal properties
-specific_heat_solids = 1.0
+specific_heat_solids = 800.0
+thermal_conductivity_solids = 2.0
 
-# Reaction properties
+# Reaction properties (no lime)
 [reaction."Soil 1"]
-lime_content = 0.1
-residual_lime = 0.1
-
+lime_content = 0.0
+residual_lime = 0.0

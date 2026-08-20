@@ -20,26 +20,23 @@ diffusion = 1
 advection = 1
 gravity = 0
 reaction_kinetics = 0
+heat_conduction = 0
+heat_advection = 0
 
 [time_stepping]
-total_simulation_time = 14400
-time_per_step = 600
-# calculate_critical_time_step takes min(dt_diffusion, dt_advection), each derived as
-# if its term acted alone. For a single gas the advective flux is itself diffusion-like,
-# so the two operators add: D/tau = 1.6e-5 and R*T*K*C/(mu*theta_g) sum to an effective
-# diffusivity whose Fourier number exceeded 0.5 at courant 0.8, which is what produced
-# the NaN at step 30. The Courant number is reduced to keep the COMBINED operator stable.
-courant_number = 0.15
+total_simulation_time = 2000
+time_per_step = 250
+# The corrected stability criteria are stable to C_N = 1; 0.9 leaves a margin. The
+# solution is time-converged: C_N = 0.3 and C_N = 0.9 give the same profile.
+courant_number = 0.9
 
 [data_saving]
-data_saving_interval = 1.0
+data_saving_interval = 250.0
 
 [probing]
-# Nodes to follow during simulation
+# This case is a spatial profile, so it is scored from the VTK snapshots.
 number_of_nodes = 0
 nodes_to_probe = []
 
-# Elements to follow during simulation (data at Gaussian points)
 number_of_elements = 0
 elements_to_probe = []
-

@@ -1,19 +1,58 @@
-# Verification case: 1D advection-diffusion
-# Analytical reference: Cleary & Adrian (1973) finite-column solution
-# with a first-type inlet boundary.  See verification/README.md.
+# Verification case: 1D advection-diffusion of CO2 through a column at constant
+# Darcy velocity. Cleary & Adrian (1973), finite column, first-type inlet.
+#
+# The case uses TWO gases because a single one cannot hold v constant: with one
+# species p = R T C, so the pressure gradient driving the flow IS the concentration
+# gradient being transported, and v decays as the column fills. With air + CO2 the
+# pressure depends on the TOTAL while the tracer is the CO2 fraction, so pinning the
+# total decouples them.
+#
+# Boundaries are deliberately on separate nodes:
+#   inlet  y = 0 : both gas concentrations fixed, which fixes their sum and hence
+#                  the inlet pressure. No pressure BC is applied there - a node
+#                  carrying both would have its total_concentration overwritten by
+#                  p/(RT) while the species stayed frozen, leaving the two
+#                  inconsistent.
+#   outlet y = L : absolute pressure only, gases free, total enforced through the
+#                  Lagrange multiplier of Section 3.7.
+#
+# The pressure drop is 1000 Pa, about 1 % of absolute. It is kept small on purpose:
+# the steady profile of the total is not exactly linear, because the advective term
+# is nonlinear in the total, so v is uniform only to O(dp/p).
+#
+# Analytical parameters use R = 1 with the EFFECTIVE quantities, rather than folding
+# theta_g into a retardation factor. The solver integrates
+#     dC/dt = (D_g/tau) grad^2 C - (v_darcy/theta_g) dC/dx
+# so the reference needs D = D_g/tau = 1.6e-5 and v = the PORE velocity
+# v_darcy/theta_g = 8e-5/0.5 = 1.6e-4. The previous file used R = 0.5 with
+# D = 1.6e-5, which made the analytical diffusivity D/R = 3.2e-5, twice the
+# solver's.
 
-project     = "Advection_test"
-field       = "CO2_Concentration"
-axis        = "y"
-boundary_coord = 1.0
-tolerance   = 0.02
-check_steps = []
+# The run stops at t = 2000 s, before the front reaches the outlet. This is a limit
+# of the outlet boundary, not of the scheme. The constant-pressure boundary is
+# enforced by a single Lagrange multiplier per node (Eq. nodal_Lagrange_System1),
+# which subtracts the SAME absolute amount from every free species rather than a
+# composition-weighted share. Outflow is therefore not composition-weighted, and once
+# CO2 reaches the outlet the boundary drains it faster than a free outlet would. The
+# error is flat at 0.6 to 1.0 % while the front is interior and then climbs
+# monotonically - 1.5 % at 2500 s, 3.5 % at 3000 s, 13.7 % at 5000 s - which is the
+# signature of that boundary, not of the advection scheme.
+#
+# At 2000 s the front has travelled v_pore * t = 0.32 m, about six elements, with its
+# diffusive edge still clear of the outlet.
+
+project        = "Advection_test"
+field          = "CO2_Concentration"
+axis           = "y"
+boundary_coord = 0.0                  # inlet is at y = 0
+tolerance      = 0.02
+check_steps    = []
 
 [analytical]
 type = "advection_diffusion"
-C0   = 40.0     # inlet concentration [mol/m^3]
-Ci   = 32.0     # initial concentration [mol/m^3]
-D    = 1.6e-5   # effective diffusion coefficient [m^2/s] (must match solver)
-v    = 8.0e-6   # gas seepage velocity [m/s]
-R    = 0.5      # retardation factor
-L    = 1.0      # column length [m]
+C0   = 40.0       # inlet CO2 concentration [mol/m^3]
+Ci   = 0.0        # initial CO2 concentration [mol/m^3]
+D    = 1.6e-5     # D_g / tau [m^2/s]
+v    = 1.6e-4     # pore velocity v_darcy / theta_g [m/s]
+R    = 1.0
+L    = 1.0

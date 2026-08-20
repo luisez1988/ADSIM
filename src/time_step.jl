@@ -161,6 +161,51 @@ end
 
 
 """
+    get_maximum_total_concentration(mesh::MeshData, NGases::Int) -> Float64
+
+Largest TOTAL gas concentration anywhere in the problem, over both the initial
+condition and the prescribed concentration boundaries.
+
+The advective flux of Eq. (advective_flux) contracts against the total concentration,
+so it is the total that scales the operator, not the largest single species. With one
+gas the two coincide, which is why the distinction went unnoticed; with two they do
+not, and using the per-species maximum makes the advective bound too permissive by the
+ratio of total to largest species.
+
+Boundary values are included because a prescribed inlet can hold a species well above
+anything in the initial field - an inlet at 40 mol/m^3 against an interior maximum of
+33 is not unusual - and the bound has to hold there too.
+
+# Arguments
+- `mesh::MeshData`: Mesh data structure
+- `NGases::Int`: Number of gas species
+
+# Returns
+- `Float64`: Largest total concentration [mol/m^3]
+"""
+function get_maximum_total_concentration(mesh, NGases::Int)
+    C_max = 0.0
+
+    for (_, concentrations) in mesh.initial_concentrations
+        total = 0.0
+        for gas_idx in 1:NGases
+            total += concentrations[gas_idx]
+        end
+        C_max = max(C_max, total)
+    end
+
+    for (_, concentrations) in mesh.concentration_bc
+        total = 0.0
+        for gas_idx in 1:NGases
+            total += concentrations[gas_idx]
+        end
+        C_max = max(C_max, total)
+    end
+
+    return C_max
+end
+
+"""
     get_maximum_initial_concentration(mesh::MeshData, NGases::Int) -> Float64
 
 Get the maximum initial gas concentration across all elements and gases.
@@ -248,7 +293,7 @@ function get_minimum_permeability_ratio(mesh, materials, T_ref::Float64)
     μ_min = get_minimum_gas_viscosity(materials)
     
     # Get maximum initial concentration
-    C_max = get_maximum_initial_concentration(mesh, length(materials.gas_dictionary))
+    C_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary))
     
     # Loop through all elements to find minimum ratio
     for elem_id in 1:mesh.num_elements
@@ -265,7 +310,20 @@ function get_minimum_permeability_ratio(mesh, materials, T_ref::Float64)
             K = soil.intrinsic_permeability
             
             if K > 0.0 && C_max > 0.0
-                ratio = μ_min / (4* C_max * K * T_ref * R)
+                # theta_g belongs in the numerator here. Unlike gas diffusion, the
+                # advective flux of Eq. (advective_flux) carries no theta_g of its own,
+                # so the theta_g of the lumped mass survives:
+                #     dC/dt = -(R K T C /(mu theta_g)) M_hat^-1 K_e C_tot
+                # and dt <= 2/lambda_max with lambda_max = 4 R K T C/(mu theta_g h^2).
+                # The previous form omitted theta_g and used 4 in place of 2, making it
+                # 1/(2 theta_g) times the true limit - 1.55x too permissive at
+                # theta_g = 0.308, so only C_N <= 0.65 was actually stable.
+                # Measured against 2/lambda_max of the assembled operator, this form
+                # comes out at 0.95 of the true limit: slightly conservative, because
+                # the operator is nonlinear and this uses the largest concentration in
+                # each element rather than the Gauss-point values.
+                θ_g_e = soil.porosity * (1.0 - soil.saturation)
+                ratio = μ_min * θ_g_e / (2 * C_max * K * T_ref * R)
                 ratio_min = min(ratio_min, ratio)
             end
         end
@@ -646,5 +704,5 @@ end
 export TimeStepData
 export calculate_element_characteristic_length, find_minimum_characteristic_length
 export get_maximum_diffusion_coefficient, get_minimum_gas_viscosity
-export get_maximum_initial_concentration, get_maximum_co2_concentration
+export get_maximum_initial_concentration, get_maximum_total_concentration, get_maximum_co2_concentration
 export calculate_critical_time_step, calculate_time_step_info
