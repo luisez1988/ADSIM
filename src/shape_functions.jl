@@ -235,9 +235,15 @@ function initialize_shape_functions!(mesh)
             invJ_elements[e, p, :, :] = invJ
             detJ_elements[e, p] = detJ
 
-            # Physical-coordinate derivatives dN/dx = B · J^-1, cached so the time loop
-            # never has to form this product again
-            dN_dx_elements[e, p, :, :] = B_gauss[p] * invJ
+            # Physical-coordinate derivatives dN/dx. The chain rule gives
+            # dN_i/dx_j = sum_k B[i,k] * dxi_k/dx_j, and compute_jacobian returns
+            # J[k,j] = dx_j/dxi_k, so the matrix of dxi_k/dx_j is the TRANSPOSE of
+            # inv(J), not inv(J) itself. The two coincide whenever J is diagonal -
+            # axis-aligned rectangular elements - which is why every 1D verification
+            # case passed while this was missing; on a skewed quad the element failed
+            # the gradient patch test, keeping the right principal conductivities but
+            # rotating their directions. Cached so the time loop never re-forms it.
+            dN_dx_elements[e, p, :, :] = B_gauss[p] * transpose(invJ)
         end
     end
 
