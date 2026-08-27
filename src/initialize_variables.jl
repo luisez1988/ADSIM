@@ -215,7 +215,7 @@ end
 
 
 """
-    apply_temperature_bc!(mesh::MeshData)
+    apply_temperature_bc!(mesh::MeshData, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
 
 Apply prescribed nodal temperatures, Eq. (temperature_BC), and mark those nodes in
 `T_boundary` so the solver never writes to them again.
@@ -223,40 +223,53 @@ Apply prescribed nodal temperatures, Eq. (temperature_BC), and mark those nodes 
 Called after `apply_initial_temperature!`, so a prescribed value overrides the
 element-based initial condition at the same node.
 
+A node driven by a time function is seeded at time `t`, which is 0 for a fresh
+run and the checkpoint time for a restart, so a stage 2 run picks its curve up
+where stage 1 left it rather than at the origin.
+
 # Note
 - Modifies global variables `T` and `T_boundary`
 """
-function apply_temperature_bc!(mesh)
+function apply_temperature_bc!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global T, T_boundary
 
     for (node_id, temperature) in mesh.temperature_bc
-        T[node_id] = temperature
+        tf_id = get(mesh.temperature_bc_tf, node_id, 0)
+        T[node_id] = bc_value(time_functions, tf_id, temperature, t)
         T_boundary[node_id] = 0   # frozen from here on
     end
 end
 
 
 """
-    apply_concentration_bc!(mesh::MeshData)
+    apply_concentration_bc!(mesh::MeshData, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
 
 Apply concentration boundary conditions from mesh data to the global C_g array.
-This function sets fixed gas concentrations at nodes where concentration 
+This function sets fixed gas concentrations at nodes where concentration
 boundary conditions are specified.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing concentration BC data
+- `time_functions`: Curve table from the calculation file, empty for a constant model
+- `t`: Time to seed time-driven nodes at, 0 for a fresh run or the checkpoint time
 
 # Note
 - Modifies global variable `C_g`
-- These values should be maintained throughout the simulation for BC nodes
+- A node with no time function keeps this value for the whole run, since
+  `P_boundary` gates its rate to zero. A time-driven node is rewritten every
+  step by the solver, because gating the rate holds the value still but nothing
+  would otherwise advance it.
 """
-function apply_concentration_bc!(mesh)
+function apply_concentration_bc!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global C_g, NGases, P_boundary
-    
+
     # Apply nodal concentration boundary conditions
     for (node_id, concentrations) in mesh.concentration_bc
+        tf_ids = get(mesh.concentration_bc_tf, node_id, Int[])
         @threads for gas_idx in 1:NGases
-            C_g[node_id, gas_idx] = concentrations[gas_idx]
+            tf_id = gas_idx <= length(tf_ids) ? tf_ids[gas_idx] : 0
+            C_g[node_id, gas_idx] = bc_value(time_functions, tf_id,
+                                             concentrations[gas_idx], t)
             P_boundary[node_id, gas_idx] = 0  # Mark node as having concentration BC
         end
     end
@@ -264,26 +277,29 @@ end
 
 
 """
-    apply_pressure_bc!(mesh::MeshData)
+    apply_pressure_bc!(mesh::MeshData, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
 
 Apply absolute pressure boundary conditions from mesh data to the global P array.
-This function sets fixed pressures at nodes where pressure boundary conditions 
+This function sets fixed pressures at nodes where pressure boundary conditions
 are specified and restricts all gases at those nodes.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing pressure BC data
+- `time_functions`: Curve table from the calculation file, empty for a constant model
+- `t`: Time to seed time-driven nodes at, 0 for a fresh run or the checkpoint time
 
 # Note
 - Modifies global variables `P` and `P_boundary`
 - P_boundary is set to 0 for all gases at pressure BC nodes
 - These values should be maintained throughout the simulation for BC nodes
 """
-function apply_pressure_bc!(mesh)
+function apply_pressure_bc!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global P, P_boundary
-    
+
     # Apply nodal pressure boundary conditions
     for (node_id, pressure) in mesh.absolute_pressure_bc
-        P[node_id] = pressure         
+        tf_id = get(mesh.absolute_pressure_tf, node_id, 0)
+        P[node_id] = bc_value(time_functions, tf_id, pressure, t)
         # Restrict all gases at this node
         #P_boundary[node_id, :] .= 0  # Mark node as having pressure BC
     end
@@ -400,18 +416,21 @@ This is a convenience function that calls all individual application functions.
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing all initial and boundary condition data
 - `materials`: Material data structure containing soil and gas properties
+- `time_functions`: Curve table from the calculation file, empty for a constant model
+- `t`: Time to seed time-driven boundaries at, 0 for a fresh run
 
 # Note
 - Modifies global variables: `C_g`, `T`, `P`, `C_lime`
 - Call this after `zero_variables!()` to set up the initial state
 """
-function apply_all_initial_conditions!(mesh, materials)
+function apply_all_initial_conditions!(mesh, materials,
+                                       time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     apply_initial_concentrations!(mesh)
     apply_initial_temperature!(mesh)
-    apply_temperature_bc!(mesh)
-    apply_concentration_bc!(mesh)
+    apply_temperature_bc!(mesh, time_functions, t)
+    apply_concentration_bc!(mesh, time_functions, t)
     apply_partial_pressure_bc!(mesh)
-    apply_pressure_bc!(mesh)
+    apply_pressure_bc!(mesh, time_functions, t)
     apply_initial_lime_concentration!(mesh, materials)
     
     println("\nAll initial conditions and BCs applied successfully")

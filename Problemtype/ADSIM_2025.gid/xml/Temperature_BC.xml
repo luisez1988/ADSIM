@@ -2,4 +2,5 @@
 
 <condition n="temperature_boundary" pn="Prescribed Temperature" icon="icon_temperature_bc.png" ov="point,line,surface" help="Hold the temperature fixed on this entity. The solver freezes these nodes: no conduction, advection or reaction heating will move them. Requires heat conduction or heat advection to be enabled in the calculation data. Do not apply this and a convective heat boundary to the same entity - the two thermal boundary sets must be disjoint.">
 	<value n="prescribed_temperature" pn="Temperature [Tm]" v="298.15" help="Absolute temperature held at these nodes."/>
+	<value n="time_function" pn="Time variation" v="Constant" values="[ADSIM_2025::GetTimeFunctionsList]" help="Curve from the Time functions container that drives this temperature in time. Constant holds the value above for the whole calculation. A prescribed temperature history is applied whether or not heat transport is enabled, since it also drives the pressure through the ideal gas law."/>
 </condition>

@@ -28,9 +28,103 @@ proc ADSIM::WriteCalculationData { filename } {
     
     # Write data saving and probing settings
     ADSIM::WriteDataSaving $root
-    
+
+    # Write time functions (curves that drive boundary conditions in time)
+    ADSIM::WriteTimeFunctions $root
+
     # Close the file
     GiD_WriteCalculationFile end
+}
+
+#===============================================================================
+# Write time functions
+#
+# One [[time_function]] table per curve defined in the Time functions container.
+# The id is the 1 based position of the curve in the tree, which is exactly what
+# ADSIM::GetTimeFunctionMap in WriteMeshFile.tcl assigns when it turns the name
+# picked in a boundary condition into the integer written to the mesh file. The
+# two must stay in step: they are both derived from document order.
+#
+# Only the keys that matter for the chosen type are written, so a ramp does not
+# emit period and phase and the calculation file stays readable.
+#===============================================================================
+proc ADSIM::WriteTimeFunctions { root } {
+    set xp {//container[@n="time_functions"]/blockdata}
+    set blocks [$root selectNodes $xp]
+
+    if {[llength $blocks] == 0} {
+        return
+    }
+
+    GiD_WriteCalculationFile puts "# Curves f(t) driving the time dependent boundary conditions."
+    GiD_WriteCalculationFile puts "# Referenced by id from the *_tf blocks of the mesh file."
+    GiD_WriteCalculationFile puts ""
+
+    set id 0
+    foreach block $blocks {
+        incr id
+
+        set name [$block @name]
+        set type [$block selectNodes {string(value[@n="type"]/@v)}]
+        set mode [$block selectNodes {string(value[@n="mode"]/@v)}]
+
+        if {$type == ""} { set type "constant" }
+        if {$mode == ""} { set mode "absolute" }
+
+        GiD_WriteCalculationFile puts "\[\[time_function\]\]"
+        GiD_WriteCalculationFile puts "id = $id"
+        GiD_WriteCalculationFile puts "name = \"$name\""
+        GiD_WriteCalculationFile puts "type = \"$type\""
+        GiD_WriteCalculationFile puts "mode = \"$mode\""
+
+        switch -- $type {
+            "ramp" {
+                foreach key {t_start t_end v_start v_end} {
+                    set v [$block selectNodes [format {string(value[@n="%s"]/@v)} $key]]
+                    if {$v == ""} { set v 0.0 }
+                    GiD_WriteCalculationFile puts "$key = $v"
+                }
+            }
+            "periodic" {
+                set wave [$block selectNodes {string(value[@n="wave"]/@v)}]
+                if {$wave == ""} { set wave "sine" }
+                GiD_WriteCalculationFile puts "wave = \"$wave\""
+                foreach key {mean amplitude period phase t_start} {
+                    set v [$block selectNodes [format {string(value[@n="%s"]/@v)} $key]]
+                    if {$v == ""} { set v 0.0 }
+                    GiD_WriteCalculationFile puts "$key = $v"
+                }
+            }
+            "table" {
+                # Only the file name is written: the CSV itself is copied into the
+                # generated folder by ADSIM::CopyTimeSeriesFiles, and the solver
+                # resolves a relative name against the folder holding this file.
+                set file [$block selectNodes {string(value[@n="file"]/@v)}]
+                GiD_WriteCalculationFile puts "file = \"[file tail $file]\""
+
+                foreach key {interpolation before after} {
+                    set v [$block selectNodes [format {string(value[@n="%s"]/@v)} $key]]
+                    if {$v == ""} { set v "hold" }
+                    GiD_WriteCalculationFile puts "$key = \"$v\""
+                }
+                foreach key {time_offset time_scale} {
+                    set v [$block selectNodes [format {string(value[@n="%s"]/@v)} $key]]
+                    if {$v == ""} { set v [expr {$key eq "time_scale" ? 1.0 : 0.0}] }
+                    GiD_WriteCalculationFile puts "$key = $v"
+                }
+
+                set avg [$block selectNodes {string(value[@n="average"]/@v)}]
+                GiD_WriteCalculationFile puts "average = [expr {$avg == 1 ? "true" : "false"}]"
+            }
+            default {
+                set v [$block selectNodes {string(value[@n="value"]/@v)}]
+                if {$v == ""} { set v 0.0 }
+                GiD_WriteCalculationFile puts "value = $v"
+            }
+        }
+
+        GiD_WriteCalculationFile puts ""
+    }
 }
 
 #===============================================================================

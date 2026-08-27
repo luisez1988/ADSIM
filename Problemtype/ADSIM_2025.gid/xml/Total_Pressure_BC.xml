@@ -2,5 +2,6 @@
 
 <condition n="gas_absolute_boundary" pn="Absolute Pressure" icon="icon_pressure_bc.png" ov="point,line,surface" help="Use this condition to constrain absolute pressure boundary conditions">
 	<value n="absolute_pressure" pn="Absolute Pressure [F/L^2]" v="0.0" />
+	<value n="time_function" pn="Time variation" v="Constant" values="[ADSIM_2025::GetTimeFunctionsList]" help="Curve from the Time functions container that drives this pressure in time. Constant holds the value above for the whole calculation. Note that the critical time step is computed once from the initial state, so a curve that raises the pressure well above its starting value may need a lower Courant number to stay stable."/>
 	<!-- <value n="vacating_gas_index" pn="Vacating gas index" v="1" values="[ADSIM_2025::GetGasIndices]" help="Select the gas index that will vacate through this boundary" /> -->
 </condition>

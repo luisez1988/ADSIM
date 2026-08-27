@@ -23,6 +23,7 @@ using .ADSIMVersion: get_version, get_version_string
 # Include data reading modules
 include("read_mesh.jl")
 include("read_materials.jl")
+include("time_functions.jl")
 include("read_calc_params.jl")
 include("initialize_variables.jl")
 include("initialize_flows.jl")
@@ -161,8 +162,18 @@ function main()
 
         # Step 3: Read calculation parameters
         log_print("\n[3/8] Reading calculation parameters file: $(calc_file)")
-        calc_params = get_all_calc_params(calc_file)
+        calc_params = get_all_calc_params(calc_file, data_dir)
         log_print(log_analysis_type(calc_params["solver_settings"]))
+
+        # Time functions drive the boundary conditions in time. A model without
+        # them keeps every boundary constant, exactly as before.
+        time_functions = calc_params["time_functions"]
+        validate_time_function_ids(time_functions, mesh)
+        if !isempty(time_functions)
+            log_print("   ✓ Loaded $(length(time_functions)) time function(s) for " *
+                      "time-dependent boundary conditions")
+        end
+
         log_print("   ✓ Total simulation time: $(calc_params["time_stepping"]["total_simulation_time"]) $(calc_params["units"]["time_unit"])")
 
         # Step 3.5: Validate reaction kinetics requirements
@@ -216,18 +227,28 @@ function main()
         end
 
         # Step 5: Apply initial conditions and initialize flows
+        #
+        # Time-driven boundaries are seeded at the time the run actually starts:
+        # 0 for a fresh run, the checkpoint time for a restart, so a later stage
+        # picks its curves up where the previous stage left them.
+        bc_start_time = checkpoint_loaded ? initial_state.current_time : 0.0
+
         if !checkpoint_loaded
             log_print("\n[5/8] Applying initial conditions and initializing flows")
-            apply_all_initial_conditions!(mesh, materials)
-            initialize_all_flows!(mesh, materials, Nnodes, NGases)
+            apply_all_initial_conditions!(mesh, materials, time_functions, bc_start_time)
+            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time)
             log_print("   ✓ Initial and boundary conditions applied")
         else
             log_print("\n[5/8] Applying boundary conditions from mesh file")
             # Apply boundary conditions from mesh file (may have changed between stages)
-            # This sets P_boundary, applies concentration and pressure BCs
-            apply_concentration_bc!(mesh)
-            apply_pressure_bc!(mesh)
-            
+            # This sets P_boundary and T_boundary, and applies the prescribed values.
+            # apply_temperature_bc! belongs here too: without it T_boundary stays
+            # all ones after a restart and prescribed temperature nodes are never
+            # frozen.
+            apply_concentration_bc!(mesh, time_functions, bc_start_time)
+            apply_pressure_bc!(mesh, time_functions, bc_start_time)
+            apply_temperature_bc!(mesh, time_functions, bc_start_time)
+
             # Save evolved state variables that will be overwritten
             # when we calculate Caco3_max
             C_lime_checkpoint = copy(C_lime)
@@ -251,7 +272,7 @@ function main()
             # as those come from the checkpoint state
             
             # Initialize flow arrays and boundary influences
-            initialize_all_flows!(mesh, materials, Nnodes, NGases)
+            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time)
             log_print("   ✓ Boundary conditions reapplied from mesh file")
             log_print("   ✓ Caco3_max and C_lime_residual recalculated from materials")
             log_print("   ✓ Flow arrays and boundary influences initialized")
@@ -270,6 +291,11 @@ function main()
         log_print("   ✓ Courant number: $(time_data.courant_number)")
         log_print(@sprintf("   ✓ Actual time step: %.4g %s", time_data.actual_dt, calc_params["units"]["time_unit"]))
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
+
+        # A table sampled more finely than the time step is aliased: the solver
+        # steps straight over samples the file recorded. Say so once, here, now
+        # that the step is known.
+        warn_if_aliased(time_functions, time_data.actual_dt, log_print)
 
         # Step 8: Run fully explicit solver
         final_state = fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state, current_stage)

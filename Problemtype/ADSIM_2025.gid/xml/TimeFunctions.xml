@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?><!-- -*- coding: utf-8; mode: SGML -*- -->
+
+<!-- TIME FUNCTIONS
+     Reusable curves f(t) that drive boundary conditions in time. Define a curve
+     here once, then select it by name in the "Time variation" field of any
+     boundary condition. One curve can drive as many boundaries as you like.
+
+     The fields of each curve are shown and hidden according to its type, so a
+     ramp shows only its endpoints and a table only its file and lookup rules.
+-->
+
+<container n="time_functions" pn="Time functions" icon="icon_scientific.png"
+           help="Curves f(t) that make boundary conditions vary in time. Add one curve per variation you need, then reference it by name from a boundary condition. Leaving a boundary condition set to Constant keeps the behaviour of a model without any time functions.">
+
+	<blockdata n="time_function" name="Time function 1" sequence='1'
+	           editable_name='unique' morebutton="1" icon="icon_scientific.png"
+	           help="One curve f(t). Rename it to something meaningful: the name is what you pick from the Time variation field of a boundary condition.">
+
+		<value n="type" pn="Type" v="ramp" values="ramp,periodic,table,constant"
+		       help="ramp: linear between two points in time, held flat outside. periodic: a repeating wave. table: values read from a CSV file. constant: a flat value, useful only in multiplier mode."/>
+
+		<value n="mode" pn="Mode" v="absolute" values="absolute,multiplier"
+		       help="absolute: this curve IS the boundary value, in the same units as the boundary condition field, and the number typed there is ignored. multiplier: the applied boundary condition is (the value typed in the boundary condition) x f(t), so f is dimensionless. Use absolute for measured data, multiplier to scale a magnitude you have already entered."/>
+
+		<!-- ____________________________________________________________ -->
+		<!-- Ramp -->
+		<!-- ____________________________________________________________ -->
+		<value n="t_start" pn="Start time [T]" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState ramp,periodic %W]"
+		       help="For a ramp, the time the rise begins; the value is held at the start value before it. For a periodic curve, the time the cycle is measured from."/>
+
+		<value n="t_end" pn="End time [T]" v="1.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState ramp %W]"
+		       help="The time the rise ends. The value is held at the end value after it. Must be greater than the start time."/>
+
+		<value n="v_start" pn="Start value" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState ramp %W]"
+		       help="Value at and before the start time, in the units of the boundary condition this curve drives."/>
+
+		<value n="v_end" pn="End value" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState ramp %W]"
+		       help="Value at and after the end time."/>
+
+		<!-- ____________________________________________________________ -->
+		<!-- Periodic -->
+		<!-- ____________________________________________________________ -->
+		<value n="wave" pn="Wave form" v="sine" values="sine,square,triangle,sawtooth"
+		       state="[ADSIM_2025::TimeFunctionFieldState periodic %W]"
+		       help="All four forms peak at the mean plus the amplitude and trough at the mean minus it, so the amplitude means the same thing whichever you pick."/>
+
+		<value n="mean" pn="Mean value" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState periodic %W]"
+		       help="Value the wave oscillates about, in the units of the boundary condition."/>
+
+		<value n="amplitude" pn="Amplitude" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState periodic %W]"
+		       help="Half the peak to trough swing."/>
+
+		<value n="period" pn="Period [T]" v="1.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState periodic %W]"
+		       help="Duration of one cycle. For a daily cycle in a model running in seconds this is 86400. Must be positive."/>
+
+		<value n="phase" pn="Phase [rad]" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState periodic %W]"
+		       help="Phase offset in radians. Use pi/2 = 1.5708 to start at the peak instead of at the mean."/>
+
+		<!-- ____________________________________________________________ -->
+		<!-- Table read from a CSV file -->
+		<!-- ____________________________________________________________ -->
+		<value n="file" pn="CSV file" v=""
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="Name of a two column CSV file holding time in the first column and the boundary value in the second. Times must increase. A header row and lines beginning with # are ignored. Use the ADSIM menu, Import time series CSV, to browse for a file and copy it next to the project; then type its name here. The file is copied into the .ADSIM folder when the input files are generated."/>
+
+		<value n="interpolation" pn="Interpolation" v="linear" values="linear,step"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="linear: straight line between samples. step: hold each sample until the next one. The solver samples the curve at its own time step, which is independent of the spacing in the file."/>
+
+		<value n="before" pn="Before first sample" v="hold" values="hold,zero,repeat,error"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="What to return for times before the first row of the file. hold: the first value. zero: nothing. repeat: cycle the file. error: stop the calculation."/>
+
+		<value n="after" pn="After last sample" v="hold" values="hold,zero,repeat,error"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="What to return for times past the last row of the file. hold: the last value. zero: nothing. repeat: cycle the file, which is how you drive a long run from one recorded cycle. error: stop the calculation."/>
+
+		<value n="time_offset" pn="Time offset [T]" v="0.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="Added to every time in the file after scaling. Use it to start a recorded history at a later point of the simulation."/>
+
+		<value n="time_scale" pn="Time scale" v="1.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="Multiplies every time in the file. A file recorded in hours driving a model running in seconds needs 3600. Must be positive."/>
+
+		<value n="average" pn="Average over time step" v="0" values="0,1"
+		       state="[ADSIM_2025::TimeFunctionFieldState table %W]"
+		       help="Integrate the curve over each time step instead of sampling it at one instant. Only meaningful on a flow boundary, where it keeps the total injected mass correct even when the time step is coarser than the spacing of the file. Leave off for prescribed values."/>
+
+		<!-- ____________________________________________________________ -->
+		<!-- Constant -->
+		<!-- ____________________________________________________________ -->
+		<value n="value" pn="Value" v="1.0"
+		       state="[ADSIM_2025::TimeFunctionFieldState constant %W]"
+		       help="A curve that never changes. Mostly useful in multiplier mode to scale a boundary condition by a fixed factor."/>
+
+	</blockdata>
+
+</container>

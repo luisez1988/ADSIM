@@ -140,3 +140,133 @@ ElmID MatIndex
 end material
 ```
 The structure consists of a list of elements with the material assigned to each. E.g., `12 1` indicates material index 1 is assigned to element 12.
+
+## Time-dependent boundary conditions
+
+Any of the four boundaries below can be driven by a *time function*: a named
+curve `f(t)` defined once in the calculation TOML and referenced from the mesh
+file by integer id. Id `0` means "no curve": the boundary holds the constant
+value from its own block, which is what a mesh file without any of these extra
+blocks gives.
+
+The ids live in blocks that mirror the value block they belong to, one line per
+node, in the same node order and covering the same nodes:
+
+| block | payload | drives |
+|---|---|---|
+| `concentration_bc_tf` | `NodeID tf_1 ... tf_nGas` | `concentration_bc` |
+| `uniform_flow_bc_tf` | `NodeID tf_1 ... tf_nGas` | `uniform_flow_bc` |
+| `absolute_pressure_tf` | `NodeID tf` | `absolute_pressure` |
+| `temperature_bc_tf` | `NodeID tf` | `temperature_bc` |
+
+Each block is optional, and so is any node inside it. For example:
+
+```
+temperature_bc
+2
+1 350
+4 350
+end temperature_bc
+
+temperature_bc_tf
+2
+1 2
+4 0
+end temperature_bc_tf
+```
+
+drives node 1 with curve 2 and leaves node 4 fixed at 350.
+
+The ids are 1-based positions of the `[[time_function]]` entries in
+`<project>_calc.toml`, in file order. Both files are written from the same GiD
+project in one pass, so they always agree; the solver stops with an error if a
+mesh file references an id the calculation file does not define.
+
+### Curve definitions
+
+Curves are `[[time_function]]` tables in `<project>_calc.toml`. Every curve has
+an `id`, a `name`, a `type` and a `mode`:
+
+- `mode = "absolute"` - the curve **is** the boundary value, in the units of the
+  boundary condition, and the number in the mesh file is ignored.
+- `mode = "multiplier"` - the applied boundary is (mesh file value) x f(t), with
+  f dimensionless.
+
+```toml
+# Linear ramp, held flat outside [t_start, t_end]
+[[time_function]]
+id = 1
+name = "co2_ramp"
+type = "ramp"
+mode = "absolute"
+t_start = 0.0
+t_end = 3600.0
+v_start = 0.0
+v_end = 1.2
+
+# mean + amplitude * wave(2*pi*(t - t_start)/period + phase)
+# wave = sine | square | triangle | sawtooth, all peaking at +/- amplitude
+[[time_function]]
+id = 2
+name = "daily_ambient"
+type = "periodic"
+mode = "absolute"
+wave = "sine"
+mean = 293.15
+amplitude = 10.0
+period = 86400.0
+phase = 0.0
+t_start = 0.0
+
+# Lookup in a two column CSV of time and value
+[[time_function]]
+id = 3
+name = "measured_flux"
+type = "table"
+mode = "absolute"
+file = "measured_flux.csv"
+interpolation = "linear"   # linear | step (zero order hold)
+before = "hold"            # hold | zero | repeat | error
+after = "hold"
+time_offset = 0.0          # added to every time in the file, after scaling
+time_scale = 1.0           # multiplies every time; use 3600 for a file in hours
+average = false            # see below
+```
+
+### CSV files
+
+Two columns, time first. Blank lines and lines beginning with `#` are skipped,
+and a header row is detected automatically. Comma, semicolon, tab and plain
+whitespace all separate. Times must be strictly increasing; a file that breaks
+that is rejected at load with the offending line number.
+
+```
+# measured chamber pressure
+time,pressure
+0.0,101325.0
+3600.0,102000.0
+```
+
+`file` is resolved relative to the folder holding the calculation file, so the
+CSV travels with the input set. The problemtype copies it into the generated
+`.ADSIM` folder automatically.
+
+### Time step and file spacing
+
+A table is a continuous function of `t`, not a sequence of steps to march
+through, and the lookup is a stateless binary search. Nothing couples the file's
+sample spacing to the solver's time step, and a checkpoint restart resumes at
+the right point of every curve.
+
+- **Time step finer than the file** (the usual case): the interval between two
+  samples is sub-sampled exactly. Nothing to do.
+- **Time step coarser than the file**: samples in between are never visited and
+  the boundary is an aliased version of the data. The solver warns once at
+  start-up, naming the curve. For a *flow* boundary set `average = true`, which
+  integrates the curve over each step instead of sampling it at one instant and
+  keeps the total injected mass exactly right. For a prescribed value, reduce
+  the time step instead.
+
+Note that the critical time step is computed once from the initial state, so a
+curve that drives a pressure well above its starting value may need a lower
+Courant number to stay stable for the whole run.

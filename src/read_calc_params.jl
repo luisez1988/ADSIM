@@ -169,6 +169,23 @@ function get_probing_elements(calc_data::Dict)
 end
 
 """
+    get_time_functions_section(calc_data::Dict, data_dir::AbstractString)
+
+Build the time function table from the `[[time_function]]` section.
+
+Optional for the same reason as the probing section: a calculation file written
+without it yields an empty table and every boundary condition stays constant.
+`data_dir` is the folder holding the calculation file, and any CSV referenced by
+a table curve is resolved against it so the data travels with the input set.
+
+# Returns
+- `Dict{Int, TimeFunction}` keyed by the id referenced from the mesh file
+"""
+function get_time_functions_section(calc_data::Dict, data_dir::AbstractString)
+    return read_time_functions(calc_data, data_dir)
+end
+
+"""
     log_analysis_type(solver_settings::Dict)
 
 Generate analysis type log message based on enabled solver components.
@@ -248,20 +265,22 @@ function validate_reaction_kinetics_requirements(solver_settings::Dict, material
 end
 
 """
-    get_all_calc_params(filename::String)
+    get_all_calc_params(filename::String, data_dir::AbstractString = dirname(filename))
 
 Read calculation parameters from a TOML file and return a structured dictionary
 with all parsed parameters organized by category.
 
 # Arguments
 - `filename::String`: Path to the calculation parameters TOML file
+- `data_dir::AbstractString`: Folder any relative CSV path of a time function is
+  resolved against, defaulting to the folder holding the calculation file
 
 # Returns
 - Dictionary containing all calculation parameters in structured format
 """
-function get_all_calc_params(filename::String)
+function get_all_calc_params(filename::String, data_dir::AbstractString = dirname(filename))
     calc_data = read_calc_params(filename)
-    
+
     return Dict(
         "units" => get_units(calc_data),
         "gravity" => get_gravity(calc_data),
@@ -269,6 +288,7 @@ function get_all_calc_params(filename::String)
         "time_stepping" => get_time_stepping(calc_data),
         "data_saving_interval" => get_data_saving_interval(calc_data),
         "probing_nodes" => get_probing_nodes(calc_data),
-        "probing_elements" => get_probing_elements(calc_data)
+        "probing_elements" => get_probing_elements(calc_data),
+        "time_functions" => get_time_functions_section(calc_data, data_dir)
     )
 end

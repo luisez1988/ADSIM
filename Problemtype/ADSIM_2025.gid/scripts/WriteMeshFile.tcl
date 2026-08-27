@@ -31,12 +31,15 @@ proc ADSIM::WriteMeshFile { filename } {
     
     # Write concentration boundary conditions
     ADSIM::WriteMeshConcentrationBC $root
+    ADSIM::WriteMeshTimeFunctionsPerGas $root "concentration_bc_tf" "gas_fixities" {line point}
     
     # Write uniform flow boundary conditions
     ADSIM::WriteMeshFlowBC $root
+    ADSIM::WriteMeshTimeFunctionsPerGas $root "uniform_flow_bc_tf" "Gas_Flow" {line point}
     
     # Write absolute pressure boundary conditions
     ADSIM::WriteMeshPressureBC $root
+    ADSIM::WriteMeshTimeFunctionsScalar $root "absolute_pressure_tf" "gas_absolute_boundary" {line point}
     
     # Write partial pressure boundary conditions
     ADSIM::WriteMeshPartialPressureBC $root
@@ -49,6 +52,7 @@ proc ADSIM::WriteMeshFile { filename } {
 
     # Write thermal boundary conditions
     ADSIM::WriteMeshTemperatureBC $root
+    ADSIM::WriteMeshTimeFunctionsScalar $root "temperature_bc_tf" "temperature_boundary" {line point surface}
     ADSIM::WriteMeshConvectiveHeatBC $root
     
     # Write material assignation
@@ -118,6 +122,119 @@ proc ADSIM::WriteMeshElements { } {
     }
 
     GiD_WriteCalculationFile puts "end elements"
+    GiD_WriteCalculationFile puts ""
+}
+
+#===============================================================================
+# Time function support
+#
+# The mesh file carries the curve driving each boundary as an integer id, in a
+# block that mirrors the value block it belongs to. The ids are positions in the
+# Time functions container, assigned in document order, matching what
+# ADSIM::WriteTimeFunctions writes into the calculation file. Anything that is
+# not a known curve name - "Constant", empty, or a stale name left behind after a
+# curve was deleted - maps to 0, which the solver reads as "hold the constant".
+#===============================================================================
+proc ADSIM::GetTimeFunctionMap { root } {
+    set map [dict create]
+    set id 0
+    foreach block [$root selectNodes {//container[@n="time_functions"]/blockdata}] {
+        incr id
+        set name [$block @name]
+        if {$name ne ""} {
+            dict set map $name $id
+        }
+    }
+    return $map
+}
+
+proc ADSIM::TimeFunctionId { map name } {
+    if {$name eq "" || $name eq "Constant"} {
+        return 0
+    }
+    if {[dict exists $map $name]} {
+        return [dict get $map $name]
+    }
+    return 0
+}
+
+#-------------------------------------------------------------------------------
+# Write a per-gas block of curve ids, mirroring a multi gas value block.
+#
+# `ov_types` must be the same list the value writer iterates, so the two blocks
+# never disagree about which nodes exist.
+#-------------------------------------------------------------------------------
+proc ADSIM::WriteMeshTimeFunctionsPerGas { root block_name condition ov_types } {
+    set map [ADSIM::GetTimeFunctionMap $root]
+    if {[dict size $map] == 0} {
+        return
+    }
+
+    set xp_gases {//container[@n="materials"]/container[@n="m_gas"]/blockdata}
+    set num_gases [llength [$root selectNodes $xp_gases]]
+
+    set formats ""
+    set any 0
+
+    foreach ov_type $ov_types {
+        set xp [format_xpath {container[@n="BC"]/condition[@n=%s]/group[@ov=%s]} $condition $ov_type]
+        foreach gNode [$root selectNodes $xp] {
+            set aux ""
+            for {set i 1} {$i <= $num_gases} {incr i} {
+                set name [$gNode selectNodes [format {string(value[@n="time_function_gas_%d"]/@v)} $i]]
+                set tf_id [ADSIM::TimeFunctionId $map $name]
+                if {$tf_id != 0} { set any 1 }
+                append aux "$tf_id "
+            }
+            dict set formats [$gNode @n] "%d $aux\n"
+        }
+    }
+
+    # Nothing on this boundary is time driven: leave the block out entirely so
+    # models that use time functions elsewhere still produce a clean mesh file.
+    if {!$any} {
+        return
+    }
+
+    GiD_WriteCalculationFile puts $block_name
+    set counter [GiD_WriteCalculationFile nodes -count $formats]
+    GiD_WriteCalculationFile puts $counter
+    GiD_WriteCalculationFile nodes $formats
+    GiD_WriteCalculationFile puts "end $block_name"
+    GiD_WriteCalculationFile puts ""
+}
+
+#-------------------------------------------------------------------------------
+# Write a single valued block of curve ids, mirroring a scalar value block.
+#-------------------------------------------------------------------------------
+proc ADSIM::WriteMeshTimeFunctionsScalar { root block_name condition ov_types } {
+    set map [ADSIM::GetTimeFunctionMap $root]
+    if {[dict size $map] == 0} {
+        return
+    }
+
+    set formats ""
+    set any 0
+
+    foreach ov_type $ov_types {
+        set xp [format_xpath {container[@n="BC"]/condition[@n=%s]/group[@ov=%s]} $condition $ov_type]
+        foreach gNode [$root selectNodes $xp] {
+            set name [$gNode selectNodes {string(value[@n="time_function"]/@v)}]
+            set tf_id [ADSIM::TimeFunctionId $map $name]
+            if {$tf_id != 0} { set any 1 }
+            dict set formats [$gNode @n] "%d $tf_id\n"
+        }
+    }
+
+    if {!$any} {
+        return
+    }
+
+    GiD_WriteCalculationFile puts $block_name
+    set counter [GiD_WriteCalculationFile nodes -count $formats]
+    GiD_WriteCalculationFile puts $counter
+    GiD_WriteCalculationFile nodes $formats
+    GiD_WriteCalculationFile puts "end $block_name"
     GiD_WriteCalculationFile puts ""
 }
 

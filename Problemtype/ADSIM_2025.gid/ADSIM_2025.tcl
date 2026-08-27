@@ -21,12 +21,13 @@ proc InitGIDProject { dir } {
 	# add ADSIM menu
 	GiDMenu::Create "ADSIM" "PRE" 5 =
     GiDMenu::InsertOption "ADSIM" [list "Generate ADSIM Files"] 0 PRE "ADSIM::Calculate" "Control-B" "[file join $dir images generate.png]" replace =
-    GiDMenu::InsertOption "ADSIM" [list "---"] 1 PRE "" "" "" replace =
-	GiDMenu::InsertOption "ADSIM" [list "GitHub Repository..."] 2 PRE "ADSIM::Github" "" "[file join $dir images icon_Github.png]" replace =
-	GiDMenu::InsertOption "ADSIM" [list "Scientific Manuscripts..."] 3 PRE "ADSIM::Scientific" "" "[file join $dir images icon_scientific.png]" replace =
-	GiDMenu::InsertOption "ADSIM" [list "Sample projects..."] 4 PRE "ADSIM::Sample" "" "[file join $dir images icon_samples.png]" replace =
-    GiDMenu::InsertOption "ADSIM" [list "Disclaimer..."] 5 PRE "ADSIM::Disclaimer" "" "[file join $dir images icon_ADSIM.png]" replace =
-	GiDMenu::InsertOption "ADSIM" [list "About..."] 6 PRE "ADSIM::About" "" "[file join $dir images icon_ADSIM.png]" replace =
+    GiDMenu::InsertOption "ADSIM" [list "Import time series CSV..."] 1 PRE "ADSIM::ImportTimeSeries" "" "[file join $dir images icon_scientific.png]" replace =
+    GiDMenu::InsertOption "ADSIM" [list "---"] 2 PRE "" "" "" replace =
+	GiDMenu::InsertOption "ADSIM" [list "GitHub Repository..."] 3 PRE "ADSIM::Github" "" "[file join $dir images icon_Github.png]" replace =
+	GiDMenu::InsertOption "ADSIM" [list "Scientific Manuscripts..."] 4 PRE "ADSIM::Scientific" "" "[file join $dir images icon_scientific.png]" replace =
+	GiDMenu::InsertOption "ADSIM" [list "Sample projects..."] 5 PRE "ADSIM::Sample" "" "[file join $dir images icon_samples.png]" replace =
+    GiDMenu::InsertOption "ADSIM" [list "Disclaimer..."] 6 PRE "ADSIM::Disclaimer" "" "[file join $dir images icon_ADSIM.png]" replace =
+	GiDMenu::InsertOption "ADSIM" [list "About..."] 7 PRE "ADSIM::About" "" "[file join $dir images icon_ADSIM.png]" replace =
 
 	# simplify and adaptd HELP menu
 	#GiDMenu::RemoveOption "Help" [list "Customization help"] "PRE" _
@@ -176,13 +177,75 @@ proc ADSIM::Calculate { } {
 	  ADSIM::WriteCalculationData $calc_params_file
 	  ADSIM::WriteMaterialData $material_file
 	  ADSIM::WriteMeshFile $mesh_file
-	  
+
+	  # Copy any CSV a time function reads. This has to happen after the writers,
+	  # because the output folder is deleted and recreated above.
+	  set missing [ADSIM::CopyTimeSeriesFiles $output_folder]
+
 	  # Show success message
-	  tk_messageBox -title "ADSIM - Files Generated" -message "ADSIM input files have been successfully generated in:\n\n$output_folder" -icon info -type ok
+	  if {[llength $missing] > 0} {
+	      tk_messageBox -title "ADSIM - Missing time series files" -message "The input files were generated in:\n\n$output_folder\n\nBut these time series files could not be found and were NOT copied:\n\n[join $missing \n]\n\nThe calculation will fail until they are placed next to the project. Use the ADSIM menu, Import time series CSV, to bring them in." -icon warning -type ok
+	  } else {
+	      tk_messageBox -title "ADSIM - Files Generated" -message "ADSIM input files have been successfully generated in:\n\n$output_folder" -icon info -type ok
+	  }
 	  }
     }
 }
 
+
+#===============================================================================
+# Copy the CSV files read by table time functions into the generated folder.
+#
+# The calculation file names each table only by its basename, and the solver
+# resolves that against the folder holding the calculation file, so the data has
+# to sit beside it. The generated folder is wiped on every run, which is why this
+# is a copy at generation time rather than something the user does once.
+#
+# A name is looked for beside the project first, then as given, so both a bare
+# file name and a full path typed into the tree work.
+#
+# Returns the list of files that could not be found, for the caller to report.
+#===============================================================================
+proc ADSIM::CopyTimeSeriesFiles { output_folder } {
+    set missing [list]
+
+    set root [$::gid_groups_conds::doc documentElement]
+    set project_dir [file dirname [GiD_Info Project ModelName]]
+
+    foreach block [$root selectNodes {//container[@n="time_functions"]/blockdata}] {
+        set type [$block selectNodes {string(value[@n="type"]/@v)}]
+        if {$type ne "table"} {
+            continue
+        }
+
+        set file [$block selectNodes {string(value[@n="file"]/@v)}]
+        if {$file eq ""} {
+            lappend missing "[$block @name] (no file given)"
+            continue
+        }
+
+        set candidates [list [file join $project_dir $file] $file]
+        set source ""
+        foreach candidate $candidates {
+            if {[file exists $candidate] && [file isfile $candidate]} {
+                set source $candidate
+                break
+            }
+        }
+
+        if {$source eq ""} {
+            lappend missing "[$block @name]: $file"
+            continue
+        }
+
+        set target [file join $output_folder [file tail $file]]
+        if {[catch {file copy -force $source $target} err]} {
+            lappend missing "[$block @name]: $file ($err)"
+        }
+    }
+
+    return $missing
+}
 
 proc ADSIM::LoadScripts { } {
     variable problemtype_dir
@@ -477,6 +540,106 @@ proc find_material_id {material_name root} {
 ######################################################################
 # Check if a gas with the given index exists in Materials
 # Returns "normal" if gas exists, "hidden" if it doesn't
+#===============================================================================
+# Time functions
+#===============================================================================
+
+#-------------------------------------------------------------------------------
+# Fill the "Time variation" combo of a boundary condition.
+#
+# Returns "Constant" followed by the name of every curve defined in the Time
+# functions container, in tree order. "Constant" is always first and is the
+# default, so a boundary left alone behaves exactly as it did before time
+# functions existed.
+#-------------------------------------------------------------------------------
+proc ADSIM_2025::GetTimeFunctionsList { } {
+    set result [list "Constant"]
+
+    set root [customlib::GetBaseRoot]
+    if {$root == ""} {
+        return [join $result ,]
+    }
+
+    set xp {//container[@n="time_functions"]/blockdata}
+    foreach node [$root selectNodes $xp] {
+        set name [$node @name]
+        if {$name ne ""} {
+            lappend result $name
+        }
+    }
+
+    return [join $result ,]
+}
+
+#-------------------------------------------------------------------------------
+# Show or hide a field of a time function blockdata according to its type.
+#
+# `types` is a comma separated list of the types the field belongs to, so
+# state="[ADSIM_2025::TimeFunctionFieldState ramp,periodic %W]" shows the field
+# for a ramp and for a periodic curve and hides it otherwise. Same contract as
+# CheckGasExists above: return the literal "normal" or "hidden".
+#
+# %W is substituted by GiD with the node the state is being evaluated for, so
+# the xpath is relative to it and finds the type of *this* curve. domNode comes
+# last, the convention every other state callback in the GiD tree follows.
+#-------------------------------------------------------------------------------
+proc ADSIM_2025::TimeFunctionFieldState { types domNode } {
+    if {$domNode == ""} {
+        return "normal"
+    }
+
+    # Sibling value inside the same blockdata
+    set current [$domNode selectNodes {string(../value[@n="type"]/@v)}]
+    if {$current eq ""} {
+        return "normal"
+    }
+
+    if {[lsearch -exact [split $types ,] $current] >= 0} {
+        return "normal"
+    }
+    return "hidden"
+}
+
+#-------------------------------------------------------------------------------
+# Browse for a time series CSV and copy it next to the project.
+#
+# The generated input folder is deleted and rebuilt on every run, so the file
+# has to live with the project and be copied in at generation time; that copy is
+# done by ADSIM::CopyTimeSeriesFiles. This command only puts the file somewhere
+# stable and tells the user the name to type into the CSV file field.
+#-------------------------------------------------------------------------------
+proc ADSIM::ImportTimeSeries { } {
+    set project_path [GiD_Info Project ModelName]
+    if {$project_path == "" || $project_path == "UNNAMED"} {
+        tk_messageBox -title "ADSIM - Import time series" \
+            -message "Please save your project before importing a time series file." \
+            -icon error -type ok
+        return
+    }
+
+    set source [tk_getOpenFile -title "Select a time series CSV file" \
+                    -filetypes {{"CSV files" {.csv}} {"Text files" {.txt}} {"All files" {*}}}]
+    if {$source == ""} {
+        return
+    }
+
+    set target_dir [file dirname $project_path]
+    set basename [file tail $source]
+    set target [file join $target_dir $basename]
+
+    if {[file normalize $source] ne [file normalize $target]} {
+        if {[catch {file copy -force $source $target} err]} {
+            tk_messageBox -title "ADSIM - Import time series" \
+                -message "Could not copy the file:\n\n$err" -icon error -type ok
+            return
+        }
+    }
+
+    tk_messageBox -title "ADSIM - Import time series" \
+        -message "Copied to:\n\n$target\n\nNow create a Time function of type 'table' and enter this name in its CSV file field:\n\n$basename" \
+        -icon info -type ok
+}
+
 proc ADSIM_2025::CheckGasExists { gas_index } {
     set root [customlib::GetBaseRoot]
     if {$root == ""} {

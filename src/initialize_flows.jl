@@ -23,6 +23,12 @@ global q_source_sink::Vector{Float64} = Float64[]  # Only for CO2
 # Each tuple contains: (element_id, node_i, node_j, edge_length, outward_normal)
 global boundary_edges::Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}} = []
 
+# Tributary edge length of each uniform flow BC node, computed once during
+# initialization. Cached because a time-driven flow boundary refills q_boundary
+# on every step, and calculate_boundary_influence_lengths walks the element
+# connectivity of every boundary node - far too expensive to repeat in the loop.
+global flow_node_influences::Dict{Int, Float64} = Dict{Int, Float64}()
+
 #------------------------------------------------------------------------------
 # Initialize flow vectors
 #------------------------------------------------------------------------------
@@ -78,18 +84,25 @@ For 1D boundaries:
 - Flow values need to be weighted by nodal influence length
 - Flow is positive when entering the domain, negative when leaving
 """
-function apply_boundary_flows!(mesh)
-    global q_boundary, NGases    
-    
-    # Calculate influence length for each boundary node
-    influence_lengths = calculate_boundary_influence_lengths(mesh)
-    
+function apply_boundary_flows!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
+    global q_boundary, NGases, flow_node_influences
+
+    # Influence lengths are computed once in initialize_all_flows!; fall back to
+    # computing them here if this is called on its own.
+    if isempty(flow_node_influences) && !isempty(mesh.uniform_flow_bc)
+        flow_node_influences = calculate_boundary_influence_lengths(mesh)
+    end
+
     # Apply nodal uniform flow boundary conditions
-    for (node_id, flows) in mesh.uniform_flow_bc        
+    for (node_id, flows) in mesh.uniform_flow_bc
+        le = flow_node_influences[node_id]
+        tf_ids = get(mesh.uniform_flow_bc_tf, node_id, Int[])
         @threads for gas_idx in 1:NGases
+            tf_id = gas_idx <= length(tf_ids) ? tf_ids[gas_idx] : 0
             # Weight flows by nodal influence length
-            q_boundary[node_id, gas_idx] = flows[gas_idx] * influence_lengths[node_id]
-        end        
+            q_boundary[node_id, gas_idx] =
+                bc_value(time_functions, tf_id, flows[gas_idx], t) * le
+        end
     end
 end
 
@@ -152,20 +165,25 @@ Call sequence:
 - Should be called once during initialization after mesh and materials are loaded
 - Precomputes boundary edge geometry (length and outward normals) for efficiency
 """
-function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int)
-    global boundary_edges
-    
+function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int,
+                              time_functions = Dict{Int, TimeFunction}(), t = 0.0)
+    global boundary_edges, flow_node_influences
+
     zero_flow_vectors!(Nnodes, NGases)
-    
+
     # Precompute boundary edge geometry for pressure BC nodes
     # This is done once during initialization to avoid repeated calculation
     boundary_edges = identify_boundary_edges(mesh)
-    
-    apply_boundary_flows!(mesh)
+
+    # Same reasoning for the flow boundary: a time-driven flux rebuilds
+    # q_boundary every step and must not pay for this walk again
+    flow_node_influences = calculate_boundary_influence_lengths(mesh)
+
+    apply_boundary_flows!(mesh, time_functions, t)
 end
 
 
 # Export all public functions
 export zero_flow_vectors!, apply_boundary_flows!, initialize_all_flows!
 export q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink
-export boundary_edges
+export boundary_edges, flow_node_influences, calculate_boundary_influence_lengths

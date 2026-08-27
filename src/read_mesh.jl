@@ -27,6 +27,19 @@ Structure to store all mesh data and associated boundary/initial conditions.
   unset boundary gives, since zero flux is the natural condition of the weak form.
   The manuscript requires the two thermal boundary sets to be disjoint.
 - `materials::Dict{Int, Int}`: Material assignment (elem_id => material_index)
+
+Time-dependent boundaries are carried in parallel `*_tf` fields holding the id of
+the time function that drives each value, with 0 meaning "no curve, hold the
+constant". They are stored separately rather than as extra columns on the value
+lines because `parse_concentration_bc!` consumes every remaining field as a gas
+value and has no way to know how many gases there are. A mesh file written
+before this feature existed simply has no `*_tf` blocks, every id defaults to 0,
+and the boundaries behave exactly as they did.
+
+- `concentration_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...])
+- `uniform_flow_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...])
+- `absolute_pressure_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
+- `temperature_bc_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
 """
 
 mutable struct MeshData
@@ -43,10 +56,16 @@ mutable struct MeshData
     temperature_bc::Dict{Int, Float64}
     convective_heat_bc::Dict{Int, Vector{Float64}}
     materials::Dict{Int, Int}
-    
+
+    # Time function ids, parallel to the boundary fields above (0 = constant)
+    concentration_bc_tf::Dict{Int, Vector{Int}}
+    uniform_flow_bc_tf::Dict{Int, Vector{Int}}
+    absolute_pressure_tf::Dict{Int, Int}
+    temperature_bc_tf::Dict{Int, Int}
+
     function MeshData()
-        new(0, 0, 
-            zeros(Float64, 0, 0), 
+        new(0, 0,
+            zeros(Float64, 0, 0),
             zeros(Int, 0, 0),
             Dict{Int, Vector{Float64}}(),
             Dict{Int, Vector{Float64}}(),
@@ -56,6 +75,10 @@ mutable struct MeshData
             Dict{Int, Float64}(),
             Dict{Int, Float64}(),
             Dict{Int, Vector{Float64}}(),
+            Dict{Int, Int}(),
+            Dict{Int, Vector{Int}}(),
+            Dict{Int, Vector{Int}}(),
+            Dict{Int, Int}(),
             Dict{Int, Int}())
     end
 end
@@ -159,6 +182,24 @@ function read_mesh_file(filename::String)
             # Parse convective heat boundary (thermal Robin)
             elseif line == "convective_heat_bc"
                 line_idx = parse_convective_heat_bc!(mesh, lines, line_idx + 1)
+
+            # Parse time function ids attached to the boundary conditions above.
+            # Optional blocks: a mesh file without them has constant boundaries.
+            elseif line == "concentration_bc_tf"
+                line_idx = parse_bc_tf_vector!(mesh.concentration_bc_tf, lines,
+                                               line_idx + 1, "concentration_bc_tf")
+
+            elseif line == "uniform_flow_bc_tf"
+                line_idx = parse_bc_tf_vector!(mesh.uniform_flow_bc_tf, lines,
+                                               line_idx + 1, "uniform_flow_bc_tf")
+
+            elseif line == "absolute_pressure_tf"
+                line_idx = parse_bc_tf_scalar!(mesh.absolute_pressure_tf, lines,
+                                               line_idx + 1, "absolute_pressure_tf")
+
+            elseif line == "temperature_bc_tf"
+                line_idx = parse_bc_tf_scalar!(mesh.temperature_bc_tf, lines,
+                                               line_idx + 1, "temperature_bc_tf")
 
             # Parse materials
             elseif line == "materials"
@@ -438,6 +479,80 @@ function parse_convective_heat_bc!(mesh::MeshData, lines::Vector{String}, line_i
     end
 
     if strip(lines[line_idx]) == "end convective_heat_bc"
+        line_idx += 1
+    end
+
+    return line_idx
+end
+
+
+"""
+parse_bc_tf_vector!(target::Dict{Int, Vector{Int}}, lines, line_idx::Int, block::String) -> Int
+
+Parse a block of per-gas time function ids, one line per node:
+
+    concentration_bc_tf
+    2
+    40 1 0
+    42 1 0
+    end concentration_bc_tf
+
+Shares one parser between the concentration and flow blocks since they have the
+same shape. Ids are 1-based references into the `[[time_function]]` section of
+the calculation file; 0 means the gas keeps the constant value from the matching
+value block.
+
+# Returns
+- `Int`: Next line index to process
+"""
+function parse_bc_tf_vector!(target::Dict{Int, Vector{Int}}, lines::Vector{String},
+                             line_idx::Int, block::String)
+    counter = parse(Int, strip(lines[line_idx]))
+    line_idx += 1
+
+    for _ in 1:counter
+        parts = split(strip(lines[line_idx]))
+        node_id = parse(Int, parts[1])
+        target[node_id] = [parse(Int, parts[i]) for i in 2:length(parts)]
+        line_idx += 1
+    end
+
+    if strip(lines[line_idx]) == "end $(block)"
+        line_idx += 1
+    end
+
+    return line_idx
+end
+
+"""
+parse_bc_tf_scalar!(target::Dict{Int, Int}, lines, line_idx::Int, block::String) -> Int
+
+Parse a block of single time function ids, one line per node:
+
+    temperature_bc_tf
+    2
+    1 2
+    4 2
+    end temperature_bc_tf
+
+The scalar counterpart of `parse_bc_tf_vector!`, used by the absolute pressure
+and prescribed temperature boundaries.
+
+# Returns
+- `Int`: Next line index to process
+"""
+function parse_bc_tf_scalar!(target::Dict{Int, Int}, lines::Vector{String},
+                             line_idx::Int, block::String)
+    counter = parse(Int, strip(lines[line_idx]))
+    line_idx += 1
+
+    for _ in 1:counter
+        parts = split(strip(lines[line_idx]))
+        target[parse(Int, parts[1])] = parse(Int, parts[2])
+        line_idx += 1
+    end
+
+    if strip(lines[line_idx]) == "end $(block)"
         line_idx += 1
     end
 

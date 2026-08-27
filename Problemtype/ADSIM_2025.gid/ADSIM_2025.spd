@@ -18,6 +18,11 @@
   <!-- ############ Initial conditions ############ -->
   <include path="xml/InitialConditions.xml"/>
 
+  <!-- ############ Time functions ############ -->
+  <!-- Placed before the boundary conditions: curves are defined here, then
+       referenced by name from the Time variation field of each condition. -->
+  <include path="xml/TimeFunctions.xml"/>
+
   <!-- ############ Boundary Conditions ############ -->
   <include path="xml/BoundaryConditions.xml"/>
   

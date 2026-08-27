@@ -811,9 +811,97 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # retained rather than discarded once projected.
     v_gp_cache = zeros(Float64, Nelements, 4, NDim)
 
+    #______________________________________________________
+    # Time-dependent boundary conditions
+    #
+    # Flatten the curve references once, keeping only the entries that actually
+    # carry a curve, so the per-step cost is proportional to the number of
+    # time-driven boundary nodes and disappears entirely for a constant model.
+    # Each tuple also carries the constant value from the mesh file, which a
+    # multiplier curve scales and an absolute curve replaces.
+    #______________________________________________________
+    time_functions = calc_params["time_functions"]
+
+    transient_flow = [(node_id, g, ids[g], mesh.uniform_flow_bc[node_id][g])
+                      for (node_id, ids) in mesh.uniform_flow_bc_tf
+                      for g in 1:min(length(ids), NGases)
+                      if ids[g] != 0 && haskey(mesh.uniform_flow_bc, node_id)]
+
+    transient_conc = [(node_id, g, ids[g], mesh.concentration_bc[node_id][g])
+                      for (node_id, ids) in mesh.concentration_bc_tf
+                      for g in 1:min(length(ids), NGases)
+                      if ids[g] != 0 && haskey(mesh.concentration_bc, node_id)]
+
+    transient_press = [(node_id, id, mesh.absolute_pressure_bc[node_id])
+                       for (node_id, id) in mesh.absolute_pressure_tf
+                       if id != 0 && haskey(mesh.absolute_pressure_bc, node_id)]
+
+    transient_temp = [(node_id, id, mesh.temperature_bc[node_id])
+                      for (node_id, id) in mesh.temperature_bc_tf
+                      if id != 0 && haskey(mesh.temperature_bc, node_id)]
+
+    has_transient_flow = !isempty(transient_flow)
+    has_transient_conc = !isempty(transient_conc)
+    has_transient_press = !isempty(transient_press)
+    has_transient_temp = !isempty(transient_temp)
+
+    if has_transient_flow || has_transient_conc || has_transient_press || has_transient_temp
+        log_print("      Time-dependent boundaries: " *
+                  "$(length(transient_flow)) flow, $(length(transient_conc)) concentration, " *
+                  "$(length(transient_press)) pressure, $(length(transient_temp)) temperature")
+    end
+
     # Main time stepping loop
     save_data = false
+    # Reset at every output so the lime clamp warns once per output interval rather
+    # than once per node per step. Initialized here because the only other
+    # assignment is inside the output block: a run whose lime is exhausted before
+    # the first output would otherwise read it undefined.
+    negative_lime_warned = false
     for step in 1:num_steps
+
+        #______________________________________________________
+        # Refresh the time-dependent boundary conditions for this step
+        #
+        # The scheme is forward Euler: the state is at t_n, the rates are built
+        # from t_n, and the update lands at t_{n+1}. The two classes of boundary
+        # therefore take different times:
+        #
+        #   a Neumann flux ENTERS the rate      -> evaluate at t_n
+        #   a Dirichlet value is IMPOSED on the
+        #   new state                           -> evaluate at t_{n+1}
+        #
+        # dt is already this step's dt: it is adjusted at the end of the previous
+        # iteration to land exactly on the next output time, so t_next below is
+        # exact and does not drift across output boundaries.
+        #______________________________________________________
+        t_next = current_time + dt
+
+        if has_transient_flow
+            # q_boundary is prefilled at start-up and deliberately not zeroed in
+            # this loop, so overwrite only the entries a curve drives and leave
+            # the constant ones alone. dt is passed through so a table carrying
+            # average = true integrates over the step instead of point sampling,
+            # which is what keeps the injected mass right when the step is
+            # coarser than the file.
+            for (node_id, gas_idx, tf_id, q_const) in transient_flow
+                q_boundary[node_id, gas_idx] =
+                    bc_value(time_functions, tf_id, q_const, current_time, dt) *
+                    flow_node_influences[node_id]
+            end
+        end
+
+        if has_transient_press
+            # Move the target the Lagrange multipliers below drive towards, so
+            # they aim at the pressure this step ends at rather than the one the
+            # previous step ended at. T here is still T_n; the end-of-step
+            # re-imposition uses the updated T, and the difference is O(dt dT/dt),
+            # below the error of the scheme itself.
+            for (node_id, tf_id, p_const) in transient_press
+                total_concentration[node_id] =
+                    bc_value(time_functions, tf_id, p_const, t_next) / (R * T[node_id])
+            end
+        end
 
         #reset flow vectors (q_boundary is prefilled and not reset here)
         q_diffusion .= 0.0
@@ -1093,7 +1181,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 le = boundary_node_influences[j] #length of influence
                 #Get current total concentration at node j
                 C_total_j = sum(C_g[j, :])
-                C_rate_imposed = 0.0 #placeholder for imposed rate will change if a transient pressure is applied
+                # total_concentration[j] is the target this step must reach. For a
+                # transient pressure it was refreshed to the t_{n+1} value at the
+                # top of the step; for a constant one it is last step's imposed
+                # value, which is the same number.
 
                 #The correction λ/M is applied equally to every gas that is free to move
                 #at this node. A gas whose concentration is prescribed here cannot absorb
@@ -1524,6 +1615,20 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
+        # Prescribed temperatures that follow a curve. The T_boundary gate in the
+        # energy equation already zeroed the rate at these nodes, which holds the
+        # value still but never advances it, so the new value has to be written
+        # here. Outside the calculate_heat block on purpose: a prescribed
+        # temperature history is still meaningful with the energy equation off,
+        # where it drives the pressure through the ideal gas law. Placed before
+        # anything that divides by T, so the rest of the step sees the
+        # temperature it ends at.
+        if has_transient_temp
+            for (node_id, tf_id, T_const) in transient_temp
+                T[node_id] = bc_value(time_functions, tf_id, T_const, t_next)
+            end
+        end
+
         # Apply partial pressure boundary conditions after temperature update
         # This ensures partial pressure remains constant by updating concentrations
         # based on new temperature: C_g = P_partial / (R * T)
@@ -1534,14 +1639,31 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 C_g[node_id, gas_idx] = partial_pressures[gas_idx] / (R * T[node_id])
             end
         end
-        
+
+        # Prescribed concentrations that follow a curve. Unlike the pressure and
+        # partial pressure boundaries, a concentration Dirichlet is enforced by
+        # rate gating: P_boundary multiplies dC_g_dt to zero, which stops the
+        # solver moving the node but leaves nothing to advance it. A curve
+        # therefore has to write C_g explicitly. Placed before the sum below so
+        # the total concentration sees the imposed values.
+        if has_transient_conc
+            for (node_id, gas_idx, tf_id, C_const) in transient_conc
+                C_g[node_id, gas_idx] = bc_value(time_functions, tf_id, C_const, t_next)
+            end
+        end
+
         # Calculate total gas concentrations after all gases are updated
         total_concentration = vec(sum(C_g, dims=2))
 
         #Apply total pressure boundary condition at nodes
         for node_id in keys(mesh.absolute_pressure_bc)
-            # Apply fixed absolute pressure BC by setting total concentration
-            total_concentration[node_id] = mesh.absolute_pressure_bc[node_id] / (R * T[node_id])
+            # Apply absolute pressure BC by setting total concentration. Evaluated
+            # at t_next, the same time the Lagrange multipliers aimed at, so the
+            # target and its enforcement agree.
+            tf_id = get(mesh.absolute_pressure_tf, node_id, 0)
+            P_bc = bc_value(time_functions, tf_id,
+                            mesh.absolute_pressure_bc[node_id], t_next)
+            total_concentration[node_id] = P_bc / (R * T[node_id])
         end
 
         #Update pressure using ideal gas law
