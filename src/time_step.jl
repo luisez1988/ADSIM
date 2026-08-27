@@ -446,7 +446,7 @@ end
     calculate_critical_time_step(mesh::MeshData, materials, T_ref::Float64) -> Float64
 
 Calculate the critical time step based on three stability criteria:
-1. Diffusive time scale: h_min² × τ / (θ_g × D_max)
+1. Diffusive time scale: h_min² / (D_max × τ)
 2. Advective time scale: h_min² × (μ_g / (C_g^i × K × T × R))_min
 3. Reactive time scale: 1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r))
 
@@ -462,7 +462,7 @@ The critical time step is the minimum of these three values.
 
 # Formula
 ```
-Δt_crit = min{ h_min² × τ / (θ_g × D_max),
+Δt_crit = min{ h_min² / (D_max × τ),
                h_min² × (μ_g / (C_g^i × K × T × R))_min,
                1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r)) }
 ```
@@ -484,32 +484,33 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     # Get maximum diffusion coefficient
     D_max = get_maximum_diffusion_coefficient(materials)
 
-    # Minimum tortuosity across all soils
-    τ_min = Inf
+    # Maximum tortuosity across all soils. D_eff = θ_g τ D (Eq. effective_diffusion of
+    # the manuscript) is a multiplier, not a divisor, so the largest effective
+    # diffusivity — and hence the tightest stability bound — occurs at the largest τ.
+    τ_max = 0.0
     for soil_name in materials.soil_dictionary
         soil = materials.soils[soil_name]
-        τ_min = min(τ_min, soil.granular_tortuosity)
+        τ_max = max(τ_max, soil.granular_tortuosity)
     end
 
     # Gas diffusion.
     #
-    #     Δt <= h_min^2 τ / (2 D_max)
+    #     Δt <= h_min^2 / (2 D_max τ)
     #
     # theta_g does NOT appear. The discrete equation is
-    #     theta_g M_hat dC/dt = -(theta_g D / tau) K C
-    # so theta_g cancels and the operator is (D/tau) M_hat^-1 K, whose largest
-    # eigenvalue on a uniform quad mesh is 4(D/tau)/h^2. Forward Euler needs
+    #     theta_g M_hat dC/dt = -(theta_g D tau) K C
+    # so theta_g cancels and the operator is (D tau) M_hat^-1 K, whose largest
+    # eigenvalue on a uniform quad mesh is 4(D tau)/h^2. Forward Euler needs
     # dt <= 2/lambda_max, giving the expression above.
     #
-    # The earlier form h^2 tau/(4 theta_g D) carried a spurious 1/theta_g and a 4 in
-    # place of a 2. Verified against the true 2/lambda_max of the assembled operator:
-    # this expression matches it to 1.000000 at theta_g = 1.0 and at theta_g = 0.3318,
-    # while the old one was 0.5x and 1.51x of it respectively. That is why a Courant
-    # number above about 0.4 used to go unstable — at theta_g = 0.2 the old criterion
-    # was 2.5x too permissive, so only C_N <= 0.4 was actually stable.
+    # The earlier form h^2 tau/(4 theta_g D) carried a spurious 1/theta_g, a 4 in
+    # place of a 2, and tau in the numerator from when D_eff = theta_g D / tau. It was
+    # verified against the true 2/lambda_max of the assembled operator; that same
+    # eigenvalue argument, with D_eff now multiplying by tau instead of dividing,
+    # gives the expression above.
     dt_diffusion = Inf
     if use_diffusion && D_max > 0.0
-        dt_diffusion = (h_min^2 * τ_min) / (2 * D_max)
+        dt_diffusion = h_min^2 / (2 * D_max * τ_max)
     end
 
     # Gas advection

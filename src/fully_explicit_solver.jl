@@ -1001,10 +1001,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Diffusion calculation start here
                 #______________________________________________________
                 if calculate_diffusion
-                    #Update diffusion flow vector ∑_p θ_g^p * D_g^p * k_elm * det(J) * W_p / τ^p                    
+                    #Update diffusion flow vector ∑_p θ_g^p * D_g^p * τ^p * k_elm * det(J) * W_p
 
                     #local diffusion flow vector (per-chunk buffer)
-                    mul!(q_aux, K_elements[e], C_e, θ_g * D_g / τ, 0.0)
+                    mul!(q_aux, K_elements[e], C_e, θ_g * D_g * τ, 0.0)
 
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
