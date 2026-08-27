@@ -152,6 +152,8 @@ function run_case(name::AbstractString; verbose::Bool=false)
     tol = Float64(get(cfg, "tolerance", 0.02))
     check_steps = Int.(get(cfg, "check_steps", Int[]))
     component = Symbol(get(cfg, "component", "magnitude"))  # for vector fields
+    # Centre of the radial coordinate; used only when axis = "radius".
+    center = (Float64(get(cfg, "center_x", 0.0)), Float64(get(cfg, "center_y", 0.0)))
     snapshot = get(cfg, "snapshot", "all")                  # "all" or "last" (steady state)
     source = get(cfg, "source", "vtk")                      # "vtk" or "probe" (node time series)
     probe_node = Int(get(cfg, "probe_node", 0))
@@ -191,7 +193,8 @@ function run_case(name::AbstractString; verbose::Bool=false)
         vtk.time <= 0 && continue
         !isempty(check_steps) && !(vtk.time_step in check_steps) && continue
 
-        pos, num = line_profile(vtk, field; axis=axis, origin=origin, component=component)
+        pos, num = line_profile(vtk, field; axis=axis, origin=origin,
+                                component=component, center=center)
         exact = [Analytical.evaluate(spec, x, vtk.time) for x in pos]
 
         r = relative_l2(num, exact)

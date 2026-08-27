@@ -1,0 +1,59 @@
+# Verification case: transient heat conduction in a solid 2D disk.
+#
+# A disk of radius R = 1 m starts uniform at 373.15 K with its entire rim held at
+# 273.15 K from t = 0. Separation of variables gives the Fourier-Bessel series
+# (Carslaw & Jaeger, §7.6)
+#
+#   (T - Ts)/(T0 - Ts) = sum_n 2/(j_n J_1(j_n)) J_0(j_n r/R) exp(-alpha j_n^2 t/R^2)
+#
+# and the fundamental mode decays with tau = R^2/(alpha j_1^2) = 4.58e6 s. The run
+# covers 6.0e6 s = 1.31 tau, so the centre falls from 373.15 K to about 316 K:
+# the whole transient, not just its onset.
+#
+# WHY THIS CASE EXISTS
+# Every other case in the suite runs on an axis-aligned strip. There the
+# isoparametric Jacobian is diagonal, and a whole class of mapping errors cancels
+# identically. This case is the only one on a genuinely 2D unstructured mesh of
+# skewed general quads, and it is scored on an axisymmetric solution, so a
+# conduction operator that has picked up a direction dependence has nowhere to
+# hide: the answer must be the same at every angle on a mesh that is not.
+#
+# It was written after exactly such a bug was found. shape_functions.jl formed
+# dN/dx as B * inv(J) where the chain rule wants B * transpose(inv(J)); the two
+# agree whenever J is diagonal, so all seven 1D cases returned bit-identical
+# errors with the bug present and with it fixed, while this case moved from
+# 0.079 % to 4.007 % relative L2 (28.5 K worst-node error, and 20 K of spread
+# between nodes at equal radius that should have agreed to 0.05 K).
+#
+# The material is a single solid phase: porosity is 1e-6 rather than 0 only
+# because the solver assembles the gas lumped mass unconditionally and rejects
+# theta_g = 0, and at that value lambda_e and C_mix sit within one part in 1e7 of
+# their solid values.
+
+project        = "Thermal_disk"
+field          = "Temperature"
+# Radial scoring: each node's distance from the centre is its position, and every
+# node is kept as its own sample. Nodes on the same ring are deliberately not
+# averaged - the spread between them is precisely the error this case is here to
+# catch, and averaging a ring would hide it.
+axis           = "radius"
+center_x       = 0.0
+center_y       = 0.0
+# Measured worst is 0.079 %, at the first snapshot where the rim boundary layer is
+# thinnest relative to the local element size; by the last it has fallen to
+# 0.036 %. This leaves about 3x headroom, and still sits 16x below the 4.007 %
+# that the transposed-Jacobian bug produced, so the gate has room for ordinary
+# mesh or scheme changes while remaining decisive about the thing it tests.
+tolerance      = 0.0025
+check_steps    = []          # every saved step except t = 0
+
+[analytical]
+type  = "conduction_disk"
+T0    = 373.15       # uniform initial temperature [K]
+Ts    = 273.15       # prescribed rim temperature [K]
+R     = 1.0          # disk radius [m], matches the mesh
+# alpha = lambda_e / C_mix, both assembled exactly as the solver assembles them
+# from Thermal_disk_mat.toml with n = 1e-6, S_r = 0 and no initial gas:
+#   lambda_e = (1-n)*0.1 + n*0.025          = 0.099999925 W/(m.K)
+#   C_mix    = (1-n)*2.65*1000*1000         = 2.64999735e6 J/(m3.K)
+alpha = 3.773586e-8

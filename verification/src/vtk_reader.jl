@@ -121,7 +121,7 @@ function _field_values(vtk::VTKData, field::AbstractString, component::Symbol)
 end
 
 """
-    line_profile(vtk, field; axis=:y, origin=0.0, component=:magnitude)
+    line_profile(vtk, field; axis=:y, origin=0.0, component=:magnitude, center=(0.0,0.0))
 
 Build a 1D profile of `field` along coordinate `axis` (`:x`, `:y` or `:z`),
 which is exactly what a ParaView "Plot Over Line" produced. `position`
@@ -131,12 +131,28 @@ that boundary.
 
 Returns `(position, value)` sorted by position. Nodes that share the same
 position (e.g. the two columns of a 1D strip mesh) are averaged.
+
+`axis = :radius` instead measures each node's distance from `center` and scores
+an axisymmetric solution. That path deliberately keeps every node as its own
+sample rather than averaging a ring: on a mesh that is not itself axisymmetric,
+the spread between nodes at equal radius IS the error such a solution must not
+have, and averaging it away would hide a direction-dependent operator — which is
+the whole reason a 2D case is in the suite.
 """
 function line_profile(vtk::VTKData, field::AbstractString; axis::Symbol=:y,
-                      origin::Float64=0.0, component::Symbol=:magnitude)
+                      origin::Float64=0.0, component::Symbol=:magnitude,
+                      center::Tuple{Float64,Float64}=(0.0, 0.0))
+    value = _field_values(vtk, field, component)
+
+    if axis === :radius
+        r = [hypot(vtk.points[k, 1] - center[1], vtk.points[k, 2] - center[2])
+             for k in axes(vtk.points, 1)]
+        order = sortperm(r)
+        return r[order], value[order]
+    end
+
     col = axis === :x ? 1 : axis === :y ? 2 : 3
     coord = vtk.points[:, col]
-    value = _field_values(vtk, field, component)
 
     # Average duplicate coordinates (round to tame float noise like 0.0999999).
     acc = Dict{Float64,Vector{Float64}}()

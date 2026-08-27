@@ -117,6 +117,23 @@ names come from the probe header — `time`, `Degree_of_Carbonation`,
 `Lime_Concentration`, `Temperature`, `<gas>_Concentration` and so on; a wrong name
 reports the available ones.
 
+### Scoring an axisymmetric solution on a 2D mesh
+
+`axis = "radius"` scores a 2D case against a solution written in `r`. Each node's
+position becomes its distance from `center_x`, `center_y` (both default 0):
+
+```toml
+axis     = "radius"
+center_x = 0.0
+center_y = 0.0
+```
+
+Unlike the Cartesian path, this one keeps **every node as its own sample** rather
+than averaging nodes that share a position. That is deliberate. On a mesh that is
+not itself axisymmetric, the spread between nodes at equal radius *is* the error
+an axisymmetric reference is meant to expose; averaging each ring would quietly
+discard exactly the signal the case exists to measure.
+
 ## Analytical references
 
 - **diffusion_1d** — 1D pure diffusion, sine-series (consolidation) solution.
@@ -142,6 +159,27 @@ reports the available ones.
   Scored on `Degree_of_Carbonation` from the node probe. Do not give this case a
   nonzero reaction enthalpy without also giving it a thermal boundary condition —
   the reference stops being valid the moment `T` moves.
+
+- **conduction_disk_2d** — transient conduction in a solid disk of radius 1 m,
+  uniform at 373.15 K, rim held at 273.15 K. Scored against the Fourier–Bessel
+  series (Carslaw & Jaeger, §7.6)
+  `(T-Ts)/(T0-Ts) = Σ 2/(jₙJ₁(jₙ)) J₀(jₙr/R) exp(-α jₙ² t/R²)`,
+  with `J₀`, `J₁` and the zeros of `J₀` implemented in `analytical.jl` (A&S
+  9.4.1–9.4.6 plus a Newton polish) so the suite keeps its no-dependency rule.
+
+  **This is the suite's only genuinely 2D case, and it earns its place.** Every
+  other case runs on an axis-aligned strip, where the isoparametric Jacobian is
+  diagonal and a whole class of mapping errors cancels identically. Here the
+  elements are skewed general quads and the reference is axisymmetric, so a
+  conduction operator that has acquired a direction dependence cannot hide.
+
+  It was added after finding that `shape_functions.jl` formed `dN/dx` as
+  `B * inv(J)` where the chain rule wants `B * transpose(inv(J))`. With the bug
+  present, all seven 1D cases returned *bit-identical* error numbers — the suite
+  was completely blind to it — while this case went from 0.079 % to 4.007 %
+  relative L2, a worst-node error of 28.5 K, and 20 K of spread between nodes at
+  equal radius that should agree to 0.05 K. Any change that makes the operator
+  direction-dependent will show up here and nowhere else.
 
 ### Comparing a vector field (e.g. velocity)
 

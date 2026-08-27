@@ -1,0 +1,69 @@
+# ADSIM material file - Thermal_disk verification case
+# ADSIM_version = "2025 v0.1.0"
+# File_created = "2026-08-24"
+#
+# Homogeneous solid disk of radius R = 1 m, cooling by conduction alone from a
+# uniform 373.15 K to a rim held at 273.15 K. Every gas mechanism is off in the
+# calculation file, so the only material data that reaches the energy equation is
+# the solid pair (rho_s c_s, lambda_s).
+#
+#   theta_g  = n (1 - S_r)                        = 1e-6
+#   theta_w  = n S_r                              = 0
+#   lambda_e = (1-n) lambda_s + theta_g lambda_g  = 0.1 W/(m.K)
+#   rho_s    = G_s rho_w = 2.65 * 1000            = 2650 kg/m3
+#   C_mix    = (1-n) rho_s c_s                    = 2.65e6 J/(m3.K)
+#   alpha    = lambda_e / C_mix                   = 3.774e-8 m2/s
+#
+# The disk is meant to be a single solid phase, but porosity cannot be exactly
+# zero: the solver assembles the gas lumped mass M = theta_g A_e / 4 for every
+# node whether or not a gas mechanism is active, and errors out on M <= 0
+# (fully_explicit_solver.jl:703). n = 1e-6 keeps M positive while leaving
+# lambda_e and C_mix at their solid values to within one part in 1e7.
+
+gas_dictionary_ = ["Gas 1"]
+soil_dictionary_ = ["Soil 1"]
+
+# Gas properties. Inert in this case - all gas mechanisms are off and theta_g is
+# 1e-6 - but given air-like values so the file stays physical if the case is ever
+# reused with a real porosity. Note molar_mass is read in kg/mol, not g/mol: the
+# solver forms rho_g = sum(C_g * molar_mass) with C_g in mol/m3.
+[gas."Gas 1"]
+dynamic_viscosity = 1.8e-5
+molar_mass = 0.028966
+diff_coefficient = 0.0
+thermal_conductivity = 0.025
+molar_heat_capacity = 29.1
+
+# Liquid properties. The soil is dry (S_r = 0) so specific_heat and
+# thermal_conductivity are multiplied by theta_w = 0 and drop out. density does
+# NOT drop out: the solver takes the solid density as rho_s = specific_gravity *
+# liquid.density, so leaving it at 0 zeroes C_mix and freezes the temperature field.
+[liquid]
+dynamic_viscosity = 1e-3
+density = 1000.0
+specific_heat = 4184.0
+thermal_conductivity = 0.6
+
+# Reactant properties (reaction is off; present so the file is complete)
+[reactants]
+reaction_enthalpy = 0.0
+lime_arrhenius_factor = 0.0
+lime_activation_energy = 0.0
+lime_interfacial_area_beta = 0.0
+
+# Soil properties
+[soil."Soil 1"]
+# Physical properties
+specific_gravity = 2.65
+porosity = 1e-6
+saturation = 0.0
+granular_tortuosity = 1.0
+intrinsic_permeability = 1e-20
+# Thermal properties
+specific_heat_solids = 1000.0
+thermal_conductivity_solids = 0.1
+
+# Reaction properties (no lime: the reaction plays no part in this case)
+[reaction."Soil 1"]
+lime_content = 0.0
+residual_lime = 0.0

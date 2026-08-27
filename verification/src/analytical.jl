@@ -10,6 +10,7 @@
 module Analytical
 
 export erfc, diffusion_series, advection_diffusion, conduction_cosine, linear_profile, carbonation_isothermal, evaluate
+export bessel_j0, bessel_j1, besselj0_zeros, conduction_disk
 
 # ---- erf / erfc -----------------------------------------------------------
 # Abramowitz & Stegun 7.1.26 rational approximation (|error| < 1.5e-7),
@@ -182,6 +183,114 @@ function carbonation_isothermal(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r
     return (1.0 - p_r) * (1.0 - exp(-λ * t))
 end
 
+# ---- Bessel functions J0, J1 and the zeros of J0 --------------------------
+# Abramowitz & Stegun 9.4.1-9.4.6 polynomial/rational approximations, kept here
+# for the same reason as erfc above: the suite must not need an external package.
+# |error| < 5e-8 for J0 and < 1.3e-8 for J1, orders of magnitude below the
+# discretisation error any case gates on.
+
+"""bessel_j0(x) — Bessel function of the first kind, order 0."""
+function bessel_j0(x::Float64)
+    ax = abs(x)
+    if ax < 3.0
+        y = (x / 3.0)^2
+        return 1.0 + y * (-2.2499997 + y * (1.2656208 + y * (-0.3163866 +
+               y * (0.0444479 + y * (-0.0039444 + y * 0.0002100)))))
+    end
+    z = 3.0 / ax
+    f = 0.79788456 + z * (-0.00000077 + z * (-0.00552740 + z * (-0.00009512 +
+        z * (0.00137237 + z * (-0.00072805 + z * 0.00014476)))))
+    θ = ax - 0.78539816 + z * (-0.04166397 + z * (-0.00003954 + z * (0.00262573 +
+        z * (-0.00054125 + z * (-0.00029333 + z * 0.00013558)))))
+    return f * cos(θ) / sqrt(ax)
+end
+
+"""bessel_j1(x) — Bessel function of the first kind, order 1."""
+function bessel_j1(x::Float64)
+    ax = abs(x)
+    if ax < 3.0
+        y = (x / 3.0)^2
+        r = x * (0.5 + y * (-0.56249985 + y * (0.21093573 + y * (-0.03954289 +
+            y * (0.00443319 + y * (-0.00031761 + y * 0.00001109))))))
+        return r
+    end
+    z = 3.0 / ax
+    f = 0.79788456 + z * (0.00000156 + z * (0.01659667 + z * (0.00017105 +
+        z * (-0.00249511 + z * (0.00113653 + z * (-0.00020033))))))
+    θ = ax - 2.35619449 + z * (0.12499612 + z * (0.00005650 + z * (-0.00637879 +
+        z * (0.00074348 + z * (0.00079824 + z * (-0.00029166))))))
+    r = f * cos(θ) / sqrt(ax)
+    return x < 0 ? -r : r
+end
+
+"""
+    besselj0_zeros(n) -> Vector{Float64}
+
+First `n` positive zeros of J0. Started from McMahon's asymptotic expansion
+(A&S 9.5.12) and polished with Newton's method on J0' = -J1, which converges in
+two or three iterations and lands each root to about 1e-8 — the accuracy floor
+of the J0 approximation itself.
+"""
+function besselj0_zeros(n::Int)
+    j = zeros(Float64, n)
+    for s in 1:n
+        β = (s - 0.25) * pi
+        x = β + 1.0 / (8β) - 31.0 / (384 * β^3)
+        for _ in 1:8
+            dx = bessel_j0(x) / bessel_j1(x)   # -J0/J0' with J0' = -J1
+            x += dx
+            abs(dx) < 1e-13 && break
+        end
+        j[s] = x
+    end
+    return j
+end
+
+# ---- Transient conduction in a solid disk ---------------------------------
+"""
+    conduction_disk(r, t; T0, Ts, alpha, R=1.0, terms=200)
+
+Temperature in a solid disk (or infinite cylinder) of radius `R`, initially
+uniform at `T0`, with its whole rim held at `Ts` from t = 0 on. Separation of
+variables in polar coordinates gives the Fourier-Bessel series
+
+    (T - Ts)/(T0 - Ts) = sum_n  2/(j_n J_1(j_n))  J_0(j_n r/R)  exp(-alpha j_n^2 t/R^2)
+
+with `j_n` the n-th positive zero of J0 (Carslaw & Jaeger, §7.6). The fundamental
+mode decays with time constant `R^2/(alpha j_1^2)`.
+
+This is the suite's only genuinely two-dimensional reference. Every other case
+runs on an axis-aligned strip, where the isoparametric Jacobian is diagonal and
+a whole class of mapping errors cancels; here the elements are skewed general
+quads, and the solution has to stay axisymmetric on a mesh that is not.
+
+# Arguments (keyword)
+- `T0`: uniform initial temperature [K]
+- `Ts`: prescribed rim temperature [K]
+- `alpha`: thermal diffusivity lambda_e / C_mix [m²/s]
+- `R`: disk radius [m]
+- `terms`: number of series terms; the n-th decays as exp(-j_n^2 alpha t/R^2),
+  so the default is far more than the earliest compared snapshot needs
+
+# Returns
+- Temperature at radius `r` and time `t` [K]
+"""
+function conduction_disk(r::Float64, t::Float64; T0, Ts, alpha, R=1.0, terms::Int=200)
+    t <= 0 && return T0
+    j = besselj0_zeros(terms)
+    s = 0.0
+    @inbounds for n in 1:terms
+        jn = j[n]
+        # Coefficients fall off only as jn^-1/2, so it is the exponential that
+        # converges the series: past the point where jn^2 alpha t/R^2 is large the
+        # remaining terms cannot matter, and the loop can stop.
+        e = exp(-alpha * jn^2 * t / R^2)
+        e < 1e-16 && break
+        s += 2.0 * bessel_j0(jn * r / R) / (jn * bessel_j1(jn)) * e
+    end
+    return Ts + (T0 - Ts) * s
+end
+
 """
     evaluate(spec::Dict, x, t) -> Float64
 
@@ -204,6 +313,10 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
                               L=g("L", 1.0), T=g("T", 298.0), R=g("R", 8.314))
     elseif typ == "conduction_cosine"
         return conduction_cosine(x, t; T0=g("T0"), A=g("A"), alpha=g("alpha"), L=g("L", 1.0))
+    elseif typ == "conduction_disk"
+        # x is the nodal radius, supplied by line_profile with axis = :radius.
+        return conduction_disk(x, t; T0=g("T0"), Ts=g("Ts"), alpha=g("alpha"),
+                               R=g("R", 1.0), terms=Int(g("terms", 200)))
     elseif typ == "linear_profile"
         # Steady state: time is ignored.
         return linear_profile(x; v0=g("v0"), vL=g("vL"), L=g("L", 1.0))

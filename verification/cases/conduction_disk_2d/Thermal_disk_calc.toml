@@ -1,0 +1,58 @@
+# ADSIM calculation parameters file - Thermal_disk verification case
+# ADSIM_version = "2025 v0.1.0"
+# File_created = "2026-08-24"
+#
+# Pure heat conduction in a solid disk of radius R = 1 m, initially at 373.15 K,
+# with the whole rim (48 nodes at r = 1) held at 273.15 K. The analytical solution
+# is the Bessel series
+#   (T - T_s)/(T_0 - T_s) = sum_n 2/(j_n J_1(j_n)) J_0(j_n r/R) exp(-alpha j_n^2 t/R^2)
+# so the fundamental mode decays with time constant
+#   tau = R^2/(alpha j_01^2) = 1/(3.774e-8 * 5.7832) = 4.58e6 s (53 days).
+
+[units]
+geometry_unit = "m"
+mass_unit = "kg"
+pressure_unit = "kPa"
+temperature_unit = "K"
+time_unit = "s"
+
+[gravity]
+gravity_magnitude = 9.81
+gravity_x_component = 0.0
+gravity_y_component = -1.0
+
+[solver]
+solver_type = "2D-Plane"
+diffusion = 0
+advection = 0
+gravity = 0
+reaction_kinetics = 0
+heat_conduction = 1
+heat_advection = 0
+
+[time_stepping]
+# 6.0e6 s is 1.31 tau, which brings the centre from 373.15 K down to about 316 K
+# - the transient is fully developed and still decaying. The previous 3600 s was
+# 0.08 % of tau: the rim boundary layer would barely have formed and the centre
+# would not have moved at all.
+total_simulation_time = 6.0e6
+time_per_step = 3.0e5
+# The conduction limit h^2 C_mix/(2 lambda_e) = 0.0167^2 * 2.65e6 / 0.2 = 3695 s
+# is the only active criterion. 0.9 is the value the conduction_1d case was
+# verified at.
+courant_number = 0.9
+
+[data_saving]
+# Probe cadence, independent of the 3.0e5 s VTK cadence. dt is about 3325 s, so
+# 1.0e4 s samples the centre roughly every third step.
+data_saving_interval = 1.0e4
+
+[probing]
+# Node 317 is the disk centre (0, 0), the slowest point to respond and the one the
+# Bessel series is easiest to score against.
+number_of_nodes = 1
+nodes_to_probe = [317]
+
+# Elements to follow during simulation (data at Gaussian points)
+number_of_elements = 0
+elements_to_probe = []
