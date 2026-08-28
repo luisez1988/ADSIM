@@ -12,6 +12,10 @@ using Base.Threads
 
 # Dimensional parameters
 global NDim::Int = 0
+# Geometric formulation of the analysis. Held here beside the other dimension globals
+# because it is fixed for the whole run and is needed before the shape functions - which
+# also carry it - have been initialized.
+global Axisymmetric::Bool = false
 global Nnodes::Int = 0
 global Nelements::Int = 0
 global NSoils::Int = 0
@@ -80,8 +84,8 @@ The exclamation mark indicates it modifies global variables.
 - `mesh`: Mesh data structure containing node and element information
 - `materials`: Material data structure containing soil and gas dictionaries
 """
-function zero_variables!(mesh, materials)
-    global NDim, Nnodes, Nelements, NSoils, NGases
+function zero_variables!(mesh, materials; axisymmetric::Bool = false)
+    global NDim, Nnodes, Nelements, NSoils, NGases, Axisymmetric
     global C_g, P, T, v, P_boundary, λ_bc, boundary_node_influences
     global T_boundary, thermal_node_influences
     global C_lime, C_caco3, C_lime_residual, binder_content, degree_of_carbonation, Caco3_max
@@ -90,6 +94,7 @@ function zero_variables!(mesh, materials)
     
     # Set dimensions
     NDim = 2  # Number of spatial dimensions - TODO: generalize for 3D
+    Axisymmetric = axisymmetric
     Nnodes = mesh.num_nodes
     Nelements = mesh.num_elements
     NSoils = length(materials.soil_dictionary)
@@ -104,12 +109,16 @@ function zero_variables!(mesh, materials)
     T_boundary = ones(Int, Nnodes)          # 1 = free node, 0 = prescribed temperature
     λ_bc = zeros(Float64, Nnodes)  # Lagrange multipliers for pressure BCs
     
-    # Calculate and store boundary node influence lengths
-    boundary_influences = get_boundary_node_influences(mesh)
+    # Calculate and store boundary node influence lengths. Under the axisymmetric
+    # formulation these are ring measures l_e * r̄_e rather than arclengths, which is what
+    # the Lagrange multiplier of Eq. (ax_Lambda_solution) and the convective heat boundary
+    # both require.
+    boundary_influences = get_boundary_node_influences(mesh; axisymmetric = axisymmetric)
     boundary_node_influences = boundary_influences.node_influences
 
     # Same geometry, but over the convective-heat boundary nodes
-    thermal_influences = get_boundary_node_influences(mesh, keys(mesh.convective_heat_bc))
+    thermal_influences = get_boundary_node_influences(mesh, keys(mesh.convective_heat_bc);
+                                                     axisymmetric = axisymmetric)
     thermal_node_influences = thermal_influences.node_influences
     
     # Allocate and initialize reactive species

@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Axisymmetric formulation, implementing the manuscript appendix. Selecting
+  `solver_type = "2D-Axisymmetric"` treats the mesh as the meridian section of a body of
+  revolution: `x` is the radius `r`, `y` is the axis `z`, and every domain and boundary
+  integral gains a factor `r`. The dropdown already existed in GiD and the value already
+  reached the solver — it was read into `solver_settings["dimension"]` and only printed.
+  It now selects the formulation.
+  - The whole change is carried by one cached array. `ShapeFunctionData` gained
+    `weight[e,p]`, holding `|det J|` under plane strain and `r_gp |det J|` when
+    axisymmetric, evaluated once at initialization from `r_gp = N_gp · R_nodes`. Every
+    quadrature sum reads `get_weight` instead of `get_detJ`, so both formulations run the
+    same code with no branch in the time loop and no extra arithmetic per step. That
+    includes the cached element stiffness, and with it the diffusive and thermal
+    conductive fluxes.
+  - Boundary integrals use the ring measure `l_e * r̄_e` in place of the edge length. This
+    also makes the external flux vanish on an edge lying on the axis with no special case,
+    since that surface has zero area, so the axis needs no boundary condition.
+  - Gravity must act along the axis, so `gravity_x_component` must be `0.0`. A radial
+    component would vary with the azimuthal angle and contradict axisymmetry, so this is
+    an error rather than a warning. A negative radius and an unknown `solver_type` are
+    likewise rejected, and a checkpoint records its formulation and will not resume under
+    the other one.
+  - The stability limit and the reaction kinetics are unchanged, as the appendix derives.
+  - Four verification cases added: `axisym_diffusion_1d` and `axisym_advection_1d` reuse
+    the plane meshes and must reproduce them exactly (measured 5e-15), while
+    `axisym_conduction_radial` and `axisym_darcy_radial` carry genuine radial transport and
+    fail by 46× and 557× if run in plane mode — which is what shows the flag is acted on.
+
+### Changed
+- The lumped mass vector is now assembled as Eq. (lumped_mass_matrix) states it,
+  `M_a = Σ_gp θ_g N_a(gp) w_gp W_gp`, instead of computing the element area and splitting
+  it equally as `θ_g A_e / 4`. The two agree exactly for parallelograms — every 1-D strip
+  in the verification suite — and differ for general quads, where the equal split gives
+  every node the same mass regardless of element shape. Verified against independent 40×40
+  Gauss integration: exact to 1e-16 on a parallelogram, a trapezoid, and axisymmetric
+  elements both away from and touching the axis. The full plane suite is unchanged (8/8,
+  matching the previous outputs to round-off).
+
+### Added
 - Node probing is implemented. Nodes selected in GiD under Calculation Data →
   Simulation probing are now followed through the run and written as one CSV time
   series per node, `output/<project>_node<ID>_stage<N>.csv`, holding every nodal

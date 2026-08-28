@@ -1002,9 +1002,15 @@ If a node appears on multiple boundary edges, the influence lengths are accumula
 
 # Arguments
 - `mesh::MeshData`: The mesh data structure
+- `bc_nodes`: Node set carrying the condition; defaults to the absolute-pressure boundary
+- `axisymmetric::Bool`: When true, weight each edge by the radius at its midpoint, so the
+  returned quantity is the ring measure `l_e * r̄_e` of Eq. (ax_nodal_Lagrange_System1) rather
+  than the edge length. The `2π` is cancelled throughout, as everywhere else in the
+  axisymmetric formulation.
 
 # Returns
 - `BoundaryNodeInfluence`: Structure containing a dictionary that maps node_id => total_influence_length [m]
+  (plane strain) or ring measure [m²] (axisymmetric)
 
 # Algorithm
 1. Extract all nodes with pressure BCs from `mesh.absolute_pressure_bc`
@@ -1012,6 +1018,12 @@ If a node appears on multiple boundary edges, the influence lengths are accumula
 3. Check each element edge: if both nodes have pressure BC, it's a boundary edge
 4. Calculate edge length and distribute half to each node
 5. Accumulate influence lengths for nodes appearing on multiple edges
+
+# Note on the axis of symmetry
+An edge lying on the axis has `r̄_e = 0` and therefore contributes nothing. That is the correct
+result rather than a special case: Eq. (ax_external_flux) vanishes on such an edge because the
+ring it generates has zero area, which reproduces the absence of flux through the axis without
+any Neumann condition being imposed there.
 
 # Example
 ```julia
@@ -1024,7 +1036,8 @@ for (node_id, influence_length) in node_influences.node_influences
 end
 ```
 """
-function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absolute_pressure_bc))
+function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absolute_pressure_bc);
+                                      axisymmetric::Bool = false)
     # Initialize the result structure
     influences = BoundaryNodeInfluence()
 
@@ -1065,8 +1078,17 @@ function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absol
                         
                         # Calculate edge length
                         l_e, _ = calculate_edge_outward_normal(mesh, local_node_i, local_node_j)
-                        
-                        # Distribute half the edge length to each node
+
+                        # Axisymmetric: the boundary measure is the area of the ring the edge
+                        # generates, l_e * r̄_e with r̄_e the midpoint radius (Eq.
+                        # ax_nodal_Lagrange_System1). r is the first coordinate.
+                        if axisymmetric
+                            r_bar = 0.5 * (mesh.coordinates[local_node_i, 1] +
+                                           mesh.coordinates[local_node_j, 1])
+                            l_e *= r_bar
+                        end
+
+                        # Distribute half the edge measure to each node
                         half_length = l_e / 2.0
                         
                         # Accumulate influence length for each node

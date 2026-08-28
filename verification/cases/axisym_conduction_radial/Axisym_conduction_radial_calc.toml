@@ -1,0 +1,40 @@
+# ADSIM calculation parameters - conduction_bc_1d verification case
+# Heat conduction between two prescribed temperatures. Nothing else is active.
+
+[units]
+geometry_unit = "m"
+mass_unit = "kg"
+pressure_unit = "kPa"
+temperature_unit = "K"
+time_unit = "s"
+
+[gravity]
+gravity_magnitude = 9.81
+gravity_x_component = 0.0
+gravity_y_component = -1.0
+
+[solver]
+solver_type = "2D-Axisymmetric"
+diffusion = 0
+advection = 0
+gravity = 0
+reaction_kinetics = 0
+heat_conduction = 1
+heat_advection = 0
+
+[time_stepping]
+# Slowest mode decays with L^2/(alpha pi^2) = 1.066e5 s. Six of those puts the bar
+# within exp(-6) = 0.25 % of its steady state, so the comparison is against the
+# linear profile rather than against a transient that has not finished.
+total_simulation_time = 300000
+time_per_step = 15000
+courant_number = 0.9
+
+[data_saving]
+data_saving_interval = 15000.0
+
+[probing]
+number_of_nodes = 0
+nodes_to_probe = []
+number_of_elements = 0
+elements_to_probe = []

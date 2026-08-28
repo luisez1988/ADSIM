@@ -1,0 +1,45 @@
+# Verification case: axisymmetric column diffusion
+#
+# The SAME mesh, material file and analytical reference as `diffusion_1d`, with the only
+# difference being solver_type = "2D-Axisymmetric". Read that way, the strip x in [0, 0.1],
+# y in [0, 1] is the meridian section of a solid cylinder of radius 0.1 m and height 1 m,
+# diffusing along its axis from the face at z = 1.
+#
+# Why this must reproduce the plane answer exactly
+# ------------------------------------------------
+# The axisymmetric formulation multiplies every quadrature measure by r_gp. For a field that
+# varies only with z, that factor appears in the lumped mass and in the stiffness row of a
+# given node in the SAME proportion, so it cancels from the ratio that advances the solution.
+# Writing the shape functions of a rectangular element as N_a = f(r) g(z):
+#
+#     M_a      = int f(r) r dr * int g(z) dz
+#     K_a(z)   = int f(r) r dr * int g'(z) ... dz
+#
+# both carry the identical radial factor int f(r) r dr, so K_a / M_a is the plane 1-D ratio
+# for every node, whether it sits on the axis or on the outer surface. The solution is
+# therefore independent of r and identical to `diffusion_1d`, to round-off.
+#
+# That makes this a sharp regression gate rather than a weak one: it fails if the radius is
+# applied to the mass but not the stiffness, to one flux term but not another, or with the
+# wrong coordinate taken as the radius. It is deliberately paired with
+# `axisym_conduction_radial`, where the radius does NOT cancel - a flag that is silently
+# ignored would pass this case and fail that one.
+#
+# The mesh reaches the axis (r = 0), so this also exercises the appendix's statement that a
+# node on the axis needs no boundary condition and still receives a well-posed equation.
+
+project     = "Axisym_diffusion"
+field       = "CO2_Concentration"
+axis        = "y"                              # the axial coordinate z
+boundary_coord = 1.0                           # driving boundary is the face at z = 1
+tolerance   = 0.02                             # same tolerance as the plane case
+check_steps = []
+
+[analytical]
+type  = "diffusion_series"
+C0    = 40.0      # boundary concentration [mol/m^3]
+Ci    = 32.0      # initial concentration  [mol/m^3]
+D     = 6.11e-5   # effective diffusion coefficient [m^2/s] (must match solver)
+R     = 1.0       # retardation factor
+L     = 1.0       # column length [m]
+terms = 500       # series truncation

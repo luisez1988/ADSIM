@@ -1,0 +1,56 @@
+# Verification case: axisymmetric radial heat conduction
+#
+# A solid cylinder of radius R = 1 m, initially uniform at T0, with its whole curved
+# surface brought to Ts at t = 0. The meridian section is a strip r in [0, 1], z in
+# [0, 0.05], refined along the RADIUS - the opposite orientation to every other strip in
+# the suite, because radial transport is the point here.
+#
+# Separation of variables gives the Fourier-Bessel series of Carslaw & Jaeger 7.6, already
+# implemented as `conduction_disk`:
+#
+#     (T - Ts)/(T0 - Ts) = sum_n  2/(j_n J_1(j_n))  J_0(j_n r/R)  exp(-alpha j_n^2 t/R^2)
+#
+# This is the case that proves the axisymmetric flag actually does something. In
+# `axisym_diffusion_1d` and `axisym_advection_1d` the radius factor cancels, so a solver
+# that silently ignored solver_type would still pass them. It cannot pass this one: the
+# governing operator here is
+#
+#     dT/dt = alpha (1/r) d/dr ( r dT/dr )
+#
+# and the extra 1/r d/dr term is precisely what the radius weighting of
+# Eq. (ax_thermal_conductive_flux) supplies. Run in plane strain the same mesh solves the
+# slab problem instead, whose profile is a cosine series rather than a Bessel one and
+# which relaxes with a different time constant - so the two formulations give visibly
+# different answers on identical input, and only one of them matches this reference.
+#
+# It also exercises the treatment of the axis. The mesh reaches r = 0 and carries NO
+# boundary condition there: the appendix argues that none is needed, because the quadrature
+# never evaluates the radius at zero (Gauss points are interior), no division by a radius
+# occurs anywhere in the assembled system, and an axis node still receives a well-posed
+# equation from the neighbouring Gauss points. A run that produced NaN at r = 0, or that
+# needed a symmetry condition bolted on, would contradict that.
+#
+# Material data is shared with `conduction_1d`, so alpha is the same number verified there.
+# The run reaches 300000 s, about 1.65 fundamental time constants
+# (tau_1 = R^2/(alpha j_1^2) = 1.818e5 s), so the profile relaxes well into the regime
+# where the fundamental mode dominates without reaching the steady state and losing
+# sensitivity.
+
+project        = "Axisym_conduction_radial"
+field          = "Temperature"
+axis           = "x"                   # the radial coordinate r
+boundary_coord = 0.0                   # positions measured from the axis, so position = r
+tolerance      = 0.005
+check_steps    = []
+
+[analytical]
+type  = "conduction_disk"
+T0    = 300.0        # uniform initial temperature [K]
+Ts    = 400.0        # prescribed rim temperature [K]
+R     = 1.0          # cylinder radius [m], matches the mesh
+# alpha = lambda_e / C_mix, assembled from the shared material file exactly as in
+# conduction_1d:
+#   lambda_e = 0.6*2.0 + 0.4*0.025          = 1.21      W/(m.K)
+#   C_mix    = 0.6*2650*800 + 0.4*41*29.1   = 1.2725e6  J/(m3.K)
+alpha = 9.5090e-7
+terms = 200

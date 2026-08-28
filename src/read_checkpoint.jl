@@ -111,7 +111,21 @@ function validate_checkpoint_dimensions(checkpoint_data::Dict, mesh, materials)
     if checkpoint_data["NDim"] != 2
         push!(errors, "Dimension mismatch: checkpoint has $(checkpoint_data["NDim"])D, expected 2D")
     end
-    
+
+    # Check the geometric formulation. Plane strain and axisymmetric are different physics
+    # on the same mesh, so resuming across them would continue from a state the current
+    # equations never produced. Checkpoints written before this field existed are plane by
+    # construction, since that was the only formulation available.
+    ckpt_axi = get(checkpoint_data, "axisymmetric", false)
+    current_axi = Axisymmetric
+    if ckpt_axi != current_axi
+        name(a) = a ? "2D-Axisymmetric" : "2D-Plane"
+        push!(errors, "Geometry mismatch: checkpoint was written as $(name(ckpt_axi)), " *
+                      "this run is $(name(current_axi)). Set solver_type back to " *
+                      "\"$(name(ckpt_axi))\" to resume, or start a new analysis.")
+    end
+
+
     if isempty(errors)
         return (true, "All dimensions validated successfully")
     else

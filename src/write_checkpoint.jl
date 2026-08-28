@@ -78,7 +78,12 @@ function write_checkpoint(project_name::String, current_stage::Int, current_time
         Nelements = Nelements,
         NSoils = NSoils,
         NGases = NGases,
-        
+
+        # Geometric formulation. Recorded because plane strain and axisymmetric are
+        # different physics on the same mesh: resuming under the other one would continue
+        # from a state its own equations never produced.
+        axisymmetric = Axisymmetric,
+
         # Time tracking
         current_time = current_time,
         output_counter = output_counter,

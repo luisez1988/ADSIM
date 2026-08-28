@@ -176,6 +176,24 @@ function main()
 
         log_print("   ✓ Total simulation time: $(calc_params["time_stepping"]["total_simulation_time"]) $(calc_params["units"]["time_unit"])")
 
+        # Axisymmetry is a property of the whole analysis, so it is resolved once here and
+        # threaded into the routines whose geometry depends on it.
+        axisymmetric = calc_params["solver_settings"]["axisymmetric"]
+
+        # Step 3.4: Gravity must act along the axis of revolution (Eq. ax_gravity). A radial
+        # component would vary with the azimuthal angle and so contradict the independence
+        # from that angle assumed for every field - a geometric requirement, not a
+        # simplification, which is why this is an error rather than a warning.
+        if axisymmetric && calc_params["solver_settings"]["gravity"] == 1
+            g_r = calc_params["gravity"]["x_component"]
+            if abs(g_r) > 0.0
+                error("Axisymmetric analysis requires gravity along the axis of revolution, " *
+                      "so gravity_x_component must be 0.0, but it is $g_r. A radial gravity " *
+                      "component varies with the azimuthal angle and is incompatible with " *
+                      "axisymmetry (Appendix: Axisymmetric formulation, Eq. ax_gravity).")
+            end
+        end
+
         # Step 3.5: Validate reaction kinetics requirements
         if calc_params["solver_settings"]["reaction_kinetics"] == 1
             log_print("\nValidating reaction kinetics requirements")
@@ -193,7 +211,7 @@ function main()
             log_print("   Found checkpoint: $(basename(checkpoint_file)) (Stage $(prev_stage))")
             
             # Initialize arrays first (dimensions only)
-            zero_variables!(mesh, materials)
+            zero_variables!(mesh, materials; axisymmetric = axisymmetric)
             
             # Load checkpoint data
             checkpoint_result = load_checkpoint(checkpoint_file, mesh, materials)
@@ -217,7 +235,7 @@ function main()
         # Step 4: Initialize simulation variables
         if !checkpoint_loaded
             log_print("\n[4/8] Initializing simulation variables")
-            zero_variables!(mesh, materials)
+            zero_variables!(mesh, materials; axisymmetric = axisymmetric)
             log_print("   ✓ Allocated arrays for $(Nnodes) nodes")
             log_print("   ✓ Tracking $(NGases) gas species in $(NSoils) soil types")
         else
@@ -236,7 +254,8 @@ function main()
         if !checkpoint_loaded
             log_print("\n[5/8] Applying initial conditions and initializing flows")
             apply_all_initial_conditions!(mesh, materials, time_functions, bc_start_time)
-            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time)
+            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time;
+                                  axisymmetric = axisymmetric)
             log_print("   ✓ Initial and boundary conditions applied")
         else
             log_print("\n[5/8] Applying boundary conditions from mesh file")
@@ -272,7 +291,8 @@ function main()
             # as those come from the checkpoint state
             
             # Initialize flow arrays and boundary influences
-            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time)
+            initialize_all_flows!(mesh, materials, Nnodes, NGases, time_functions, bc_start_time;
+                                  axisymmetric = axisymmetric)
             log_print("   ✓ Boundary conditions reapplied from mesh file")
             log_print("   ✓ Caco3_max and C_lime_residual recalculated from materials")
             log_print("   ✓ Flow arrays and boundary influences initialized")
@@ -280,7 +300,7 @@ function main()
 
         # Step 6: Initialize shape functions and calculate time step information
         log_print("\n[6/8] Initializing shape functions")
-        initialize_shape_functions!(mesh)
+        initialize_shape_functions!(mesh; axisymmetric = axisymmetric)
         log_print("   ✓ Shape functions and Jacobians precomputed")
         
         log_print("\n[7/8] Calculating time step information")

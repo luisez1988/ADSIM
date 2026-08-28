@@ -1,0 +1,44 @@
+# ADSIM material file header (need to add disclaimer and license)
+# ADSIM_version = "2025 v0.1.0"
+# File_created = "2025-11-27"
+
+gas_dictionary_ = ["CO2"]
+soil_dictionary_ = ["Soil 1"]
+
+# Gas properties
+[gas."CO2"]
+dynamic_viscosity = 1.0
+molar_mass = 1.0
+diff_coefficient = 6.11e-5
+
+# Liquid properties
+[liquid]
+dynamic_viscosity = 1.0
+density = 1000
+specific_heat = 1.0
+
+# Reactant properties
+[reactants]
+reaction_enthalpy = -113800.0
+lime_arrhenius_factor = 0.0
+lime_activation_energy = 0.0
+# Interfacial-area coefficient of the factor a = exp(beta (C_aq - C_aq_atm)).
+# Zero disables the factor and gives the plain second-order rate law.
+lime_interfacial_area_beta = 0.0
+
+# Soil properties
+[soil."Soil 1"]
+# Physical properties
+specific_gravity = 2.65
+porosity = 1.0
+saturation = 0.0
+granular_tortuosity = 1.0
+intrinsic_permeability = 1e-20
+# Thermal properties
+specific_heat_solids = 1.0
+
+# Reaction properties
+[reaction."Soil 1"]
+lime_content = 0.1
+residual_lime = 0.1
+

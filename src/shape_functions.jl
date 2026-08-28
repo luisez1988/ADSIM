@@ -9,7 +9,8 @@ module ShapeFunctions
 
 using Base.Threads
 
-export ShapeFunctionData, initialize_shape_functions!, get_N, get_B, get_invJ, get_detJ, get_dN_dx
+export ShapeFunctionData, initialize_shape_functions!, get_N, get_B, get_invJ, get_detJ, get_dN_dx,
+       get_weight, is_axisymmetric
 
 """
     ShapeFunctionData
@@ -21,21 +22,38 @@ Structure to store precomputed shape function values and element-specific Jacobi
 - `B::Vector{Matrix{Float64}}`: Derivatives of shape functions at each Gauss point [4 Gauss points][4 nodes, 2 coords]
 - `invJ::Array{Float64, 4}`: Inverse Jacobian at each element and Gauss point [Nelements, 4 Gauss points, 2, 2]
 - `detJ::Matrix{Float64}`: Determinant of Jacobian at each element and Gauss point [Nelements, 4 Gauss points]
+- `weight::Matrix{Float64}`: Quadrature measure at each element and Gauss point [Nelements, 4 Gauss points]
 - `dN_dx::Array{Float64, 4}`: Shape function derivatives in physical coordinates, B · J^-1,
   at each element and Gauss point [Nelements, 4 Gauss points, 4 nodes, 2 coords]
+- `axisymmetric::Bool`: True when `weight` carries the radius factor of Appendix `app:axisymmetric`
 - `gauss_points::Matrix{Float64}`: Gauss point coordinates in isoparametric space [4 points, 2 coords (ξ, η)]
 - `gauss_weights::Vector{Float64}`: Gauss point weights [4 points]
 
 `dN_dx` is the quantity every flux term actually consumes. It is stored rather than recomputed
 from `B` and `invJ` at each use, because the product is element- and Gauss-point-specific but
 time-invariant, so recomputing it inside the time loop is pure waste.
+
+`weight` is what carries the plane/axisymmetric distinction, and it is the ONLY thing that does.
+The axisymmetric appendix reduces to a single substitution: wherever the plane formulation
+multiplies an integrand by the area measure `|det J| W_gp`, the axisymmetric one multiplies it by
+`r_gp |det J| W_gp`, leaving every gradient and stiffness contraction untouched. Folding `r_gp`
+into a cached measure at initialization therefore makes every quadrature sum in the solver correct
+in both formulations with no branch, no second code path and no extra arithmetic per time step:
+
+    weight[e, p] = axisymmetric ? r_gp * |det J| : |det J|
+
+`detJ` is kept separately and still means the Jacobian determinant. The split is deliberate and is
+what makes the change auditable: a site reading `get_weight` is a quadrature sum and must carry the
+radius, a site reading `get_detJ` is geometry and must not.
 """
 mutable struct ShapeFunctionData
     N::Vector{Vector{Float64}}
     B::Vector{Matrix{Float64}}
     invJ::Array{Float64, 4}
     detJ::Matrix{Float64}
+    weight::Matrix{Float64}
     dN_dx::Array{Float64, 4}
+    axisymmetric::Bool
     gauss_points::Matrix{Float64}
     gauss_weights::Vector{Float64}
 end
@@ -162,7 +180,7 @@ function inverse_and_determinant(J::Matrix{Float64})
 end
 
 """
-    initialize_shape_functions!(mesh)
+    initialize_shape_functions!(mesh; axisymmetric = false)
 
 Initialize shape function data structure with precomputed values at Gauss points
 and element-specific Jacobian data. Stores data globally within the module.
@@ -172,6 +190,10 @@ and element-specific Jacobian data. Stores data globally within the module.
   - `num_elements`: Number of elements
   - `elements`: Element connectivity matrix [num_elements, 4 nodes]
   - `coordinates`: Node coordinates [num_nodes, 2 coords]
+- `axisymmetric::Bool`: When true, fold the Gauss point radius into the cached quadrature
+  measure per Appendix `app:axisymmetric`. The first coordinate is the radius `r` and the
+  second is the axial coordinate `z`; this pairing is fixed by Eq. `ax_gravity`, which puts
+  gravity along the axis of revolution, and ADSIM's gravity vector already runs along `y`.
 
 # Notes
 Uses 2×2 Gaussian quadrature (4 Gauss points) with coordinates:
@@ -183,7 +205,19 @@ Uses 2×2 Gaussian quadrature (4 Gauss points) with coordinates:
 All weights equal 1.0 for 2×2 quadrature.
 Data is stored in global variable `shape_funcs` accessible within the module.
 """
-function initialize_shape_functions!(mesh)
+function initialize_shape_functions!(mesh; axisymmetric::Bool = false)
+    # The radius is the first coordinate. A negative one is meaningless on a meridian
+    # section and would flip the sign of every quadrature weight in its element, so it is
+    # rejected here rather than left to produce a plausible-looking wrong answer.
+    if axisymmetric
+        r_min = minimum(@view mesh.coordinates[:, 1])
+        if r_min < 0.0
+            error("Axisymmetric analysis requires every node at radius r = x >= 0, but the " *
+                  "mesh has a node at x = $r_min. The meridian section must lie on one side " *
+                  "of the axis of revolution (Appendix: Axisymmetric formulation).")
+        end
+    end
+
     # Define Gauss points for 2x2 quadrature
     # ξ = ±1/√3 ≈ ±0.577350269
     gp = 1.0 / sqrt(3.0)
@@ -212,6 +246,7 @@ function initialize_shape_functions!(mesh)
     Nelements = mesh.num_elements
     invJ_elements = zeros(Nelements, 4, 2, 2)  # [element, gauss point, 2x2 matrix]
     detJ_elements = zeros(Nelements, 4)         # [element, gauss point]
+    weight_elements = zeros(Nelements, 4)       # [element, gauss point]
     dN_dx_elements = zeros(Nelements, 4, 4, 2)  # [element, gauss point, 4 nodes, 2 coords]
 
     # Compute Jacobian data for each element at each Gauss point (parallelized)
@@ -235,6 +270,21 @@ function initialize_shape_functions!(mesh)
             invJ_elements[e, p, :, :] = invJ
             detJ_elements[e, p] = detJ
 
+            # Quadrature measure. Plane strain integrates over the area element; the
+            # axisymmetric formulation integrates over the solid of revolution, whose
+            # measure carries the radius (Eq. ax_measures, with the common 2*pi cancelled).
+            # r_gp is interpolated by the same shape functions that map the element,
+            # because the radius IS one of the two physical coordinates (Eq. ax_radius).
+            if axisymmetric
+                r_gp = 0.0
+                for i in 1:4
+                    r_gp += N_gauss[p][i] * X_nodes[i, 1]
+                end
+                weight_elements[e, p] = r_gp * abs(detJ)
+            else
+                weight_elements[e, p] = abs(detJ)
+            end
+
             # Physical-coordinate derivatives dN/dx. The chain rule gives
             # dN_i/dx_j = sum_k B[i,k] * dxi_k/dx_j, and compute_jacobian returns
             # J[k,j] = dx_j/dxi_k, so the matrix of dxi_k/dx_j is the TRANSPOSE of
@@ -247,10 +297,24 @@ function initialize_shape_functions!(mesh)
         end
     end
 
+    # An element with every node on the axis has zero measure everywhere and would
+    # contribute nothing while still owning nodes, leaving them with no equation. The
+    # appendix notes that r_gp > 0 for any element with at least one node off the axis,
+    # so a vanishing weight means a degenerate mesh rather than a legitimate limit.
+    if axisymmetric
+        for e in 1:Nelements
+            if maximum(@view weight_elements[e, :]) <= 0.0
+                error("Element $e has zero measure in the axisymmetric formulation: all four " *
+                      "of its nodes lie on the axis r = 0. Remove it from the meridian section.")
+            end
+        end
+    end
+
     # Store globally within module
     global shape_funcs = ShapeFunctionData(N_gauss, B_gauss, invJ_elements, detJ_elements,
-                                            dN_dx_elements, gauss_points, gauss_weights)
-    
+                                            weight_elements, dN_dx_elements, axisymmetric,
+                                            gauss_points, gauss_weights)
+
     return shape_funcs
 end
 
@@ -352,6 +416,43 @@ function get_detJ(e::Int, p::Int)
         error("Shape functions not initialized. Call initialize_shape_functions! first.")
     end
     return shape_funcs.detJ[e, p]
+end
+
+"""
+    get_weight(e::Int, p::Int)
+
+Get the precomputed quadrature measure for element e at Gauss point p: `|det J|` under plane
+strain, `r_gp |det J|` under the axisymmetric formulation.
+
+# Arguments
+- `e::Int`: Element index
+- `p::Int`: Gauss point index (1-4)
+
+# Returns
+- `Float64`: Measure to multiply the Gauss weight by
+
+This is what every quadrature sum in the solver must use — lumped masses, all nodal fluxes, and
+both sums of the point-to-grid velocity transfer. `get_detJ` remains the Jacobian determinant and
+must not be substituted for it: on an axisymmetric run the two differ by the radius factor, and
+using the wrong one produces a plane-strain answer on a mesh the user declared axisymmetric.
+"""
+function get_weight(e::Int, p::Int)
+    if shape_funcs === nothing
+        error("Shape functions not initialized. Call initialize_shape_functions! first.")
+    end
+    return shape_funcs.weight[e, p]
+end
+
+"""
+    is_axisymmetric()
+
+True when the cached quadrature measure carries the radius factor.
+"""
+function is_axisymmetric()
+    if shape_funcs === nothing
+        error("Shape functions not initialized. Call initialize_shape_functions! first.")
+    end
+    return shape_funcs.axisymmetric
 end
 
 end # module ShapeFunctions

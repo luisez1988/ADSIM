@@ -77,6 +77,80 @@ Independent of position and time (returns the uniform magnitude).
 """
 darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314) = (K / mu) * R * T * abs(dC) / L
 
+# ---- Steady radial Darcy flow (axisymmetric) ------------------------------
+"""
+    darcy_radial(r; K, mu, C_w, C_e, r_w, r_e, T=298.0, R=8.314)
+
+Magnitude of the steady radial Darcy velocity in an annulus `r_w <= r <= r_e` whose two
+cylindrical surfaces are held at total concentrations `C_w` and `C_e`.
+
+Unlike the plane `darcy_velocity` this varies with position, and that is the point: it is
+the only reference in the suite that fails outright if the axisymmetric radius factor is
+missing from the advective kernels. In a column aligned with the axis the radius cancels
+between mass and stiffness; here it does not, so a missing `r_gp` changes the answer instead
+of dividing out.
+
+Steady state with an ideal gas (`p = C R T`) requires the same flux through every cylinder,
+so with the cylindrical divergence of Eq. (ax_divergence),
+
+    d/dr ( r C dC/dr ) = 0    =>    r C dC/dr = A    (constant)
+
+Integrating gives `C²` linear in `ln r`,
+
+    C(r) = sqrt( C_w² + 2 A ln(r/r_w) ),   A = (C_e² - C_w²) / (2 ln(r_e/r_w))
+
+and Darcy's law then gives a velocity falling off essentially as `1/r`:
+
+    |v_r| = (K/mu) R T |A| / ( C(r) r )
+
+The departure from an exact `1/r` law is the factor `C(r)`, which varies by
+`|C_e - C_w| / C` across the annulus - a fraction of a percent for the concentrations used
+here, but carried exactly rather than linearised.
+
+# Arguments (keyword)
+- `K`: intrinsic permeability [m²]
+- `mu`: gas dynamic viscosity [Pa.s]
+- `C_w`, `C_e`: prescribed total concentration at the inner and outer radius [mol/m³]
+- `r_w`, `r_e`: inner and outer radius [m]
+- `T`: temperature [K]
+- `R`: universal gas constant [J/(mol.K)]
+
+# Returns
+- Magnitude of the radial Darcy velocity at radius `r` [m/s]
+"""
+function darcy_radial(r::Float64; K, mu, C_w, C_e, r_w, r_e, T=298.0, R=8.314)
+    A = (C_e^2 - C_w^2) / (2 * log(r_e / r_w))
+    # Clamp to the meshed annulus: nodes sit exactly on the two radii, so round-off in a
+    # coordinate must not push the logarithm outside the range the profile is defined on.
+    rc = clamp(r, r_w, r_e)
+    C = sqrt(C_w^2 + 2 * A * log(rc / r_w))
+    return (K / mu) * R * T * abs(A) / (C * rc)
+end
+
+"""
+    radial_log_profile(r; C_w, C_e, r_w, r_e)
+
+Steady total concentration between two cylinders held at `C_w` and `C_e`, for a single ideal
+gas driven by its own pressure gradient with no molecular diffusion:
+
+    C(r) = sqrt( C_w² + 2 A ln(r/r_w) ),   A = (C_e² - C_w²) / (2 ln(r_e/r_w))
+
+This is the integrated form of `r C dC/dr = constant`, the statement that the same molar flux
+crosses every cylinder. It is scored in preference to the velocity of `darcy_radial` because
+`C` is a primary nodal unknown, whereas the nodal velocity is projected from the Gauss points
+and is therefore one-sided at the two end nodes - where `v` varies steeply, that projection
+carries an error of its own that has nothing to do with the axisymmetric weighting.
+
+The corresponding plane-strain profile has `C²` linear in `r` rather than in `ln r`, which is
+a large difference in shape over a decade of radius, so this discriminates sharply between the
+two formulations rather than merely tolerating both.
+"""
+function radial_log_profile(r::Float64; C_w, C_e, r_w, r_e)
+    A = (C_e^2 - C_w^2) / (2 * log(r_e / r_w))
+    rc = clamp(r, r_w, r_e)
+    return sqrt(C_w^2 + 2 * A * log(rc / r_w))
+end
+
 # ---- Heat conduction in an insulated bar ---------------------------------
 """
     conduction_cosine(x, t; T0, A, alpha, L=1.0)
@@ -307,6 +381,13 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
     elseif typ == "advection_diffusion"
         return advection_diffusion(x, t; C0=g("C0"), Ci=g("Ci"), D=g("D"),
                                    v=g("v"), R=g("R", 1.0), L=g("L", 1.0))
+    elseif typ == "radial_log_profile"
+        # x is the nodal radius, supplied by line_profile with axis = :x and origin = 0.
+        return radial_log_profile(x; C_w=g("C_w"), C_e=g("C_e"), r_w=g("r_w"), r_e=g("r_e"))
+    elseif typ == "darcy_radial"
+        # x is the nodal radius, supplied by line_profile with axis = :x and origin = 0.
+        return darcy_radial(x; K=g("K"), mu=g("mu"), C_w=g("C_w"), C_e=g("C_e"),
+                            r_w=g("r_w"), r_e=g("r_e"), T=g("T", 298.0), R=g("R", 8.314))
     elseif typ == "darcy_velocity"
         # Uniform in space and time; x and t are ignored.
         return darcy_velocity(; K=g("K"), mu=g("mu"), dC=g("dC"),

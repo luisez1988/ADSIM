@@ -1,0 +1,61 @@
+# ADSIM material file - conduction_1d verification case
+# ADSIM_version = "2025 v0.1.0"
+#
+# Pure heat conduction. Every gas-transport mechanism is switched off in the
+# calculation file, and the material data is chosen so that nothing but conduction
+# can set the time step:
+#   diff_coefficient = 0        -> the gas diffusion criterion is inactive
+#   intrinsic_permeability tiny -> the gas advection criterion is far from binding
+# leaving h^2 C_mix / (4 lambda_e) as the limiting scale, which is the operator
+# this case is meant to exercise.
+#
+#   lambda_e = (1-n) lambda_s + theta_w lambda_w + theta_g lambda_g
+#            = 0.6*2.0 + 0.0 + 0.4*0.025          = 1.21 W/(m.K)
+#   C_mix    = (1-n) rho_s c_s + theta_g (rho c)_g
+#            = 0.6*2650*800 + 0.4*41*29.1         = 1.2725e6 J/(m3.K)
+#   alpha    = lambda_e / C_mix                   = 9.509e-7 m2/s
+#
+# The soil is dry (saturation = 0) so the water term drops out and alpha depends
+# on three numbers only.
+
+gas_dictionary_ = ["Air"]
+soil_dictionary_ = ["Soil 1"]
+
+# Gas properties
+[gas."Air"]
+dynamic_viscosity = 1.8e-5
+molar_mass = 0.028966
+diff_coefficient = 0.0
+thermal_conductivity = 0.025
+molar_heat_capacity = 29.1
+
+# Liquid properties
+[liquid]
+dynamic_viscosity = 1e-3
+density = 1000
+specific_heat = 4184.0
+thermal_conductivity = 0.6
+
+# Reactant properties (reaction is off; these are here so the file is complete)
+[reactants]
+reaction_enthalpy = 0.0
+lime_arrhenius_factor = 0.0
+lime_activation_energy = 0.0
+lime_interfacial_area_beta = 0.0
+
+# Soil properties
+[soil."Soil 1"]
+# Physical properties
+specific_gravity = 2.65
+porosity = 0.4
+saturation = 0.0
+granular_tortuosity = 1.0
+intrinsic_permeability = 1e-20
+# Thermal properties
+specific_heat_solids = 800.0
+thermal_conductivity_solids = 2.0
+
+# Reaction properties (no lime: the reaction plays no part in this case)
+[reaction."Soil 1"]
+lime_content = 0.0
+residual_lime = 0.0

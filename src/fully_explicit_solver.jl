@@ -427,8 +427,15 @@ Mass lumping sums element contributions to nodes.
 - `materials`: Material data structure
 
 # Formula
-For each element, compute M_e = ∫ θ_g N dΩ ≈ θ_g × A_e / 4
-where θ_g is the gas volume fraction and A_e is the element area.
+Eq. (lumped_mass_matrix): M_a = Σ_gp θ_g N_a(gp) w_gp W_gp, with `w_gp` the quadrature measure
+of `ShapeFunctions.get_weight` — `|det J|` under plane strain, `r_gp |det J|` under the
+axisymmetric formulation of Eq. (ax_lumped_mass_matrix).
+
+This is a row-sum lumping and is evaluated as written. It previously computed the element area
+and split it equally, `M_node = θ_g A_e / 4`, which is the same number only when ∫N_a dΩ = A_e/4,
+i.e. for a parallelogram. On a general quad the two differ, and under the axisymmetric
+formulation they differ always, because `r_gp` varies within the element and the node nearer the
+axis must receive less mass than the node further from it.
 """
 function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
     fill!(M, 0.0)
@@ -466,21 +473,14 @@ function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
             # Calculate gas volume fraction θ_g = n - θ_w = n(1 - S_r)
             θ_g = soil.porosity * (1.0 - soil.saturation)
 
-            # Calculate element area using Gaussian quadrature
-            A_e = 0.0
+            # M_a = Σ_gp θ_g N_a(gp) w_gp W_gp. The shape function weights each node's share,
+            # so a node sees only the part of the element measure that belongs to it.
             for p in 1:4  # 4 Gauss points
-                detJ = ShapeFunctions.get_detJ(e, p)
-                w = ShapeFunctions.shape_funcs.gauss_weights[p]
-                A_e += w * detJ
-            end
-
-            # Distribute mass equally to all 4 nodes (lumped mass)
-            M_node = θ_g * A_e / 4.0
-
-            # Add contribution to each node
-            for i in 1:4
-                node_id = nodes[i]
-                M_local[node_id] += M_node
+                N_p = ShapeFunctions.get_N(p)
+                dV = ShapeFunctions.get_weight(e, p) * ShapeFunctions.shape_funcs.gauss_weights[p]
+                for i in 1:4
+                    M_local[nodes[i]] += θ_g * N_p[i] * dV
+                end
             end
         end
     end
@@ -504,8 +504,13 @@ Assemble and store element geometric stiffness matrices (without material proper
 - `Vector{Matrix{Float64}}`: Vector of element geometric stiffness matrices [Nelements][4×4]
 
 # Formula
-K_e[i,j] = ∑_p (B · J^-1)^T · (B · J^-1) det(J) W_p
-where material properties will be applied later.
+K_e[i,j] = ∑_p (B · J^-1)^T · (B · J^-1) w_gp W_p
+where material properties will be applied later and `w_gp` is the quadrature measure of
+`ShapeFunctions.get_weight`. Because the measure already carries the radius on an axisymmetric
+run, this one matrix serves both formulations, and with it every term that contracts it: the
+diffusive flux of Eq. (ax_diffusive_flux) and the thermal conductive flux of
+Eq. (ax_thermal_conductive_flux). The contraction itself is identical in the two cases, which is
+exactly what the appendix asserts — only the measure changes.
 """
 function assemble_element_stiffness_matrices(mesh)
     Nelements = mesh.num_elements
@@ -520,19 +525,18 @@ function assemble_element_stiffness_matrices(mesh)
         
         # Integrate over Gauss points
         for p in 1:4
-            # Get Jacobian determinant
-            detJ = ShapeFunctions.get_detJ(e, p)
+            # Quadrature measure: |det J|, or r_gp |det J| when axisymmetric
+            dV = ShapeFunctions.get_weight(e, p)
 
             # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
             dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
             # Gauss weight
             w = ShapeFunctions.shape_funcs.gauss_weights[p]
-            
-            # Compute geometric stiffness contribution: K_e += w * detJ * (dN/dx) * (dN/dx)^T
-            # This is ∑_p (B · J^-1)^T · (B · J^-1) det(J) W_p
+
+            # Compute geometric stiffness contribution: K_e += w * w_gp * (dN/dx) * (dN/dx)^T
             # Using matrix multiplication: dN_dx * dN_dx' computes all ∇N_i · ∇N_j terms at once
-            K_e .+= (w * detJ) .* (dN_dx * dN_dx')
+            K_e .+= (w * dV) .* (dN_dx * dN_dx')
         end
         
         # Store element matrix
@@ -1039,17 +1043,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         T_gp = 0.0
                         T_gp = N_p' * T_e
 
-                        # Get Jacobian determinant
-                        detJ = ShapeFunctions.get_detJ(e, p)
+                        # Quadrature measure: |det J|, or r_gp |det J| when axisymmetric
+                        dV = ShapeFunctions.get_weight(e, p)
 
                         Wp= ShapeFunctions.shape_funcs.gauss_weights[p]
 
                         # Precomputed physical-coordinate derivatives dN/dx = B · J^-1
                         dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
-                        #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * det(J) * W_p / μ_g^p
+                        #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * w_gp * W_p / μ_g^p
+                        #Eq. (advective_flux); Eq. (ax_advective_flux) when the measure carries r_gp
                         #Contract right to left: dN_dx * (dN_dx' * C_t) avoids forming the 4×4 product
-                        q_aux .+= (R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g) .* (dN_dx * (dN_dx' * C_t))
+                        q_aux .+= (R * k_intrinsic * C_gp * T_gp * dV * Wp / μ_g) .* (dN_dx * (dN_dx' * C_t))
 
                         #Thermal contribution to the pressure gradient, Eq. (thermal_pressure_flux).
                         #Same element operator as the advective flux above with the roles of T and
@@ -1057,7 +1062,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         #concentration is differentiated, here it is the other way round. So this
                         #adds one contraction and no new element matrices (tex:368).
                         C_tot_gp = N_p' * C_t
-                        qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * detJ * Wp / μ_g) .* (dN_dx * (dN_dx' * T_e))
+                        qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .* (dN_dx * (dN_dx' * T_e))
                     end
                     for i in 1:4 #loop nodes in element
                         node_id = nodes[i] #global node id
@@ -1084,8 +1089,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         C_gp = 0.0
                         C_gp = N_p' * C_e
 
-                        # Get Jacobian determinant
-                        detJ = ShapeFunctions.get_detJ(e, p)
+                        # Quadrature measure: |det J|, or r_gp |det J| when axisymmetric
+                        dV = ShapeFunctions.get_weight(e, p)
 
                         Wp= ShapeFunctions.shape_funcs.gauss_weights[p]
 
@@ -1103,11 +1108,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             end
                         end
 
-                        #Update diffusion flow vector ∑_p R * k_intrinsic * C_gp * T_gp * detJ * Wp / μ_g  * (dN_dx · g) * N_p *∑ M C_g
+                        #Gravitational flux, Eq. (gravitational_flux); Eq. (ax_gravitational_flux)
+                        #when the measure carries r_gp. Under the axisymmetric formulation the
+                        #gravity vector is restricted to the axis, g = (0, -g) (Eq. ax_gravity),
+                        #which is enforced at startup rather than assumed here.
                         #ρ_g interpolates to a scalar at the Gauss point, so this is a scaled
                         #4-vector rather than the 4×4 outer product the previous form built
                         ρ_g_gp = N_p' * ρ_g
-                        q_aux .+= (k_intrinsic * C_gp * detJ * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
+                        q_aux .+= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
@@ -1244,8 +1252,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get shape functions at Gauss point
                 N_p = ShapeFunctions.shape_funcs.N[p]
 
-                # Get Jacobian determinant
-                detJ = ShapeFunctions.get_detJ(e, p)
+                # Quadrature measure: |det J|, or r_gp |det J| when axisymmetric
+                dV = ShapeFunctions.get_weight(e, p)
 
                 # Gauss weight
                 w = ShapeFunctions.shape_funcs.gauss_weights[p]
@@ -1276,8 +1284,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Calculate velocity at Gauss point using Darcy's law: v = - (k/μ) ∇P
                 v_gp = - (k_intrinsic / μ_g_weighted) * grad_P
 
-                # Calculate mass weight at this Gauss point
-                mass_weight = props.θ_g * w * detJ
+                # Calculate mass weight at this Gauss point. This same weight builds both the
+                # numerator and the denominator of the point-to-grid transfer, Eq.
+                # (nodal_velocities), so carrying the radius here satisfies Eq.
+                # (ax_nodal_velocities) - which needs r_gp in both sums - by construction, and
+                # the consistency requirement of Appendix (app:velocity_transfer) still holds.
+                mass_weight = props.θ_g * w * dV
 
                 #Distribute mass-weighted velocity to nodes
                 for i in 1:4
@@ -1463,9 +1475,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
                     for p in 1:4
                         N_p = ShapeFunctions.shape_funcs.N[p]
-                        detJ = ShapeFunctions.get_detJ(e, p)
                         Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
-                        dV = detJ * Wp
+                        # Quadrature measure: |det J| W, or r_gp |det J| W when axisymmetric.
+                        # Carries the whole energy block - Eqs. (ax_lumped_capacity),
+                        # (ax_thermal_conductive_flux), (ax_thermal_advective_flux),
+                        # (ax_thermal_reactive_flux) - and the heat-flux projection below.
+                        dV = ShapeFunctions.get_weight(e, p) * Wp
 
                         # (ρc)_g at the Gauss point, Eq. (heat_advection), per unit
                         # volume of gas so it enters C_mix weighted by θ_g

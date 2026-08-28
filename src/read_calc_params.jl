@@ -74,8 +74,22 @@ Extract solver settings from calculation data including dimension and calculatio
 """
 function get_solver_settings(calc_data::Dict)
     solver = calc_data["solver"]
+
+    # The dimension string used to be carried through and only printed, so a typo would run
+    # silently as plane strain. Validate it: the two formulations differ in physics, not in
+    # presentation, and selecting the wrong one must not be a quiet outcome.
+    dimension = solver["solver_type"]
+    if !(dimension in ("2D-Plane", "2D-Axisymmetric"))
+        error("Unknown solver_type \"$dimension\" in [solver]. " *
+              "Expected \"2D-Plane\" or \"2D-Axisymmetric\".")
+    end
+
     return Dict(
-        "dimension" => solver["solver_type"],
+        "dimension" => dimension,
+        # Axisymmetric analysis per Appendix (app:axisymmetric): the first coordinate is the
+        # radius r, the second the axial coordinate z, and every quadrature measure carries
+        # the factor r_gp.
+        "axisymmetric" => dimension == "2D-Axisymmetric",
         "diffusion" => solver["diffusion"],
         "advection" => solver["advection"],
         "gravity" => solver["gravity"],
@@ -198,7 +212,11 @@ Generate analysis type log message based on enabled solver components.
 """
 function log_analysis_type(solver_settings::Dict)
     msg = "   ✓ Dimension: $(solver_settings["dimension"])\n"
-    
+    if get(solver_settings, "axisymmetric", false)
+        msg *= "   ✓ Geometry: axisymmetric - x is the radius r, y the axis of revolution z;\n" *
+               "               every quadrature measure carries the factor r_gp\n"
+    end
+
     # Build component list (values are 0 or 1)
     components = String[]
     solver_settings["diffusion"] == 1 && push!(components, "Diffusion")

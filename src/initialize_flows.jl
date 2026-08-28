@@ -107,14 +107,20 @@ function apply_boundary_flows!(mesh, time_functions = Dict{Int, TimeFunction}(),
 end
 
 """
-calculate_boundary_influence_lengths(mesh::MeshData)
+calculate_boundary_influence_lengths(mesh::MeshData; axisymmetric = false)
 
 Calculate the influence length for each boundary node based on connected boundary elements.
 
+# Arguments
+- `mesh`: Mesh data structure
+- `axisymmetric::Bool`: When true, weight each edge by the radius at its midpoint, returning
+  the ring measure `l_e * r̄_e` instead of the edge length. Same substitution as
+  `get_boundary_node_influences` in `read_mesh.jl`, for the same reason.
+
 # Returns
-- Dictionary mapping node_id to influence length
+- Dictionary mapping node_id to influence length [m] (plane) or ring measure [m²] (axisymmetric)
 """
-function calculate_boundary_influence_lengths(mesh)
+function calculate_boundary_influence_lengths(mesh; axisymmetric::Bool = false)
     influence_lengths = Dict{Int, Float64}()
     #get a list of all nodes with boundary conditions
     boundary_nodes = collect(keys(mesh.uniform_flow_bc))
@@ -128,16 +134,20 @@ function calculate_boundary_influence_lengths(mesh)
             for xnode_id in element_nodes
                 if xnode_id != node_id && xnode_id in boundary_nodes
                     #calculate distance between nodes
-                    x_1 = mesh.coordinates[node_id, :]                    
+                    x_1 = mesh.coordinates[node_id, :]
                     x_2 = mesh.coordinates[xnode_id, :]
                     length = norm(x_2 - x_1)
+                    # Ring measure rather than arclength; r is the first coordinate
+                    if axisymmetric
+                        length *= 0.5 * (x_1[1] + x_2[1])
+                    end
                     total_length += length
                 end
             end
         end
         influence_lengths[node_id] = total_length / 2.0  # divide by 2 to account for half-length at ends
     end
-    
+
     return influence_lengths
 end
 
@@ -166,7 +176,8 @@ Call sequence:
 - Precomputes boundary edge geometry (length and outward normals) for efficiency
 """
 function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int,
-                              time_functions = Dict{Int, TimeFunction}(), t = 0.0)
+                              time_functions = Dict{Int, TimeFunction}(), t = 0.0;
+                              axisymmetric::Bool = false)
     global boundary_edges, flow_node_influences
 
     zero_flow_vectors!(Nnodes, NGases)
@@ -176,8 +187,9 @@ function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int,
     boundary_edges = identify_boundary_edges(mesh)
 
     # Same reasoning for the flow boundary: a time-driven flux rebuilds
-    # q_boundary every step and must not pay for this walk again
-    flow_node_influences = calculate_boundary_influence_lengths(mesh)
+    # q_boundary every step and must not pay for this walk again.
+    # Axisymmetric runs get the ring measure l_e * r̄_e (Eq. ax_external_flux).
+    flow_node_influences = calculate_boundary_influence_lengths(mesh; axisymmetric = axisymmetric)
 
     apply_boundary_flows!(mesh, time_functions, t)
 end
