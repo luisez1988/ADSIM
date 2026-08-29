@@ -33,6 +33,18 @@ gravity_x_component = 0.0
 gravity_y_component = -1.0
 ```
 
+The two components form a unit vector giving the **direction gravity acts**, and the
+solver uses `magnitude × (x, y)` as the acceleration itself. For the usual mesh with `y`
+pointing up, gravity points down and `gravity_y_component = -1.0`, as above. Reversing
+that sign reverses the direction the gas is driven — it does not merely change a
+bookkeeping convention. The vector enters Darcy's law as
+
+    v = -(K/μ_g) (∇p - ρ_g g),
+
+so with a downward `g` a gas denser than its surroundings sinks.
+
+The block must be present even when `gravity = 0` in `[solver]`; it is simply unused.
+
 ## Solver Settings
 
 Define the solver type and which physics is active.

@@ -682,12 +682,24 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         end
     end
 
-    # Get gravity vector from calc_params
+    # Get gravity vector from calc_params.
+    #
+    # The components are the physical acceleration itself, not a magnitude with the
+    # orientation left to the solver: for a mesh with y pointing up, gravity points down
+    # and gravity_y_component is -1.0. Everything downstream implements Darcy's law in
+    # the form of Eq. (Darcy_law),
+    #
+    #     v = -(K/μ_g) (∇p - ρ_g g),
+    #
+    # so g enters with a plus sign in the velocity and the gravitational flux carries the
+    # leading minus of Eq. (gravitational_flux). Flipping the sense of the input vector
+    # therefore flips the direction gravity drives the gas, which is the point of letting
+    # the user orient it.
     gravity_params = calc_params["gravity"]
     g_magnitude = gravity_params["magnitude"]
     g_x = gravity_params["x_component"]
     g_y = gravity_params["y_component"]
-    g_vector = [g_x, g_y] * g_magnitude  # [m/s²]    
+    g_vector = [g_x, g_y] * g_magnitude  # [m/s²]
     
     # Time stepping parameters
     dt = time_data.actual_dt
@@ -1113,9 +1125,17 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         #gravity vector is restricted to the axis, g = (0, -g) (Eq. ax_gravity),
                         #which is enforced at startup rather than assumed here.
                         #ρ_g interpolates to a scalar at the Gauss point, so this is a scaled
-                        #4-vector rather than the 4×4 outer product the previous form built
+                        #4-vector rather than the 4×4 outer product the previous form built.
+                        #
+                        #The subtraction is the leading minus of Eq. (gravitational_flux), not a
+                        #sign choice free to be made here. g_vector is the user's oriented vector
+                        #(downward for the usual mesh), and the buffer is subtracted again in the
+                        #rate equation alongside j_d, j_a and j_T, Eq. (FEM_compact). Together
+                        #those two minuses reproduce M Ċ_i = ∫ ∇N_i·(C v) with the gravity half of
+                        #the velocity equal to +(K/μ) ρ_g g - the same convention the advective
+                        #term above already follows.
                         ρ_g_gp = N_p' * ρ_g
-                        q_aux .+= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
+                        q_aux .-= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
                     end
                     for i in 1:4 #loop nodes in element       
                         node_id = nodes[i] #global node id
@@ -1281,7 +1301,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     μ_g_weighted = mean([materials.gases[materials.gas_dictionary[g]].dynamic_viscosity for g in 1:NGases])
                 end
 
-                #Calculate velocity at Gauss point using Darcy's law: v = - (k/μ) ∇P
+                #Calculate velocity at Gauss point using Darcy's law, Eq. (Darcy_law):
+                #v = - (k/μ) (∇P - ρ_g g). This is the pressure half; the gravity half is
+                #added below when gravity is enabled.
                 v_gp = - (k_intrinsic / μ_g_weighted) * grad_P
 
                 # Calculate mass weight at this Gauss point. This same weight builds both the
@@ -1311,7 +1333,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     end
                     ρ_g_gp = N_p' * ρ_g
 
-                    v_g_gp = - (k_intrinsic / μ_g_weighted) * ρ_g_gp * g_vector
+                    #Gravity half of Eq. (Darcy_law): expanding -(K/μ)(∇p - ρ_g g) leaves
+                    #+(K/μ) ρ_g g, so a dense gas under a downward g drifts downward. The plus
+                    #here and the minus in the gravitational flux above are the same convention
+                    #seen from the two sides; they must move together or the reported velocity
+                    #and the transported mass disagree.
+                    v_g_gp = (k_intrinsic / μ_g_weighted) * ρ_g_gp * g_vector
 
                     #Distribute mass-weighted gravitational velocity to nodes
                     for i in 1:4

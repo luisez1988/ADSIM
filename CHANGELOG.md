@@ -45,6 +45,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elements both away from and touching the axis. The full plane suite is unchanged (8/8,
   matching the previous outputs to round-off).
 
+### Fixed
+- The gravity term had an inverted sign, in both places it appears. The solver was
+  integrating `v = -(K/μ_g)(∇p + ρ_g g)` rather than Darcy's law, Eq. (Darcy_law),
+  `v = -(K/μ_g)(∇p - ρ_g g)`. Since the gravity vector is supplied by the user already
+  oriented — `gravity_y_component = -1.0` in every input file, i.e. pointing down — the
+  two combined to drive a dense gas *upward*, and left a hydrostatic gas column out of
+  equilibrium. The gravitational nodal flux now carries the leading minus of
+  Eq. (gravitational_flux), and the gravitational Darcy velocity is `+(K/μ_g) ρ_g g`.
+  The two must move together, and did.
+  - The magnitude of the term was already correct and is unchanged: the Figure-3
+    verification measured it against `|ρ_g g| / |∇p|` and agreed to 0.016 percentage
+    points, with only the sign inverted. Expect results from any run with `gravity = 1`
+    to change by roughly twice the size of the gravitational contribution.
+  - `Gas_Seepage_Velocity` in the VTK output and the sensible heat carried by the gas
+    both read the same Gauss-point velocity and are corrected with it.
+  - Every shipped verification case sets `gravity = 0`, so the whole suite is bit-for-bit
+    unchanged — which is also why nothing caught this. The sign convention of the input
+    vector is now stated in `Problemtype/Calculation_Parameters_TOML_Instructions.md`,
+    where previously only its orientation constraint under axisymmetry was documented.
+
 ### Added
 - Node probing is implemented. Nodes selected in GiD under Calculation Data →
   Simulation probing are now followed through the run and written as one CSV time
