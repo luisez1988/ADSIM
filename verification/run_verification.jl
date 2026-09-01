@@ -58,10 +58,17 @@ function main()
         else
             @printf("      worst rel-L2 = %.3f%%   (tolerance %.3f%%)\n",
                     r.worst_rel_l2 * 100, r.tolerance * 100)
-            @printf("      %-6s %-12s %-10s %-10s %-10s\n", "step", "time[s]", "relL2[%]", "rmse", "maxAbs")
+            @printf("      worst TV     = %.3fx  (tolerance %.3fx)\n",
+                    r.worst_tv, r.tv_tolerance)
+            if !r.passed
+                @printf("      %s\n", r.message)
+            end
+            @printf("      %-6s %-12s %-10s %-10s %-10s %-10s %-8s\n",
+                    "step", "time[s]", "relL2[%]", "rmse", "maxAbs", "relLinf[%]", "TV[x]")
             for s in r.steps
-                @printf("      %-6d %-12.1f %-10.3f %-10.4g %-10.4g\n",
-                        s.step, s.time, s.rel_l2 * 100, s.rmse, s.max_abs)
+                @printf("      %-6d %-12.1f %-10.3f %-10.4g %-10.4g %-10.3f %-8.3f\n",
+                        s.step, s.time, s.rel_l2 * 100, s.rmse, s.max_abs,
+                        s.rel_linf * 100, s.tv)
             end
         end
     end
@@ -71,9 +78,10 @@ function main()
     println("="^70)
     npass = count(r -> r.passed, results)
     for r in results
-        @printf("  %-16s %s   worst rel-L2 %.3f%% / tol %.3f%%\n",
+        @printf("  %-24s %s   worst rel-L2 %.3f%% / tol %.3f%%   TV %.3fx / tol %.2fx\n",
                 r.name, r.passed ? "PASS" : "FAIL",
-                isfinite(r.worst_rel_l2) ? r.worst_rel_l2 * 100 : NaN, r.tolerance * 100)
+                isfinite(r.worst_rel_l2) ? r.worst_rel_l2 * 100 : NaN, r.tolerance * 100,
+                r.worst_tv, r.tv_tolerance)
     end
     @printf("\n%d / %d cases passed\n", npass, length(results))
 

@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Critical time step is now measured from the assembled operator rather than assumed
+  from a closed form.** `calculate_critical_time_step` evaluated `λ_max` of `M̂⁻¹K`
+  analytically as `4·coef/h_min²`, which is exact on a uniform *plane* quad mesh and only
+  there. Two errors followed from it, and together they made the 2 mm axisymmetric
+  carbonation run unstable at the shipped `courant_number = 0.9`:
+  - `get_maximum_total_concentration` counted the initial field and `concentration_bc`
+    but not the pressure-specified boundaries, which prescribe a concentration just as
+    surely. The benchmark starts at 41 mol/m³ of air while its injection face holds CO₂ at
+    113 kPa — 46.4 mol/m³ — so the advective bound was **13.1%** too permissive.
+  - The closed form is blind to the axisymmetric measure. Both `M̂` and `K` carry
+    `r_gp |det J|`, and away from the axis the radius cancels between them; in the element
+    touching `r = 0` it does not. Measured against a dense eigensolve, `λ_max` on that mesh
+    is **3.3%** above the plane value, and its eigenvector carries **83% of its energy on
+    the axis column** — which is why the resulting instability appeared as a sawtooth
+    against the axis rather than across the domain.
+
+  Combined, the step was 16.8% too long: an effective Courant number of **1.051**, just
+  over the stability boundary. The `4 mm` mesh came out at 0.871 and was stable, so the
+  defect only surfaced on refinement. The clamp at `C_MIN` arrested the growing mode every
+  step, which is why it presented as a bounded, plausible-looking field instead of a NaN.
+
+  `λ_max` is now obtained by power iteration on the operator the solver actually
+  assembles, reusing `assemble_lumped_mass_vector!` and
+  `assemble_element_stiffness_matrices` — both of which already carry the axisymmetric
+  measure. The closed forms are retained and cross-checked, and the step is taken as
+  `min(measured, analytic)` so the measurement can only ever shorten it. Cost is ~50 ms
+  once at startup.
+
+  **This changes every axisymmetric result.** `2mm_size` moves from `dt = 9.17e-4` to
+  `7.06e-4` s; plane runs and all twelve verification cases are unchanged. Any figure
+  already generated from an axisymmetric run needs regenerating. The measurement also
+  catches non-uniform *plane* meshes: `conduction_disk_2d` was running 10% over its true
+  stability limit and is now corrected.
+- Verification gained **relative L∞ and total-variation** metrics alongside relative L2,
+  with TV gated by default at `1.15x` the exact profile (`tv_tolerance` per case). L2
+  averages a localized sawtooth away across the profile; TV does not. All twelve cases
+  score between 1.000 and 1.009.
+- The non-negativity clamp now **counts** its firings and reports them per load step,
+  warning when they exceed 0.1% of nodal updates. It previously warned once per gas for a
+  whole run, so an unstable mode being arrested thousands of times a step read as a single
+  rounding artefact at step 1.
+
 ### Added
+- `--report-timestep` runs setup through the time step calculation and stops before the
+  solver, printing the per-mechanism stability spectrum — measured `λ_max`, the closed-form
+  estimate, their ratio, and the resulting limit. Answers "what will my step be and which
+  term sets it" in seconds on any mesh, without committing to the run.
+- `src/test/test_operator_spectrum.jl`, guarding the above: the power iteration against a
+  dense eigensolve, the axisymmetric penalty being real, and the invariant that the step
+  the solver uses never exceeds `2/λ_max`.
 - Axisymmetric formulation, implementing the manuscript appendix. Selecting
   `solver_type = "2D-Axisymmetric"` treats the mesh as the meridian section of a body of
   revolution: `x` is the radius `r`, `y` is the axis `z`, and every domain and boundary

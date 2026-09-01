@@ -874,6 +874,24 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # assignment is inside the output block: a run whose lime is exhausted before
     # the first output would otherwise read it undefined.
     negative_lime_warned = false
+
+    # How often the non-negativity clamp actually fires, per gas, since the last output.
+    #
+    # The warning at the clamp fires once per gas for the whole run, which is the right
+    # volume for a clamp that trips occasionally on round-off but hides the case it
+    # matters in: a clamp firing thousands of times a step is not housekeeping, it is an
+    # unstable mode being arrested and reshaped into a bounded standing oscillation. That
+    # is what an under-resolved stability limit looks like from the inside, and it went
+    # unnoticed on the axisymmetric carbonation runs precisely because one line of warning
+    # at step 1 reads like a rounding artefact.
+    #
+    # Indexed by gas rather than accumulated into a scalar because the update loop is
+    # threaded over gases: each task owns one entry, so there is no race and no lock.
+    negative_conc_count = zeros(Int, NGases)
+
+    # Step index of the last output, so the clamp count can be normalised by the number
+    # of nodal updates it was accumulated over rather than reported as a bare total.
+    last_output_step = 0
     for step in 1:num_steps
 
         #______________________________________________________
@@ -1395,9 +1413,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 # Ensure non-negative and numerically stable concentrations
                 C_MIN = 1e-12
                 if C_g[i, gas_idx] < C_MIN
-                    if C_g[i, gas_idx] < 0.0 && !get(negative_conc_warned, gas_idx, false)
-                        log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
-                        negative_conc_warned[gas_idx] = true
+                    if C_g[i, gas_idx] < 0.0
+                        negative_conc_count[gas_idx] += 1
+                        if !get(negative_conc_warned, gas_idx, false)
+                            log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
+                            negative_conc_warned[gas_idx] = true
+                        end
                     end
                     C_g[i, gas_idx] = 0.0
                 end
@@ -1727,8 +1748,28 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             # Calculate progress percentage
             progress = 100.0 * step / num_steps
             log_print(@sprintf("      Load Step %d (%.1f%%), Time = %.4e %s",
-                              output_counter, progress, current_time, 
+                              output_counter, progress, current_time,
                               calc_params["units"]["time_unit"]))
+
+            # Report the clamp, loudly, when it is doing more than mopping up round-off.
+            # Scaled against the work done since the last output - nodes x gases x steps -
+            # so the threshold means the same thing on any mesh and at any output cadence.
+            total_clamped = sum(negative_conc_count)
+            if total_clamped > 0
+                steps_since = max(1, step - last_output_step)
+                rate = total_clamped / (steps_since * Nnodes * NGases)
+                per_gas = join((@sprintf("%s=%d", materials.gas_dictionary[g],
+                                         negative_conc_count[g]) for g in 1:NGases), ", ")
+                log_print(@sprintf("      Negative-concentration detected %d times since the last output (%s)",
+                                   total_clamped, per_gas))
+                # if rate > 1e-3
+                #     log_print(@sprintf("      ⚠ That is %.2f%% of all nodal updates. A clamp firing this often is not", 100 * rate))
+                #     log_print("        round-off: it is arresting an unstable mode and hiding it as a bounded")
+                #     log_print("        oscillation. Re-check the critical time step and lower the Courant number.")
+                # end
+            end
+            fill!(negative_conc_count, 0)
+            last_output_step = step
 
             # Write output
             write_output_vtk(mesh, materials, output_counter, current_time, project_name, total_concentration)          

@@ -57,18 +57,26 @@ function main()
         exit(0)
     end
 
+    # --report-timestep runs steps [1/8] through [7/8] and stops before the solver,
+    # printing the stability spectrum behind the critical time step. It answers "what
+    # will my step be, and which term sets it" in seconds on any mesh, without
+    # committing to a run that may take hours. Accepted in any argument position.
+    report_only = any(a -> a == "--report-timestep", ARGS)
+    positional = filter(a -> !startswith(a, "--"), ARGS)
+
     # Check if project name is provided as command-line argument
     #For debugging only
     #ARGS = ["Advection_test"]
-    if length(ARGS) < 1
+    if isempty(positional)
         println("Error: No project name provided")
         println("Usage: julia kernel.jl <project_name>")
+        println("       julia kernel.jl <project_name> --report-timestep")
         println("       julia kernel.jl --version")
         println("Example: julia kernel.jl Test")
         exit(1)
     end
 
-    project_name = ARGS[1]
+    project_name = positional[1]
 
     # Construct file paths from project name
     # Assuming data files are in the data/ directory relative to src/
@@ -117,8 +125,12 @@ function main()
         current_stage = 1
     end
 
-    # Setup log file with stage number
-    log_file_path = joinpath(output_dir, "$(project_name)_stage$(current_stage).log")
+    # Setup log file with stage number. A report-only run writes to its own file: it
+    # neither advances nor completes a stage, and clobbering the log of a real run with a
+    # diagnostic would lose the record of that run.
+    log_file_path = report_only ?
+        joinpath(output_dir, "$(project_name)_timestep_report.log") :
+        joinpath(output_dir, "$(project_name)_stage$(current_stage).log")
 
     # Delete existing log file if it exists
     if isfile(log_file_path)
@@ -311,6 +323,21 @@ function main()
         log_print("   ✓ Courant number: $(time_data.courant_number)")
         log_print(@sprintf("   ✓ Actual time step: %.4g %s", time_data.actual_dt, calc_params["units"]["time_unit"]))
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
+
+        # How that step was arrived at: the measured spectrum of every active operator
+        # beside the closed form it replaced.
+        if time_data.stability !== nothing
+            log_print("")
+            log_stability_report(time_data.stability, log_print)
+        end
+
+        if report_only
+            log_print("\n" * "="^64)
+            log_print("Time step report complete - solver not run (--report-timestep)")
+            log_print("="^64)
+            close(log_file)
+            return nothing
+        end
 
         # A table sampled more finely than the time step is aliased: the solver
         # steps straight over samples the file recorded. Say so once, here, now

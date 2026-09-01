@@ -36,6 +36,8 @@ struct StepResult
     rel_l2::Float64
     rmse::Float64
     max_abs::Float64
+    rel_linf::Float64
+    tv::Float64
 end
 
 struct CaseResult
@@ -45,7 +47,14 @@ struct CaseResult
     worst_rel_l2::Float64
     steps::Vector{StepResult}
     message::String
+    tv_tolerance::Float64
+    worst_tv::Float64
 end
+
+# The error paths (solver crash, no output, bad config) have no metrics to report, so
+# they keep the original six-argument form and leave the TV fields unset.
+CaseResult(name, passed, tol, worst, steps, message) =
+    CaseResult(name, passed, tol, worst, steps, message, Inf, NaN)
 
 const CASES_DIR = joinpath(VERIF_DIR, "cases")
 
@@ -112,7 +121,7 @@ end
 # two plain equal-length vectors, so a time series substitutes for a spatial profile
 # without touching them. A 0-D case has no position, so x is passed as zero and the
 # analytical type is expected to ignore it.
-function _score_probe(name, project, node_id, field, spec, tol)
+function _score_probe(name, project, node_id, field, spec, tol, tv_tol)
     path = _collect_probe(project, node_id)
     path === nothing &&
         return CaseResult(name, false, tol, Inf, StepResult[],
@@ -131,10 +140,21 @@ function _score_probe(name, project, node_id, field, spec, tol)
     exact = [Analytical.evaluate(spec, 0.0, t) for t in t_kept]
 
     r = relative_l2(num, exact)
-    steps = [StepResult(length(t_kept), t_kept[end], r, rmse(num, exact), max_abs_error(num, exact))]
-    passed = r <= tol
-    return CaseResult(name, passed, tol, r, steps,
-                      passed ? "ok" : "relative L2 $(round(r*100; digits=3))% exceeds tol $(round(tol*100; digits=3))%")
+    # On a 0-D case the "profile" is a time history, so total variation measures temporal
+    # oscillation rather than spatial - the same defect seen along the other axis.
+    tv = tv_ratio(num, exact)
+    steps = [StepResult(length(t_kept), t_kept[end], r, rmse(num, exact),
+                        max_abs_error(num, exact), relative_linf(num, exact), tv)]
+
+    passed = r <= tol && tv <= tv_tol
+    msg = if r > tol
+        "relative L2 $(round(r*100; digits=3))% exceeds tol $(round(tol*100; digits=3))%"
+    elseif tv > tv_tol
+        "total variation $(round(tv; digits=3))x the exact profile exceeds tol $(tv_tol)x"
+    else
+        "ok"
+    end
+    return CaseResult(name, passed, tol, r, steps, msg, tv_tol, tv)
 end
 
 """
@@ -150,6 +170,12 @@ function run_case(name::AbstractString; verbose::Bool=false)
     axis = Symbol(get(cfg, "axis", "y"))
     origin = Float64(get(cfg, "boundary_coord", 0.0))
     tol = Float64(get(cfg, "tolerance", 0.02))
+    # Total-variation gate. The default admits 15% more variation than the exact profile,
+    # which covers ordinary discretisation wiggle on a coarse mesh while still failing on
+    # a node-to-node sawtooth, whose TV runs to several times the exact value. Cases
+    # whose reference profile is genuinely near-flat should raise it in case.toml, since
+    # the ratio is then a small number divided by a smaller one.
+    tv_tol = Float64(get(cfg, "tv_tolerance", 1.15))
     check_steps = Int.(get(cfg, "check_steps", Int[]))
     component = Symbol(get(cfg, "component", "magnitude"))  # for vector fields
     # Centre of the radial coordinate; used only when axis = "radius".
@@ -173,7 +199,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
         probe_node > 0 ||
             return CaseResult(name, false, tol, Inf, StepResult[],
                               "source = \"probe\" requires probe_node in case.toml")
-        return _score_probe(name, project, probe_node, field, spec, tol)
+        return _score_probe(name, project, probe_node, field, spec, tol, tv_tol)
     elseif source != "vtk"
         return CaseResult(name, false, tol, Inf, StepResult[],
                           "unknown source '$source' (use \"vtk\" or \"probe\")")
@@ -187,6 +213,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
 
     steps = StepResult[]
     worst = 0.0
+    worst_tv = 0.0
     for path in vtks
         vtk = read_vtk(path)
         # Skip t = 0: the initial condition, and singular for advection solutions.
@@ -197,15 +224,30 @@ function run_case(name::AbstractString; verbose::Bool=false)
                                 component=component, center=center)
         exact = [Analytical.evaluate(spec, x, vtk.time) for x in pos]
 
+        # Total variation is only meaningful on an ordered profile; sort by position so
+        # the metric does not depend on the order line_profile happens to return.
+        ord = sortperm(pos)
+        tv = tv_ratio(num[ord], exact[ord])
+
         r = relative_l2(num, exact)
-        push!(steps, StepResult(vtk.time_step, vtk.time, r, rmse(num, exact), max_abs_error(num, exact)))
+        push!(steps, StepResult(vtk.time_step, vtk.time, r, rmse(num, exact),
+                                max_abs_error(num, exact), relative_linf(num, exact), tv))
         worst = max(worst, r)
+        worst_tv = max(worst_tv, tv)
     end
 
     isempty(steps) && return CaseResult(name, false, tol, Inf, steps, "no comparable snapshots (all t=0?)")
-    passed = worst <= tol
-    return CaseResult(name, passed, tol, worst, steps,
-                      passed ? "ok" : "worst relative L2 $(round(worst*100; digits=2))% exceeds tol $(round(tol*100; digits=2))%")
+
+    passed = worst <= tol && worst_tv <= tv_tol
+    msg = if worst > tol
+        "worst relative L2 $(round(worst*100; digits=2))% exceeds tol $(round(tol*100; digits=2))%"
+    elseif worst_tv > tv_tol
+        "worst total variation $(round(worst_tv; digits=3))x the exact profile exceeds tol $(tv_tol)x " *
+        "- the profile oscillates node to node even though its L2 error is within tolerance"
+    else
+        "ok"
+    end
+    return CaseResult(name, passed, tol, worst, steps, msg, tv_tol, worst_tv)
 end
 
 end # module
