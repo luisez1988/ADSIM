@@ -1,0 +1,84 @@
+# IMPES variant of the `axisym_darcy_radial` verification case.
+#
+# Identical mesh, materials, physics, analytical reference and tolerances; the only
+# differences in the calculation file are
+#     [solver] time_integration = "IMPES"
+#     [solver] advection_stabilization = 1
+# so a disagreement with `axisym_darcy_radial` is attributable to the time integration and to
+# nothing else. See src/IMPES_FORMULATION_NOTES.md.
+#
+# The pair exists because the four cases that exercise the advective / pressure path are
+# the ones IMPES changes: it makes that term implicit and leaves everything else explicit.
+#
+# Note that Delta t is ADAPTIVE here. `courant_number` still scales the result, but the
+# solver recomputes the step every step from the velocity field, starting at the
+# explicit-equivalent step and growing by at most 1.1x per step. The step count in the run
+# log, not the one in the start-up report, is the number to compare.
+
+# Verification case: steady radial Darcy flow (axisymmetric)
+#
+# An annulus r in [0.1, 1.0] m - a well bore feeding gas radially outward through a treated
+# layer - with a single ideal gas and a prescribed total concentration on each cylindrical
+# surface. Because p = C R T, fixing the concentrations fixes the pressures, exactly as
+# `darcy_1d` does at the two ends of its column.
+#
+# Why this case exists
+# --------------------
+# It is the only case in the suite where a missing or mis-applied r_gp in the ADVECTIVE
+# kernels changes the answer instead of cancelling. `axisym_diffusion_1d` and
+# `axisym_advection_1d` are columns aligned with the axis, so the radius divides out of the
+# rate; `axisym_conduction_radial` has genuine radial transport, but only through the
+# conduction operator. Here the radius survives in the advective flux of
+# Eq. (ax_advective_flux), and mass conservation through cylinders of growing area is what
+# bends the profile.
+#
+# The reference
+# -------------
+# Steady state requires the same molar flux through every cylinder, so with the cylindrical
+# divergence of Eq. (ax_divergence),
+#
+#     d/dr ( r C dC/dr ) = 0   =>   r C dC/dr = A   =>   C(r) = sqrt(C_w^2 + 2 A ln(r/r_w))
+#
+# i.e. C^2 is linear in ln r. The plane-strain steady state on the same mesh has C^2 linear
+# in r instead. Over a decade of radius those are very different curves - the logarithmic
+# profile sheds about half its total drop within the first 30 % of the radius - so the case
+# separates the two formulations by far more than its tolerance.
+#
+# Two deliberate choices
+# ----------------------
+# 1. `diffusion = 0`. With molecular diffusion active the steady state solves
+#    r (D + (K/mu) R T C) dC/dr = const instead, which is not the closed form above. For the
+#    permeability used here the two transport terms are of comparable size, so leaving
+#    diffusion on would score against a reference that is merely close rather than exact.
+#
+# 2. The scored field is the CONCENTRATION, not the velocity, and the contrast is large
+#    (2000 -> 1000 mol/m^3). Both follow from wanting the metric to measure the formulation
+#    rather than something else:
+#      - the nodal velocity is projected from the Gauss points, so at the two end nodes the
+#        projection is one-sided. Where v varies steeply - as 1/r does near the well bore -
+#        that costs about 13 % at the innermost node while the interior agrees to better than
+#        0.7 %. That error is a property of the point-to-grid transfer at a boundary, not of
+#        the radius weighting, and scoring it would be measuring the wrong thing.
+#      - a small contrast would make the relative L2 insensitive: with C ~ 1000 and a 4
+#        mol/m^3 drop, even a completely wrong profile scores under 0.4 %. A factor-of-two
+#        contrast makes the metric bite.
+#    `darcy_radial` in analytical.jl gives the matching velocity profile and is kept for
+#    anyone who wants to inspect it, but it is not what this case gates on.
+#
+# Inputs must stay consistent with Axisym_darcy_radial.mesh / _mat.toml:
+#   C at r = 0.1 is 2000, C at r = 1.0 is 1000
+#   K = 1.6e-16 m^2, mu = 1e-5 Pa.s, T = 298 K, single gas, porosity 1.0, tortuosity 1.0
+
+project        = "Axisym_darcy_radial_impes"
+field          = "Total_Concentration"
+axis           = "x"                      # the radial coordinate r
+boundary_coord = 0.0                      # positions measured from the axis, so position = r
+snapshot       = "last"                   # compare the steady-state snapshot only
+tolerance      = 0.02
+
+[analytical]
+type = "radial_log_profile"
+C_w  = 2000.0    # total concentration at the inner radius [mol/m^3]
+C_e  = 1000.0    # total concentration at the outer radius [mol/m^3]
+r_w  = 0.1       # inner radius [m]
+r_e  = 1.0       # outer radius [m]

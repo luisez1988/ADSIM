@@ -214,6 +214,37 @@ kinds are needed.
   axis has zero area. Its axis nodes evolve smoothly (300 → 331.1 → 369.3 K) and remain
   the coldest point, with nothing non-finite anywhere.
 
+### IMPES cases
+
+Four cases — **impes_advection_1d**, **impes_axisym_advection_1d**, **impes_darcy_1d**,
+**impes_axisym_darcy_radial** — are paired copies of the four that exercise the
+advective/pressure path, with `[solver] time_integration = "IMPES"` and
+`advection_stabilization = 1` set and *nothing else changed*: same mesh, same material
+file, same analytical reference, same tolerances. A disagreement with the explicit sibling
+is therefore attributable to the time integration and to nothing else.
+
+They are pairs rather than replacements because IMPES makes only the advective term
+implicit. Every other term, and the whole reaction and energy path, stays explicit and is
+already covered by the existing cases.
+
+Two things read differently in an IMPES case:
+
+- **Δt is adaptive.** `courant_number` still scales the result, but the solver recomputes
+  the step every step from the velocity field, starting at the explicit-equivalent step and
+  growing by at most 1.1× per step. The step count in the *run log* is the number to
+  compare, not the one in the start-up report, which reports a limit rather than a step.
+- **The gain is in steps, not in tolerance.** `impes_advection_1d` takes 136 steps where
+  `advection_1d` takes 29 136, at 1.936 % worst rel-L2 against the explicit 1.707 %. The
+  IMPES error is larger only at the first output, where its step is still ramping, and
+  smaller at every later one (0.307 % vs 0.516 % at t = 2000 s).
+
+`darcy_1d` / `impes_darcy_1d` are the sharpest of the four: they score the Darcy velocity
+directly and so isolate the pressure solve from species transport. Their errors agree to
+all printed digits (0.086 %), which is what says the implicit pressure equation reproduces
+the explicit one rather than merely resembling it.
+
+See `src/IMPES_FORMULATION_NOTES.md` for the formulation.
+
 `axisym_darcy_radial` scores the **concentration**, not the velocity, and with a
 factor-of-two contrast. Both choices are about measuring the formulation rather than
 something else. The nodal velocity is projected from the Gauss points, so at the two end

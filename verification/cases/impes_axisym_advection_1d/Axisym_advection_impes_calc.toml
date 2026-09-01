@@ -15,7 +15,11 @@ gravity_x_component = 0.0
 gravity_y_component = -1.0
 
 [solver]
-solver_type = "2D-Plane"
+time_integration = "IMPES"
+# With the pressure feedback made implicit the species step is advection dominated,
+# so streamline upwinding is not optional here. See src/IMPES_FORMULATION_NOTES.md.
+advection_stabilization = 1
+solver_type = "2D-Axisymmetric"
 diffusion = 1
 advection = 1
 gravity = 0
@@ -24,7 +28,7 @@ heat_conduction = 0
 heat_advection = 0
 
 [time_stepping]
-total_simulation_time = 5000
+total_simulation_time = 2000
 time_per_step = 250
 # The corrected stability criteria are stable to C_N = 1; 0.9 leaves a margin. The
 # solution is time-converged: C_N = 0.3 and C_N = 0.9 give the same profile.

@@ -1,0 +1,48 @@
+# IMPES variant of the `darcy_1d` verification case.
+#
+# Identical mesh, materials, physics, analytical reference and tolerances; the only
+# differences in the calculation file are
+#     [solver] time_integration = "IMPES"
+#     [solver] advection_stabilization = 1
+# so a disagreement with `darcy_1d` is attributable to the time integration and to
+# nothing else. See src/IMPES_FORMULATION_NOTES.md.
+#
+# The pair exists because the four cases that exercise the advective / pressure path are
+# the ones IMPES changes: it makes that term implicit and leaves everything else explicit.
+#
+# Note that Delta t is ADAPTIVE here. `courant_number` still scales the result, but the
+# solver recomputes the step every step from the velocity field, starting at the
+# explicit-equivalent step and growing by at most 1.1x per step. The step count in the run
+# log, not the one in the start-up report, is the number to compare.
+
+# Verification case: 1D Darcy velocity
+#
+# A single gas fills a 1 m column with fixed concentrations at both ends.
+# Because the gas is ideal (P = C R T), the concentration difference dC sets a
+# steady pressure gradient R T dC / L, and the code should reproduce the Darcy
+# flux v = (K/mu) R T dC / L. We compare the magnitude of the computed
+# Gas_Seepage_Velocity at steady state against that closed-form value.
+#
+# Inputs (must stay consistent with Darcy_test.mesh / Darcy_test_mat.toml):
+#   C_bottom = 1002, C_top = 998  -> dC = 4 mol/m^3
+#   K  = 1.6e-16 m^2   (intrinsic_permeability)
+#   mu = 1e-5 Pa.s     (CO2 dynamic_viscosity)
+#   T  = 298 K,  L = 1 m,  R = 8.314 J/(mol.K)
+#   => v = (1.6e-16 / 1e-5) * 8.314 * 298 * 4 / 1 = 1.586e-7 m/s
+
+project     = "Darcy_impes"
+field       = "Gas_Seepage_Velocity"   # a VTK vector field
+component   = "magnitude"              # compare |v|
+axis        = "y"
+boundary_coord = 0.0                    # unused here (v is uniform in space)
+snapshot    = "last"                   # compare the steady-state snapshot only
+tolerance   = 0.02                      # PASS if relative L2 vs Darcy value <= 2%
+
+[analytical]
+type = "darcy_velocity"
+K    = 1.6e-16   # intrinsic permeability [m^2]
+mu   = 1.0e-5    # gas dynamic viscosity [Pa.s]
+dC   = 4.0       # concentration difference across the column [mol/m^3]
+L    = 1.0       # column length [m]
+T    = 298.0     # temperature [K]
+R    = 8.314     # universal gas constant [J/(mol.K)]

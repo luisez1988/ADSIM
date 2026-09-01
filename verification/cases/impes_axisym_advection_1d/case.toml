@@ -1,0 +1,53 @@
+# IMPES variant of the `axisym_advection_1d` verification case.
+#
+# Identical mesh, materials, physics, analytical reference and tolerances; the only
+# differences in the calculation file are
+#     [solver] time_integration = "IMPES"
+#     [solver] advection_stabilization = 1
+# so a disagreement with `axisym_advection_1d` is attributable to the time integration and to
+# nothing else. See src/IMPES_FORMULATION_NOTES.md.
+#
+# The pair exists because the four cases that exercise the advective / pressure path are
+# the ones IMPES changes: it makes that term implicit and leaves everything else explicit.
+#
+# Note that Delta t is ADAPTIVE here. `courant_number` still scales the result, but the
+# solver recomputes the step every step from the velocity field, starting at the
+# explicit-equivalent step and growing by at most 1.1x per step. The step count in the run
+# log, not the one in the start-up report, is the number to compare.
+
+# Verification case: axisymmetric column advection-diffusion
+#
+# The SAME mesh, material file and analytical reference as `advection_1d`, with the only
+# difference being solver_type = "2D-Axisymmetric". The strip x in [0, 0.1], y in [0, 1] is
+# then the meridian section of a solid cylinder of radius 0.1 m and height 1 m, with gas
+# driven along its axis.
+#
+# As in `axisym_diffusion_1d`, the radius factor cancels for a field that varies only with z,
+# so this must reproduce the plane `advection_1d` result to round-off. What it adds over that
+# case is coverage of the terms the diffusion case never touches: the advective flux, the
+# thermal-pressure flux, and the point-to-grid velocity transfer of Eq. (ax_nodal_velocities),
+# whose numerator and denominator must both carry r_gp. If the radius were applied to only one
+# of those two sums, the transferred velocity would be wrong by a factor that varies across the
+# section, and the front would not travel at the analytical speed.
+#
+# The inherited two-gas arrangement is load-bearing and is explained at length in
+# `advection_1d/case.toml`: a single species cannot hold v constant, because p = R T C makes
+# the pressure gradient driving the flow the same field being transported. Air + CO2 decouples
+# them. The 2000 s run length is also inherited, and for the same reason - it stops before the
+# front reaches the outlet, where the equal-split Lagrange multiplier distorts the composition.
+
+project        = "Axisym_advection_impes"
+field          = "CO2_Concentration"
+axis           = "y"
+boundary_coord = 0.0                  # inlet is at z = 0
+tolerance      = 0.02
+check_steps    = []
+
+[analytical]
+type = "advection_diffusion"
+C0   = 40.0       # inlet CO2 concentration [mol/m^3]
+Ci   = 0.0        # initial CO2 concentration [mol/m^3]
+D    = 1.6e-5     # D_g / tau [m^2/s]
+v    = 1.6e-4     # pore velocity v_darcy / theta_g [m/s]
+R    = 1.0
+L    = 1.0

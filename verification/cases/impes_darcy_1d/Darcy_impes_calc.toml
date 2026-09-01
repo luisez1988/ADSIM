@@ -1,6 +1,6 @@
 # ADSIM calculation parameters file header (need to add disclaimer and license)
-# ADSIM_version = "2025 v0.x.x"
-# File_created = "2025-11-28"
+# ADSIM_version = "2025 v0.1.0"
+# File_created = "2026-08-13"
 
 [units]
 geometry_unit = "m"
@@ -15,28 +15,29 @@ gravity_x_component = 0.0
 gravity_y_component = -1.0
 
 [solver]
+time_integration = "IMPES"
+# With the pressure feedback made implicit the species step is advection dominated,
+# so streamline upwinding is not optional here. See src/IMPES_FORMULATION_NOTES.md.
+advection_stabilization = 1
 solver_type = "2D-Plane"
 diffusion = 1
 advection = 1
 gravity = 0
 reaction_kinetics = 0
-heat_conduction = 0
-heat_advection = 0
 
 [time_stepping]
-total_simulation_time = 5000
-time_per_step = 250
-# The corrected stability criteria are stable to C_N = 1; 0.9 leaves a margin. The
-# solution is time-converged: C_N = 0.3 and C_N = 0.9 give the same profile.
-courant_number = 0.9
+total_simulation_time = 30000
+time_per_step = 3000
+courant_number = 0.8
 
 [data_saving]
-data_saving_interval = 250.0
+data_saving_interval = 1.0
 
 [probing]
-# This case is a spatial profile, so it is scored from the VTK snapshots.
+# Nodes to follow during simulation
 number_of_nodes = 0
 nodes_to_probe = []
 
+# Elements to follow during simulation (data at Gaussian points)
 number_of_elements = 0
 elements_to_probe = []

@@ -32,6 +32,10 @@ include("shape_functions.jl")
 include("write_vtk.jl")
 include("write_probes.jl")
 include("fully_explicit_solver.jl")
+# IMPES solver. Included after the explicit one because it reuses its free functions
+# (mass assembly, element properties, kinetics closures, stab_tau, VTK output); the
+# explicit solver itself is unchanged by its presence.
+include("impes_solver.jl")
 include("write_checkpoint.jl")
 include("read_checkpoint.jl")
 
@@ -344,8 +348,19 @@ function main()
         # that the step is known.
         warn_if_aliased(time_functions, time_data.actual_dt, log_print)
 
-        # Step 8: Run fully explicit solver
-        final_state = fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, project_name, log_print, initial_state, current_stage)
+        # Step 8: Run the solver selected by [solver] time_integration.
+        #
+        # Everything above this line is solver-agnostic, and so is the checkpoint written
+        # below: the IMPES solver's state is the same C_g / T / lime field the explicit one
+        # carries (C_t is derived from C_g, not stored), so a multi-stage run may switch
+        # integrator between stages.
+        final_state = if calc_params["solver_settings"]["impes"]
+            impes_solver(mesh, materials, calc_params, time_data, project_name,
+                         log_print, initial_state, current_stage)
+        else
+            fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data,
+                                            project_name, log_print, initial_state, current_stage)
+        end
 
         # Write checkpoint file for multi-stage calculations
         log_print("\nWriting checkpoint file for stage $(current_stage)...")

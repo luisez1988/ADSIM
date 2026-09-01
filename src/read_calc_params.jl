@@ -84,8 +84,28 @@ function get_solver_settings(calc_data::Dict)
               "Expected \"2D-Plane\" or \"2D-Axisymmetric\".")
     end
 
+    # Time integration scheme. Validated as an enum rather than parsed as a flag for the
+    # same reason as solver_type above: the two schemes differ in what they resolve in
+    # time, not in presentation, and a typo must not run silently as the other one.
+    #
+    # "Explicit" - forward Euler on every term (fully_explicit_diffusion_solver).
+    # "IMPES"    - the advective term is made implicit by solving the summed species
+    #              equations for C_t^{n+1} first, then advancing each species explicitly
+    #              (impes_solver). This removes the h^2/D_P pressure-diffusion limit that
+    #              sets the step on every carbonation run; see IMPES_FORMULATION_NOTES.md.
+    #
+    # Optional with an "Explicit" default so every calculation file written before this
+    # existed loads and runs bit-identically.
+    time_integration = get(solver, "time_integration", "Explicit")
+    if !(time_integration in ("Explicit", "IMPES"))
+        error("Unknown time_integration \"$time_integration\" in [solver]. " *
+              "Expected \"Explicit\" or \"IMPES\".")
+    end
+
     return Dict(
         "dimension" => dimension,
+        "time_integration" => time_integration,
+        "impes" => time_integration == "IMPES",
         # Axisymmetric analysis per Appendix (app:axisymmetric): the first coordinate is the
         # radius r, the second the axial coordinate z, and every quadrature measure carries
         # the factor r_gp.
@@ -103,7 +123,14 @@ function get_solver_settings(calc_data::Dict)
         # Streamline-upwind (SU) stabilization of the advective/thermal-pressure flux.
         # Optional and off by default so every existing calculation file is unaffected.
         # See src/ADVECTION_STABILIZATION_NOTES.md for the derivation and rationale.
-        "advection_stabilization" => get(solver, "advection_stabilization", 0)
+        "advection_stabilization" => get(solver, "advection_stabilization", 0),
+        # IMPES pressure-solve controls. Ignored entirely under "Explicit". The defaults
+        # are deliberately tight: the solve is warm-started from C_t^n and the system is
+        # SPD and mass-dominated, so a strict tolerance costs only a few iterations, and a
+        # loose one would show up as a volume-consistency drift rather than as a visible
+        # failure.
+        "impes_pcg_tolerance" => Float64(get(solver, "impes_pcg_tolerance", 1.0e-10)),
+        "impes_pcg_maxiter" => Int(get(solver, "impes_pcg_maxiter", 500))
     )
 end
 
@@ -235,6 +262,29 @@ function log_analysis_type(solver_settings::Dict)
         msg *= "   ✓ Solver: WARNING - No components selected!"
     else
         msg *= "   ✓ Solver: $(join(components, " + "))"
+    end
+
+    # Time integration. Named explicitly rather than left to be inferred, because it
+    # changes which terms set the time step and therefore how the stability report below
+    # should be read.
+    if get(solver_settings, "impes", false)
+        msg *= "\n   ✓ Time integration: IMPES - the advective term is implicit; the step\n" *
+               "                       adapts each step from the Courant limit\n" *
+               "                       (see src/IMPES_FORMULATION_NOTES.md)"
+        # Under IMPES the species step is genuinely advection dominated: the pressure
+        # feedback that used to dominate the operator is gone, and consistent Galerkin has
+        # no discrete maximum principle for what is left. Respect the setting as written,
+        # but say so loudly.
+        if get(solver_settings, "advection_stabilization", 0) != 1 &&
+           solver_settings["advection"] == 1
+            msg *= "\n   ⚠ WARNING: advection_stabilization = 0 under IMPES. With the pressure\n" *
+                   "              feedback made implicit the species step is advection dominated,\n" *
+                   "              where unstabilized Galerkin loses the discrete maximum principle.\n" *
+                   "              Expect oscillation at the front and a high C_MIN clamp rate.\n" *
+                   "              Set advection_stabilization = 1 unless this is deliberate."
+        end
+    else
+        msg *= "\n   ✓ Time integration: Explicit (forward Euler)"
     end
 
     # Say so explicitly rather than leaving the reader to infer it from two absent

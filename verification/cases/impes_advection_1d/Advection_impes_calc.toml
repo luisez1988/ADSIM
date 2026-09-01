@@ -15,6 +15,10 @@ gravity_x_component = 0.0
 gravity_y_component = -1.0
 
 [solver]
+time_integration = "IMPES"
+# With the pressure feedback made implicit the species step is advection dominated,
+# so streamline upwinding is not optional here. See src/IMPES_FORMULATION_NOTES.md.
+advection_stabilization = 1
 solver_type = "2D-Plane"
 diffusion = 1
 advection = 1

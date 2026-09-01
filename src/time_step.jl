@@ -933,6 +933,15 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     # advection_stabilization was turned on.
     use_su_stabilization = use_advection && on("advection_stabilization")
 
+    # Under IMPES the advective term is solved implicitly (see IMPES_FORMULATION_NOTES.md),
+    # so neither it nor its SU companion bounds the explicit step any more. They are still
+    # MEASURED and still reported - they are the numbers that justify the scheme - but they
+    # are withheld from the harmonic sum below. What replaces them is a Courant limit
+    # θ_g h / |v|, which depends on a velocity field that does not exist until the solver
+    # runs; the IMPES solver therefore recomputes the step every step, and the value
+    # returned here is only the starting one.
+    use_impes = solver_settings !== nothing && get(solver_settings, "impes", false)
+
     # Get maximum diffusion coefficient
     D_max = get_maximum_diffusion_coefficient(materials)
 
@@ -1067,8 +1076,13 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     # only one is active. Demonstrated on advection_1d, where the molecular and
     # advective Fourier numbers were 0.315 and 0.439 individually — both stable — but
     # 0.754 together, and the run produced NaN.
+    #
+    # Under IMPES the advective and SU operators are not integrated explicitly, so they
+    # are excluded here. Everything else about the combination is unchanged.
+    explicit_dts = use_impes ? (dt_diffusion, dt_conduction) :
+                               (dt_diffusion, dt_advection, dt_conduction, dt_su)
     inv_sum = 0.0
-    for dtx in (dt_diffusion, dt_advection, dt_conduction, dt_su)
+    for dtx in explicit_dts
         isfinite(dtx) && dtx > 0.0 && (inv_sum += 1.0 / dtx)
     end
     dt_diffusive_like = inv_sum > 0.0 ? 1.0 / inv_sum : Inf
@@ -1083,6 +1097,13 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     limiting_scale = "Unknown"
     if dt_min == dt_reaction
         limiting_scale = "Reactive"
+    elseif use_impes
+        # dt_advection and dt_su are implicit here and cannot name the limit.
+        smallest = min(dt_diffusion, dt_conduction)
+        limiting_scale = smallest == dt_diffusion ? "Diffusive" : "Thermal conduction"
+        if inv_sum > 0.0 && dt_diffusive_like < 0.95 * smallest
+            limiting_scale *= " (combined)"
+        end
     else
         smallest = min(dt_diffusion, dt_advection, dt_conduction, dt_su)
         limiting_scale = smallest == dt_diffusion ? "Diffusive" :
@@ -1090,6 +1111,14 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
         if inv_sum > 0.0 && dt_diffusive_like < 0.95 * smallest
             limiting_scale *= " (combined)"
         end
+    end
+
+    # Nothing is left to bound the starting step: an IMPES run with no diffusion, no
+    # conduction and no reaction (axisym_darcy_radial is exactly this) has only the
+    # Courant limit, which needs a velocity field. Start from the output cadence and let
+    # the solver's adaptive control take over on the first step.
+    if use_impes && !isfinite(dt_min)
+        limiting_scale = "Courant (IMPES, set at runtime)"
     end
 
     # Diagnostics behind the number, so the log and --report-timestep can show how it was
@@ -1102,7 +1131,10 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
                            get(λ_measured, :diffusion, NaN),
                            use_diffusion ? λ_of(dt_diffusion_analytic) : NaN,
                            dt_diffusion),
-        MechanismStability("Advective", use_advection,
+        # The IMPES suffix marks a row that was measured but withheld from the step. It is
+        # kept visible on purpose: the advective dt is the number the whole scheme exists
+        # to remove, and hiding it would make the report unable to show the gain.
+        MechanismStability(use_impes ? "Advective [implicit]" : "Advective", use_advection,
                            get(λ_measured, :advection, NaN),
                            use_advection ? λ_of(dt_advection_analytic) : NaN,
                            dt_advection),
@@ -1110,10 +1142,15 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
                            get(λ_measured, :conduction, NaN),
                            use_conduction ? λ_of(dt_conduction_analytic) : NaN,
                            dt_conduction),
-        MechanismStability("SU Stabilization", use_su_stabilization,
+        MechanismStability(use_impes ? "SU Stabilization [implicit]" : "SU Stabilization",
+                           use_su_stabilization,
                            get(λ_measured, :su_stabilization, NaN),
                            use_su_stabilization ? λ_of(dt_su_analytic) : NaN,
                            dt_su),
+        # Placeholder for the limit that actually binds an IMPES run. It has no closed
+        # form and no eigenvalue: θ_g h / |v| needs a velocity field, which the solver
+        # produces on its first step.
+        MechanismStability("Courant (IMPES)", use_impes, NaN, NaN, Inf),
         # The reaction is a nodal ODE with no spatial operator, so it has no eigenvalue
         # to measure and no mesh dependence: its limit is unchanged by any of this.
         MechanismStability("Reactive", use_reaction, NaN, NaN, dt_reaction),
@@ -1238,12 +1275,23 @@ function calculate_time_step_info(mesh, materials, calc_params::Dict)
     
     # Get Courant number from calculation parameters
     time_data.courant_number = calc_params["time_stepping"]["courant_number"]
-    
-    # Calculate actual time step (apply Courant number)
-    time_data.actual_dt = time_data.critical_dt * time_data.courant_number
-    
+
     # Get time per load step (when data is saved)
     time_data.time_per_step = calc_params["time_stepping"]["time_per_step"]
+
+    # An IMPES run whose only remaining limit is the Courant condition has no finite
+    # starting step: every explicit mechanism is either off or implicit, and the velocity
+    # field that would bound it does not exist yet (axisym_darcy_radial is exactly this
+    # case - advection only, diffusion off). Seed from the output cadence, which is the
+    # coarsest step the run could ever want, and let the solver's adaptive control shorten
+    # it on the first step. Never reached under the explicit integrator, where a run with
+    # no finite limit at all would be a run with no active mechanism.
+    if !isfinite(time_data.critical_dt)
+        time_data.critical_dt = Float64(time_data.time_per_step)
+    end
+
+    # Calculate actual time step (apply Courant number)
+    time_data.actual_dt = time_data.critical_dt * time_data.courant_number
     
     # Calculate number of time steps per load step
     time_data.num_steps_per_load = ceil(Int, time_data.time_per_step / time_data.actual_dt)
@@ -1302,6 +1350,17 @@ function log_stability_report(report::StabilityReport, log_print)
 
     log_print(@sprintf("   Largest total concentration used for the advective bound: %.4g mol/m³",
                        report.C_max))
+
+    # Under IMPES the table above is not the whole story: two of its rows were measured
+    # and then deliberately withheld from the step, and the step itself is only a starting
+    # value. Say both things here rather than letting the reader assume the usual reading.
+    if any(m -> m.name == "Courant (IMPES)" && m.active, report.mechanisms)
+        log_print("   IMPES: rows marked [implicit] were measured but do NOT bound the step -")
+        log_print("          the advective term is solved implicitly and is unconditionally stable.")
+        log_print("          The step shown is the STARTING step. The binding limit at run time is")
+        log_print("          the Courant condition θ_g h / |v|, which needs a velocity field; the")
+        log_print("          solver recomputes it every step and logs it at each output.")
+    end
 
     # Flag any mechanism where the closed form and the measurement disagree materially.
     # 10% is well outside the power iteration's own tolerance (1e-3 on the Rayleigh

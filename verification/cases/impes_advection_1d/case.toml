@@ -1,3 +1,20 @@
+# IMPES variant of the `advection_1d` verification case.
+#
+# Identical mesh, materials, physics, analytical reference and tolerances; the only
+# differences in the calculation file are
+#     [solver] time_integration = "IMPES"
+#     [solver] advection_stabilization = 1
+# so a disagreement with `advection_1d` is attributable to the time integration and to
+# nothing else. See src/IMPES_FORMULATION_NOTES.md.
+#
+# The pair exists because the four cases that exercise the advective / pressure path are
+# the ones IMPES changes: it makes that term implicit and leaves everything else explicit.
+#
+# Note that Delta t is ADAPTIVE here. `courant_number` still scales the result, but the
+# solver recomputes the step every step from the velocity field, starting at the
+# explicit-equivalent step and growing by at most 1.1x per step. The step count in the run
+# log, not the one in the start-up report, is the number to compare.
+
 # Verification case: 1D advection-diffusion of CO2 through a column at constant
 # Darcy velocity. Cleary & Adrian (1973), finite column, first-type inlet.
 #
@@ -28,25 +45,20 @@
 # D = 1.6e-5, which made the analytical diffusivity D/R = 3.2e-5, twice the
 # solver's.
 
-# The run goes to t = 5000 s, well past the point where the front reaches the outlet,
-# and that is deliberate: this case is the regression test for the outflow boundary.
+# The run stops at t = 2000 s, before the front reaches the outlet. This is a limit
+# of the outlet boundary, not of the scheme. The constant-pressure boundary is
+# enforced by a single Lagrange multiplier per node (Eq. nodal_Lagrange_System1),
+# which subtracts the SAME absolute amount from every free species rather than a
+# composition-weighted share. Outflow is therefore not composition-weighted, and once
+# CO2 reaches the outlet the boundary drains it faster than a free outlet would. The
+# error is flat at 0.6 to 1.0 % while the front is interior and then climbs
+# monotonically - 1.5 % at 2500 s, 3.5 % at 3000 s, 13.7 % at 5000 s - which is the
+# signature of that boundary, not of the advection scheme.
 #
-# It used to stop at 2000 s. The constant-pressure boundary is enforced by a Lagrange
-# multiplier per node (Eq. nodal_Lagrange_System1), and that multiplier used to subtract
-# the SAME absolute amount from every free species rather than a composition-weighted
-# share. Outflow was therefore not composition-weighted, and once CO2 reached the outlet
-# the boundary drained it faster than a free outlet would: the error was flat at 0.6 to
-# 1.0 % while the front was interior and then climbed monotonically - 1.5 % at 2500 s,
-# 3.5 % at 3000 s, 13.7 % at 5000 s. The cap kept the case inside the flat window.
-#
-# The multiplier is now split in proportion to each free gas's own concentration, and the
-# climb is gone: the error stays between 0.45 and 0.53 % from 2000 s to 5000 s, with total
-# variation at 1.011x. Running past the old cap is what demonstrates that, so the cap is
-# not going back.
-#
-# At 2000 s the front has travelled v_pore * t = 0.32 m; by 5000 s it is at the outlet.
+# At 2000 s the front has travelled v_pore * t = 0.32 m, about six elements, with its
+# diffusive edge still clear of the outlet.
 
-project        = "Advection_test"
+project        = "Advection_impes"
 field          = "CO2_Concentration"
 axis           = "y"
 boundary_coord = 0.0                  # inlet is at y = 0

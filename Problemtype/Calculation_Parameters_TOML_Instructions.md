@@ -51,6 +51,7 @@ Define the solver type and which physics is active.
 ```toml
 [solver]
 solver_type = "2D-Plane"
+time_integration = "Explicit" # "Explicit" or "IMPES"
 diffusion = 1                 # gas diffusion
 advection = 1                 # gas advection
 gravity = 0                   # gravitational flow
@@ -63,6 +64,49 @@ advection_stabilization = 0   # streamline-upwind (SU) stabilization of the adve
 `solver_type` selects the geometric formulation and must be exactly `"2D-Plane"` or
 `"2D-Axisymmetric"`. Any other string is rejected, because the two differ in physics and
 selecting the wrong one silently would be the worst outcome.
+
+### `time_integration`
+
+Optional, defaults to `"Explicit"`, and validated the same way as `solver_type` — a typo is
+rejected rather than run as the other scheme.
+
+**`"Explicit"`** is forward Euler on every term. Reliable, and limited by the advective
+term, which is discretized as a diffusion operator acting on the total concentration and so
+costs `dt ∝ h²`. On the 2 mm carbonation mesh that is `dt = 7.9e-4 s` and 1.7 million steps
+for 1200 s of physical time — 1550× tighter than gas diffusion and 790× tighter than the
+reaction.
+
+**`"IMPES"`** makes that term implicit. Summing the species equations gives one equation for
+the total concentration, which is solved implicitly (unconditionally stable) before each
+species is advanced explicitly with the resulting gradient. This is a reorganization of the
+same equations, not a different model: same unknowns, same boundary conditions, same
+material file, same checkpoint format, and a multi-stage run may switch schemes between
+stages. What is left explicit is a true Courant limit, `dt ∝ h`.
+
+Measured on the `advection_1d` verification case: 29 136 steps explicit against 136 under
+IMPES, at equal or better accuracy (better at every output but the first).
+
+Two things to know before using it:
+
+- **The time step becomes adaptive.** IMPES ignores `courant_number` as a fixed multiplier
+  of a start-up estimate and instead recomputes the step every step from the velocity
+  field, starting at the explicit-equivalent step and growing by at most 10 % per step.
+  `courant_number` still scales the result. `--report-timestep` therefore reports a limit,
+  not the step the run will take; each output logs the range actually used.
+- **Set `advection_stabilization = 1`.** Once the pressure feedback is implicit the species
+  step is genuinely advection dominated, where plain Galerkin has no discrete maximum
+  principle. The solver warns rather than refusing, so an unstabilized run is still
+  possible for comparison.
+
+Two optional tuning keys, both with safe defaults and both ignored under `"Explicit"`:
+
+```toml
+impes_pcg_tolerance = 1.0e-10   # relative residual of the pressure solve
+impes_pcg_maxiter   = 500       # cap; non-convergence is logged, never silent
+```
+
+The derivation, the exact volume-consistency property, and the two step controls that
+linear stability does not supply are in `src/IMPES_FORMULATION_NOTES.md`.
 
 `advection_stabilization` is optional (defaults to `0` when omitted, so every existing
 calculation file is unaffected) and only meaningful when `advection = 1`. Enable it on meshes
