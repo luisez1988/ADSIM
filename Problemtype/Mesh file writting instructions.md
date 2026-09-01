@@ -143,7 +143,7 @@ The structure consists of a list of elements with the material assigned to each.
 
 ## Time-dependent boundary conditions
 
-Any of the four boundaries below can be driven by a *time function*: a named
+Any of the five boundaries below can be driven by a *time function*: a named
 curve `f(t)` defined once in the calculation TOML and referenced from the mesh
 file by integer id. Id `0` means "no curve": the boundary holds the constant
 value from its own block, which is what a mesh file without any of these extra
@@ -158,6 +158,7 @@ node, in the same node order and covering the same nodes:
 | `uniform_flow_bc_tf` | `NodeID tf_1 ... tf_nGas` | `uniform_flow_bc` |
 | `absolute_pressure_tf` | `NodeID tf` | `absolute_pressure` |
 | `temperature_bc_tf` | `NodeID tf` | `temperature_bc` |
+| `partial_pressure_bc_tf` | `NodeID tf_1 ... tf_nGas` | `partial_pressure_bc` |
 
 Each block is optional, and so is any node inside it. For example:
 
@@ -181,6 +182,49 @@ The ids are 1-based positions of the `[[time_function]]` entries in
 `<project>_calc.toml`, in file order. Both files are written from the same GiD
 project in one pass, so they always agree; the solver stops with an error if a
 mesh file references an id the calculation file does not define.
+
+### Ramping a partial pressure boundary (`partial_pressure_bc_tf`)
+
+Like `concentration_bc_tf`/`uniform_flow_bc_tf`, this block is per-gas: one
+time-function id per gas, in `gas_dictionary` order. To ramp CO2 up from the
+domain's initial condition instead of snapping it on at full strength from
+step 1 (which is hard on the smallest elements nearest the boundary — see
+`src/ADVECTION_STABILIZATION_NOTES.md`'s discussion of the top-corner clamp
+cluster for why this matters), use a `mode = "absolute"` ramp curve whose
+`v_start` matches the domain's initial partial pressure for that gas and whose
+`v_end` matches the constant value already in `partial_pressure_bc`:
+
+```
+partial_pressure_bc
+7
+225 113000 0.0
+...
+end partial_pressure_bc
+
+partial_pressure_bc_tf
+7
+225 1 0
+...
+end partial_pressure_bc_tf
+```
+
+with, in `<project>_calc.toml`:
+
+```toml
+[[time_function]]
+id = 1
+name = "CO2 partial pressure ramp"
+type = "ramp"
+mode = "absolute"
+t_start = 0.0
+t_end = 60.0          # tune to the mesh - long enough to blunt the initial shock
+v_start = 0.0          # matches the domain's initial CO2 partial pressure
+v_end = 113000.0       # matches the constant already in partial_pressure_bc
+```
+
+Curve id `0` for Air (the second entry on the `partial_pressure_bc_tf` line)
+leaves Air's boundary value constant, since it starts at 0 and has nothing to
+ramp from.
 
 ### Curve definitions
 

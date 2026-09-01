@@ -51,17 +51,25 @@ Define the solver type and which physics is active.
 ```toml
 [solver]
 solver_type = "2D-Plane"
-diffusion = 1          # gas diffusion
-advection = 1          # gas advection
-gravity = 0            # gravitational flow
-reaction_kinetics = 1  # carbonation reaction
-heat_conduction = 0    # heat conduction through the mixture
-heat_advection = 0     # sensible heat carried by the flowing gas
+diffusion = 1                 # gas diffusion
+advection = 1                 # gas advection
+gravity = 0                   # gravitational flow
+reaction_kinetics = 1         # carbonation reaction
+heat_conduction = 0           # heat conduction through the mixture
+heat_advection = 0            # sensible heat carried by the flowing gas
+advection_stabilization = 0   # streamline-upwind (SU) stabilization of the advective flux
 ```
 
 `solver_type` selects the geometric formulation and must be exactly `"2D-Plane"` or
 `"2D-Axisymmetric"`. Any other string is rejected, because the two differ in physics and
 selecting the wrong one silently would be the worst outcome.
+
+`advection_stabilization` is optional (defaults to `0` when omitted, so every existing
+calculation file is unaffected) and only meaningful when `advection = 1`. Enable it on meshes
+where the advective flux is sharp enough to lose the discrete maximum principle — visible as
+sustained, non-negligible firing of the non-negativity clamp (see the solver log's "Negative
+concentration detected" warnings) rather than an occasional round-off event. See
+`src/ADVECTION_STABILIZATION_NOTES.md` for the derivation and when it's needed.
 
 **`"2D-Axisymmetric"`** treats the mesh as the meridian section of a body of revolution —
 a cylindrical specimen, or a well feeding gas radially into a treated layer. The first

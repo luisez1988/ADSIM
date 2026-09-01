@@ -740,6 +740,19 @@ Per-element scalar multiplying the geometric stiffness for one mechanism, chosen
   linearisation admits.
 - `:conduction` `λ_e`, the effective conductivity, to be paired with the lumped thermal
   capacity rather than with `M`.
+- `:su_stabilization` `R · K · C_max · T_ref / μ_min` — identical to `:advection`. Not a
+  coincidence: for any nodal vector `x`, Cauchy-Schwarz gives
+  `xᵀK^SU_e x = Σ_gp τ*[v·∇C_h]² w ≤ (max τ*|v|²) xᵀK_e x`, so the SU operator's
+  Rayleigh quotient is bounded by treating it as an extra isotropic coefficient on the
+  SAME geometric `K_e` every other mechanism uses. Bounding `τ*|v|²`: `τ* ≤ h_e/(2|v|)`
+  unconditionally (Brooks & Hughes, independent of Pe), so `τ*|v|² ≤ h_e|v|/2`; with
+  `v = -(k/μ_g)RT∇C_tot` and the standard conservative gradient estimate
+  `|∇C_tot| ≤ C_max/h_e`, the `h_e` cancels exactly, giving
+  `coef ≤ Rk C_max T_ref/(2μ_min) = coef_advection/2`. The companion thermal-pressure
+  term (`q_thermal_press`) gives the identical bound by the symmetric argument (`T_ref`
+  playing the role `C_max` played), so BOTH SU terms combined are bounded by exactly
+  `coef_advection` — this mechanism's coefficient. See
+  `src/ADVECTION_STABILIZATION_NOTES.md` for the full derivation.
 """
 function build_element_coefficients(mesh, materials, mechanism::Symbol,
                                     D_max::Float64, C_max::Float64, T_ref::Float64)
@@ -771,7 +784,9 @@ function build_element_coefficients(mesh, materials, mechanism::Symbol,
 
         if mechanism === :diffusion
             coef[e] = θ_g * D_max * soil.granular_tortuosity
-        elseif mechanism === :advection
+        elseif mechanism === :advection || mechanism === :su_stabilization
+            # su_stabilization reuses this formula exactly - see the docstring above for
+            # the Cauchy-Schwarz argument establishing coef_su <= coef_advection.
             K = soil.intrinsic_permeability
             coef[e] = (K > 0.0 && μ_min > 0.0) ? R * K * C_max * T_ref / μ_min : 0.0
         elseif mechanism === :conduction
@@ -854,7 +869,7 @@ function measure_operator_eigenvalues(mesh, materials, D_max::Float64, C_max::Fl
     assemble_lumped_mass_vector!(M, mesh, materials)
     K_elements = assemble_element_stiffness_matrices(mesh)
 
-    for mech in (:diffusion, :advection)
+    for mech in (:diffusion, :advection, :su_stabilization)
         get(active, mech, false) || continue
         coef = build_element_coefficients(mesh, materials, mech, D_max, C_max, T_ref)
         λ[mech] = measure_max_eigenvalue(mesh, M, K_elements, coef)
@@ -910,6 +925,13 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     use_advection   = on("advection")
     use_reaction    = on("reaction_kinetics")
     use_conduction  = on("heat_conduction")
+    # SU stabilization adds a second, equal-sized diffusion-like operator on top of the
+    # advective one (see build_element_coefficients' :su_stabilization docstring), so it
+    # must contribute its own term to the harmonic sum below - without this, dt is chosen
+    # for the unstabilized advective operator and is roughly 2x too long for the actual
+    # (stabilized) one, which is exactly what let the clamp keep firing after
+    # advection_stabilization was turned on.
+    use_su_stabilization = use_advection && on("advection_stabilization")
 
     # Get maximum diffusion coefficient
     D_max = get_maximum_diffusion_coefficient(materials)
@@ -965,6 +987,12 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     dt_diffusion_analytic = dt_diffusion
     dt_advection_analytic = dt_advection
 
+    # SU stabilization, closed form. coef_su == coef_advection exactly (see
+    # build_element_coefficients), so the closed-form step is identical to the
+    # advective one before the measured spectrum is applied to each independently below.
+    dt_su = use_su_stabilization ? dt_advection : Inf
+    dt_su_analytic = dt_su
+
     # Carbonation reaction
     dt_reaction = Inf
     if use_reaction
@@ -1010,7 +1038,8 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     #--------------------------------------------------------------------------
     active = Dict(:diffusion  => use_diffusion && D_max > 0.0,
                   :advection  => use_advection,
-                  :conduction => use_conduction)
+                  :conduction => use_conduction,
+                  :su_stabilization => use_su_stabilization)
 
     λ_measured = measure_operator_eigenvalues(mesh, materials, D_max, C_max, T_ref, active)
     measured = !isempty(λ_measured)
@@ -1026,6 +1055,9 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     if haskey(λ_measured, :conduction)
         dt_conduction = min(dt_conduction, dt_from(λ_measured[:conduction]))
     end
+    if haskey(λ_measured, :su_stabilization)
+        dt_su = min(dt_su, dt_from(λ_measured[:su_stabilization]))
+    end
 
     # Diffusion-like operators acting on the same node do not combine by taking a
     # minimum: each limit above is derived as if its term acted alone, but the
@@ -1036,7 +1068,7 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     # advective Fourier numbers were 0.315 and 0.439 individually — both stable — but
     # 0.754 together, and the run produced NaN.
     inv_sum = 0.0
-    for dtx in (dt_diffusion, dt_advection, dt_conduction)
+    for dtx in (dt_diffusion, dt_advection, dt_conduction, dt_su)
         isfinite(dtx) && dtx > 0.0 && (inv_sum += 1.0 / dtx)
     end
     dt_diffusive_like = inv_sum > 0.0 ? 1.0 / inv_sum : Inf
@@ -1044,12 +1076,15 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     dt_min = min(dt_diffusive_like, dt_reaction)
 
     # Name the single mechanism that contributes most, so the log points at the term
-    # actually setting the step
+    # actually setting the step. su_stabilization is never named on its own: by
+    # construction dt_su == dt_advection whenever it is active (same coefficient, same
+    # measured spectrum), so it can only tie dt_advection, never beat it, and the
+    # "Advective" branch below already wins that tie.
     limiting_scale = "Unknown"
     if dt_min == dt_reaction
         limiting_scale = "Reactive"
     else
-        smallest = min(dt_diffusion, dt_advection, dt_conduction)
+        smallest = min(dt_diffusion, dt_advection, dt_conduction, dt_su)
         limiting_scale = smallest == dt_diffusion ? "Diffusive" :
                          smallest == dt_advection ? "Advective" : "Thermal conduction"
         if inv_sum > 0.0 && dt_diffusive_like < 0.95 * smallest
@@ -1075,6 +1110,10 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
                            get(λ_measured, :conduction, NaN),
                            use_conduction ? λ_of(dt_conduction_analytic) : NaN,
                            dt_conduction),
+        MechanismStability("SU Stabilization", use_su_stabilization,
+                           get(λ_measured, :su_stabilization, NaN),
+                           use_su_stabilization ? λ_of(dt_su_analytic) : NaN,
+                           dt_su),
         # The reaction is a nodal ODE with no spatial operator, so it has no eigenvalue
         # to measure and no mesh dependence: its limit is unchanged by any of this.
         MechanismStability("Reactive", use_reaction, NaN, NaN, dt_reaction),

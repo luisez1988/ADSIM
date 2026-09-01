@@ -99,7 +99,11 @@ function get_solver_settings(calc_data::Dict)
         # temperature field does not evolve at all and the run is isothermal, whatever
         # reaction enthalpy the material file declares.
         "heat_conduction" => get(solver, "heat_conduction", 0),
-        "heat_advection" => get(solver, "heat_advection", 0)
+        "heat_advection" => get(solver, "heat_advection", 0),
+        # Streamline-upwind (SU) stabilization of the advective/thermal-pressure flux.
+        # Optional and off by default so every existing calculation file is unaffected.
+        # See src/ADVECTION_STABILIZATION_NOTES.md for the derivation and rationale.
+        "advection_stabilization" => get(solver, "advection_stabilization", 0)
     )
 end
 
@@ -225,6 +229,7 @@ function log_analysis_type(solver_settings::Dict)
     solver_settings["reaction_kinetics"] == 1 && push!(components, "Reaction Kinetics")
     solver_settings["heat_conduction"] == 1 && push!(components, "Heat Conduction")
     solver_settings["heat_advection"] == 1 && push!(components, "Heat Advection")
+    get(solver_settings, "advection_stabilization", 0) == 1 && push!(components, "SU Stabilization")
 
     if isempty(components)
         msg *= "   ✓ Solver: WARNING - No components selected!"

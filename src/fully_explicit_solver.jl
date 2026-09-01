@@ -28,6 +28,43 @@ function heaviside(x)
 end
 
 """
+    stab_tau(v, h_e, D_eff; V_TOL)
+
+Streamline-upwind stabilization parameter τ*, the practical Brooks & Hughes (1982)
+approximation to the classical "optimal" upwind value (Christie, Griffiths, Mitchell &
+Zienkiewicz 1976):
+
+    τ* ≈ (h_e / 2|v|) · min(Pe/3, 1),   Pe = |v| h_e / D_eff
+
+τ* → h_e/(2|v|) in the advection-dominated limit (Pe → ∞), and τ* → 0 in the
+diffusion-dominated limit (Pe → 0), matching the two limits of the exact coth-based
+formula without evaluating coth every Gauss point. See
+`src/ADVECTION_STABILIZATION_NOTES.md` for the derivation.
+
+Guarded against the two cases that make a naive `Pe = |v| h_e / D_eff` computation
+divide by zero or propagate NaN, both of which occur in the shipped verification suite:
+- `|v| ≈ 0` (no local flow): nothing to stabilize, returns 0.
+- `D_eff <= 0` (diffusion switched off, e.g. `axisym_darcy_radial`, which sets
+  `diffusion = 0` by construction): the advection-dominated limit `Pe → ∞` applies
+  directly, `τ* = h_e/(2|v|)`, without forming the (division-by-zero) Péclet number.
+
+# Arguments
+- `v::AbstractVector`: Local (Gauss-point) velocity driving this flux term [m/s]
+- `h_e::Float64`: Element characteristic length [m]
+- `D_eff::Float64`: Effective diffusivity of the SAME operator being stabilized [m²/s]
+- `V_TOL::Float64`: Velocity magnitude below which the flow is treated as zero [m/s]
+
+# Returns
+- `τ*`, in units of time [s]
+"""
+function stab_tau(v::AbstractVector, h_e::Float64, D_eff::Float64; V_TOL::Float64 = 1.0e-15)
+    vnorm = sqrt(v[1]^2 + v[2]^2)
+    vnorm < V_TOL && return 0.0
+    D_eff <= 0.0 && return h_e / (2.0 * vnorm)
+    return (h_e / (2.0 * vnorm)) * min(h_e * vnorm / (6.0 * D_eff), 1.0)
+end
+
+"""
     henry_solubility(T)
 
 Henry solubility of CO2 in water, K_H(T), following the van 't Hoff form of
@@ -644,6 +681,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     calculate_reaction = solver_settings["reaction_kinetics"] == 1
     calculate_heat_conduction = solver_settings["heat_conduction"] == 1
     calculate_heat_advection = solver_settings["heat_advection"] == 1
+    calculate_stabilization = get(solver_settings, "advection_stabilization", 0) == 1
 
     # With neither transport mechanism active the temperature field does not evolve at
     # all: the run is isothermal and the reaction enthalpy is ignored, however it is
@@ -727,6 +765,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     elem_props = build_element_properties(mesh, materials, C_lime_residual)
     node_owner = build_node_owner_elements(mesh)
 
+    # Per-element characteristic length, needed by the SU stabilization parameter tau*
+    # (calculate_stabilization). Static geometry, resolved once here rather than inside
+    # the time loop. calculate_element_characteristic_length is defined in time_step.jl,
+    # included before this file in kernel.jl, so it is already in scope.
+    h_elem = calculate_stabilization ?
+        [calculate_element_characteristic_length(mesh, e) for e in 1:Nelements] :
+        Float64[]
+
     # CO2 is the only reactive species; resolve its index once
     co2_gas_idx = findfirst(name -> name == "CO2", materials.gas_dictionary)
 
@@ -785,6 +831,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     total_rate = zeros(Float64, Nnodes)   # Boundary rate of change
     q_source_sink = zeros(Float64, Nnodes) # Only for CO2 for now
 
+    # Composition weights for the Lagrangian pressure-BC correction below: at each
+    # pressure-BC node, free_conc_sum holds the level-n total of the FREE gases only
+    # (P_boundary-gated), and n_free_nodes the count of free gases, so the correction can
+    # be split in proportion to each free species' own concentration instead of equally
+    # in absolute terms. Recomputed in full every step from level-n C_g, so no reset is
+    # needed between steps.
+    free_conc_sum = zeros(Float64, Nnodes)
+    n_free_nodes = zeros(Int, Nnodes)
+
     # Element-chunk decomposition for the threaded flux and velocity loops.
     #
     # nchunks is deliberately independent of Threads.nthreads(): the per-chunk buffers are
@@ -807,6 +862,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     q_aux_chunk = [zeros(4) for _ in 1:nchunks]
     qT_aux_chunk = [zeros(4) for _ in 1:nchunks]
     ρ_g_chunk = [zeros(4) for _ in 1:nchunks]
+    # SU stabilization scratch: dN_dx * v_gp and dN_dx * v_gp_T, one pair per chunk, so
+    # the streamline-diffusion contraction in the advective loop needs no per-Gauss-point
+    # allocation (mirrors the mul! convention already used for q_aux at the diffusion term).
+    a_su_chunk = [zeros(4) for _ in 1:nchunks]
+    aT_su_chunk = [zeros(4) for _ in 1:nchunks]
 
     # Energy equation: nodal heat source and the per-chunk accumulators for the
     # lumped thermal capacity and the conductive and reactive fluxes.
@@ -856,15 +916,25 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                       for (node_id, id) in mesh.temperature_bc_tf
                       if id != 0 && haskey(mesh.temperature_bc, node_id)]
 
+    # partial_pressure_bc has no has_transient_* gate of its own: unlike the other four
+    # boundaries, it is already re-imposed unconditionally every step (it tracks the
+    # evolving temperature via the ideal gas law), so the curve lookup is inline in that
+    # existing loop below rather than through a separate filtered list. This count is
+    # purely for the log line.
+    n_transient_partial_press = sum(count(!=(0), ids) for ids in values(mesh.partial_pressure_bc_tf);
+                                    init=0)
+
     has_transient_flow = !isempty(transient_flow)
     has_transient_conc = !isempty(transient_conc)
     has_transient_press = !isempty(transient_press)
     has_transient_temp = !isempty(transient_temp)
 
-    if has_transient_flow || has_transient_conc || has_transient_press || has_transient_temp
+    if has_transient_flow || has_transient_conc || has_transient_press || has_transient_temp ||
+       n_transient_partial_press > 0
         log_print("      Time-dependent boundaries: " *
                   "$(length(transient_flow)) flow, $(length(transient_conc)) concentration, " *
-                  "$(length(transient_press)) pressure, $(length(transient_temp)) temperature")
+                  "$(length(transient_press)) pressure, $(length(transient_temp)) temperature, " *
+                  "$(n_transient_partial_press) partial pressure")
     end
 
     # Main time stepping loop
@@ -888,6 +958,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # Indexed by gas rather than accumulated into a scalar because the update loop is
     # threaded over gases: each task owns one entry, so there is no race and no lock.
     negative_conc_count = zeros(Int, NGases)
+
+    # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is resolved.
+    # Per-node, per-gas clamp counter, so the top offending nodes can be classified as
+    # pressure-BC / concentration-BC / interior. A matrix rather than a shared vector:
+    # each thread in the update loop below owns exactly one gas_idx (hence one column),
+    # so writes never race, the same reasoning as negative_conc_count above.
+    negative_conc_node_count = zeros(Int, Nnodes, NGases)
 
     # Step index of the last output, so the clamp count can be normalised by the number
     # of nodal updates it was accumulated over rather than reported as a bare total.
@@ -1003,6 +1080,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             q_aux = q_aux_chunk[c]
             qT_aux = qT_aux_chunk[c]
             ρ_g_buf = ρ_g_chunk[c]
+            a_su = a_su_chunk[c]
+            aT_su = aT_su_chunk[c]
 
             for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1] #loop elements
                 # Get element nodes
@@ -1028,7 +1107,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get gas dynamic viscosity
                 μ_g = gas.dynamic_viscosity
 
-                #Get current gas nodal concentrations                
+                # Effective diffusivity of THIS species' diffusive operator, used only by
+                # the SU stabilization parameter below. Zero when diffusion is switched off
+                # in solver_settings, matching what the assembled system actually contains
+                # rather than what the material file lists - axisym_darcy_radial is exactly
+                # this case (diffusion = 0 by construction).
+                D_g_eff = calculate_diffusion ? (θ_g * D_g * τ) : 0.0
+
+                #Get current gas nodal concentrations
                 C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
 
                 #______________________________________________________    
@@ -1093,6 +1179,28 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         #adds one contraction and no new element matrices (tex:368).
                         C_tot_gp = N_p' * C_t
                         qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .* (dN_dx * (dN_dx' * T_e))
+
+                        #______________________________________________________
+                        #Streamline-upwind (SU) stabilization, added to both q_aux and
+                        #qT_aux. See src/ADVECTION_STABILIZATION_NOTES.md for the
+                        #derivation. v_gp and v_gpT are the two local velocities driving
+                        #q_aux and qT_aux respectively - the product-rule split of
+                        #grad(P) = R(T grad(C_tot) + C_tot grad(T)) - and are NOT the same
+                        #vector, so each gets its own tau*.
+                        #______________________________________________________
+                        if calculate_stabilization
+                            v_gp = (-k_intrinsic * R * T_gp / μ_g) .* (dN_dx' * C_t)
+                            v_gpT = (-k_intrinsic * R * C_tot_gp / μ_g) .* (dN_dx' * T_e)
+
+                            τ_g = stab_tau(v_gp, h_elem[e], D_g_eff)
+                            τ_gT = stab_tau(v_gpT, h_elem[e], D_g_eff)
+
+                            mul!(a_su, dN_dx, v_gp)
+                            q_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
+
+                            mul!(aT_su, dN_dx, v_gpT)
+                            qT_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * T_e))
+                        end
                     end
                     for i in 1:4 #loop nodes in element
                         node_id = nodes[i] #global node id
@@ -1232,23 +1340,38 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 # top of the step; for a constant one it is last step's imposed
                 # value, which is the same number.
 
-                #The correction λ/M is applied equally to every gas that is free to move
-                #at this node. A gas whose concentration is prescribed here cannot absorb
-                #any of it, so the constraint must be shared among the free gases only;
-                #dividing by NGases would both under-correct and push the prescribed gas
-                #off its boundary value.
+                #The correction is composition-weighted, not split equally in absolute
+                #terms among the free gases. An equal absolute split subtracts the SAME
+                #amount from every free species regardless of how much of it is actually
+                #present, which can drive a minority species (e.g. Air, once displaced by
+                #CO2 near an injection face) negative while barely denting a dominant
+                #species with plenty to give - a documented, pre-existing weakness (see
+                #advection_1d/case.toml's discussion of the same outlet mechanism).
+                #λ_bc[j] is now the TOTAL correction rate needed (no /n_free); it is split
+                #at the application site below in proportion to each free gas's own level-n
+                #concentration, via free_conc_sum[j] computed here. A gas whose
+                #concentration is prescribed here cannot absorb any of it, so both the
+                #weighting sum and (at the application site) the split exclude prescribed
+                #gases - dividing by NGases, or weighting by a prescribed gas's own
+                #concentration, would both push the prescribed gas off its boundary value.
                 n_free = 0
+                free_sum = 0.0
                 for g in 1:NGases
                     n_free += P_boundary[j, g]
+                    free_sum += P_boundary[j, g] * C_g[j, g]
                 end
+                free_conc_sum[j] = free_sum
+                n_free_nodes[j] = n_free
 
                 if n_free > 0
-                    λ_bc[j] = M[j] * (C_total_j + dt *total_rate[j]  - total_concentration[j]) / (dt * n_free)  # Lagrangian multiplier for node j
+                    λ_bc[j] = M[j] * (C_total_j + dt * total_rate[j] - total_concentration[j]) / dt  # Total Lagrangian correction rate for node j
                 else
                     λ_bc[j] = 0.0  # every gas is prescribed here, nothing left to correct
                 end
             else
                 λ_bc[j] = 0.0  # No influence length found, set multiplier to zero
+                free_conc_sum[j] = 0.0
+                n_free_nodes[j] = 0
             end
         end
 
@@ -1403,9 +1526,18 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 # prescribed concentration away from its boundary value every step. The
                 # drift only shows up once the reaction is active, because λ is built from
                 # total_rate, which carries the CO2 sink term.
+                #
+                # The split among free gases is composition-weighted (C_TOL guards the
+                # degenerate case where every free gas is ~0 at this node, falling back to
+                # an equal split rather than a 0/0 division) - see the multiplier loop
+                # above for why. P_boundary gates the whole thing exactly as before.
                 lagrangian_correction = 0.0
                 if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
-                    lagrangian_correction = (λ_bc[i] / M[i]) * P_boundary[i, gas_idx]
+                    C_TOL = 1e-12
+                    denom = free_conc_sum[i]
+                    weight = denom > C_TOL ? (C_g[i, gas_idx] / denom) :
+                             (n_free_nodes[i] > 0 ? 1.0 / n_free_nodes[i] : 0.0)
+                    lagrangian_correction = (λ_bc[i] / M[i]) * weight * P_boundary[i, gas_idx]
                 end
 
                 C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
@@ -1415,6 +1547,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 if C_g[i, gas_idx] < C_MIN
                     if C_g[i, gas_idx] < 0.0
                         negative_conc_count[gas_idx] += 1
+                        negative_conc_node_count[i, gas_idx] += 1  # TEMPORARY DIAGNOSTIC
                         if !get(negative_conc_warned, gas_idx, false)
                             log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
                             negative_conc_warned[gas_idx] = true
@@ -1695,11 +1828,21 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Apply partial pressure boundary conditions after temperature update
         # This ensures partial pressure remains constant by updating concentrations
         # based on new temperature: C_g = P_partial / (R * T)
+        #
+        # A time-driven partial pressure (partial_pressure_bc_tf) is evaluated at t_next,
+        # the same convention as every other Dirichlet boundary re-imposed below (a value
+        # IMPOSED on the new state, not a flux entering the rate). This block runs
+        # unconditionally every step regardless of whether any curve is attached - see the
+        # n_transient_partial_press comment above - so the curve lookup is inline rather
+        # than gated behind a has_transient_* flag.
         for (node_id, partial_pressures) in mesh.partial_pressure_bc
+            tf_ids = get(mesh.partial_pressure_bc_tf, node_id, Int[])
             for gas_idx in 1:NGases
                 # Recalculate concentration to maintain constant partial pressure
                 # P_partial = C_g * R * T  =>  C_g = P_partial / (R * T)
-                C_g[node_id, gas_idx] = partial_pressures[gas_idx] / (R * T[node_id])
+                tf_id = gas_idx <= length(tf_ids) ? tf_ids[gas_idx] : 0
+                p_partial = bc_value(time_functions, tf_id, partial_pressures[gas_idx], t_next)
+                C_g[node_id, gas_idx] = p_partial / (R * T[node_id])
             end
         end
 
@@ -1762,11 +1905,30 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                                          negative_conc_count[g]) for g in 1:NGases), ", ")
                 log_print(@sprintf("      Negative-concentration detected %d times since the last output (%s)",
                                    total_clamped, per_gas))
-                # if rate > 1e-3
-                #     log_print(@sprintf("      ⚠ That is %.2f%% of all nodal updates. A clamp firing this often is not", 100 * rate))
-                #     log_print("        round-off: it is arresting an unstable mode and hiding it as a bounded")
-                #     log_print("        oscillation. Re-check the critical time step and lower the Courant number.")
-                # end
+                if rate > 1e-3
+                    log_print(@sprintf("      ⚠ That is %.2f%% of all nodal updates. A clamp firing this often is not", 100 * rate))
+                    log_print("        round-off: it is arresting an unstable mode and hiding it as a bounded")
+                    log_print("        oscillation. Re-check the critical time step and lower the Courant number.")
+                end
+
+                # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is
+                # resolved. Top-10 most-clamped nodes this interval, classified against
+                # the boundary-condition dictionaries so a concentration of hits on
+                # pressure/concentration-BC nodes (vs. scattered interior nodes) points at
+                # the Lagrangian pressure-BC correction rather than a front oscillation.
+                node_totals = vec(sum(negative_conc_node_count, dims=2))
+                top_nodes = sortperm(node_totals, rev=true)[1:min(10, Nnodes)]
+                log_print("      Top clamped nodes (node: count [BC flags]):")
+                for nid in top_nodes
+                    node_totals[nid] == 0 && break
+                    flags = String[]
+                    haskey(mesh.absolute_pressure_bc, nid) && push!(flags, "pressure_bc")
+                    haskey(mesh.concentration_bc, nid) && push!(flags, "concentration_bc")
+                    haskey(mesh.uniform_flow_bc, nid) && push!(flags, "flow_bc")
+                    isempty(flags) && push!(flags, "interior")
+                    log_print(@sprintf("        node %d: %d [%s]", nid, node_totals[nid], join(flags, ",")))
+                end
+                fill!(negative_conc_node_count, 0)
             end
             fill!(negative_conc_count, 0)
             last_output_step = step

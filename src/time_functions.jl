@@ -454,6 +454,7 @@ function validate_time_function_ids(time_functions, mesh)
 
     for ids in values(mesh.concentration_bc_tf); union!(referenced, ids); end
     for ids in values(mesh.uniform_flow_bc_tf); union!(referenced, ids); end
+    for ids in values(mesh.partial_pressure_bc_tf); union!(referenced, ids); end
     union!(referenced, values(mesh.absolute_pressure_tf))
     union!(referenced, values(mesh.temperature_bc_tf))
 

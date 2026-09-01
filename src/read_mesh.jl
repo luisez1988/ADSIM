@@ -40,6 +40,13 @@ and the boundaries behave exactly as they did.
 - `uniform_flow_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...])
 - `absolute_pressure_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
 - `temperature_bc_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
+- `partial_pressure_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...]),
+  driving `partial_pressure_bc`. Added later than the other four `*_tf` fields, which is
+  why the re-imposition it drives (`fully_explicit_solver.jl`) looks up the curve inline
+  each step rather than through a pre-filtered `transient_*` list: unlike the other BCs,
+  partial_pressure_bc is already re-applied unconditionally every step (it tracks the
+  evolving temperature via the ideal gas law), so there was no separate "only touch this
+  if time-driven" fast path to fit the ramp into.
 """
 
 mutable struct MeshData
@@ -62,6 +69,7 @@ mutable struct MeshData
     uniform_flow_bc_tf::Dict{Int, Vector{Int}}
     absolute_pressure_tf::Dict{Int, Int}
     temperature_bc_tf::Dict{Int, Int}
+    partial_pressure_bc_tf::Dict{Int, Vector{Int}}
 
     function MeshData()
         new(0, 0,
@@ -79,7 +87,8 @@ mutable struct MeshData
             Dict{Int, Vector{Int}}(),
             Dict{Int, Vector{Int}}(),
             Dict{Int, Int}(),
-            Dict{Int, Int}())
+            Dict{Int, Int}(),
+            Dict{Int, Vector{Int}}())
     end
 end
 
@@ -200,6 +209,10 @@ function read_mesh_file(filename::String)
             elseif line == "temperature_bc_tf"
                 line_idx = parse_bc_tf_scalar!(mesh.temperature_bc_tf, lines,
                                                line_idx + 1, "temperature_bc_tf")
+
+            elseif line == "partial_pressure_bc_tf"
+                line_idx = parse_bc_tf_vector!(mesh.partial_pressure_bc_tf, lines,
+                                               line_idx + 1, "partial_pressure_bc_tf")
 
             # Parse materials
             elseif line == "materials"

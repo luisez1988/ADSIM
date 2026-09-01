@@ -383,15 +383,17 @@ end
 
 
 """
-    apply_partial_pressure_bc!(mesh::MeshData)
+    apply_partial_pressure_bc!(mesh::MeshData, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
 
 Apply partial pressure boundary conditions from mesh data to the global C_g array.
-This function sets gas concentrations at nodes where partial pressure boundary 
+This function sets gas concentrations at nodes where partial pressure boundary
 conditions are specified, using the ideal gas law: C_g[i] = P_partial[i] / (R * T).
 It also marks these nodes in P_boundary to prevent the solver from updating them.
 
 # Arguments
 - `mesh::MeshData`: Mesh data structure containing partial pressure BC data
+- `time_functions`: Curve table from the calculation file, empty for a constant model
+- `t`: Time to seed time-driven nodes at, 0 for a fresh run or the checkpoint time
 
 # Note
 - Modifies global variables `C_g` and `P_boundary`
@@ -399,17 +401,20 @@ It also marks these nodes in P_boundary to prevent the solver from updating them
 - P_boundary is set to 0 for all gases at partial pressure BC nodes
 - Concentrations will be dynamically updated in solver to maintain partial pressure
 """
-function apply_partial_pressure_bc!(mesh)
+function apply_partial_pressure_bc!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global C_g, NGases, P_boundary, T
-    
+
     R = 8.314  # Universal gas constant [J/(mol·K)]
-    
+
     # Apply nodal partial pressure boundary conditions
     for (node_id, partial_pressures) in mesh.partial_pressure_bc
+        tf_ids = get(mesh.partial_pressure_bc_tf, node_id, Int[])
         @threads for gas_idx in 1:NGases
             # Calculate concentration from partial pressure using ideal gas law
             # P_partial = C_g * R * T  =>  C_g = P_partial / (R * T)
-            C_g[node_id, gas_idx] = partial_pressures[gas_idx] / (R * T[node_id])
+            tf_id = gas_idx <= length(tf_ids) ? tf_ids[gas_idx] : 0
+            p_partial = bc_value(time_functions, tf_id, partial_pressures[gas_idx], t)
+            C_g[node_id, gas_idx] = p_partial / (R * T[node_id])
             P_boundary[node_id, gas_idx] = 0  # Mark node as having partial pressure BC
         end
     end
@@ -438,7 +443,7 @@ function apply_all_initial_conditions!(mesh, materials,
     apply_initial_temperature!(mesh)
     apply_temperature_bc!(mesh, time_functions, t)
     apply_concentration_bc!(mesh, time_functions, t)
-    apply_partial_pressure_bc!(mesh)
+    apply_partial_pressure_bc!(mesh, time_functions, t)
     apply_pressure_bc!(mesh, time_functions, t)
     apply_initial_lime_concentration!(mesh, materials)
     
