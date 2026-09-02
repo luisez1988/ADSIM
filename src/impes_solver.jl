@@ -1527,8 +1527,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                      ("diffusion", courant_number * dt_diffusion_fixed),
                      ("conduction", courant_number * dt_conduction_fixed),
                      ("reaction", courant_number * dt_reaction_fixed),
-                     ("positivity", 0.5 * dt_positivity),
-                     ("ramp", dt_growth_max * dt))
+                     ("positivity", 0.5 * dt_positivity))
             best = Inf
             for (nm, val) in cands
                 if val < best
@@ -1538,7 +1537,16 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             end
             # The harmonic sum can bind below every individual term.
             if courant_number * dt_explicit < 0.95 * best
+                best = courant_number * dt_explicit
                 dt_limit_name = "combined"
+            end
+            # The growth cap is named only while the step is still climbing towards what
+            # the physics allows. Once it settles there the cap sits a factor
+            # dt_growth_max above the step by construction, so it is the smallest
+            # candidate on almost every step and would be reported as the limit for the
+            # whole run - which is exactly backwards.
+            if dt_growth_max * dt < 0.95 * best
+                dt_limit_name = "startup ramp"
             end
         end
 
