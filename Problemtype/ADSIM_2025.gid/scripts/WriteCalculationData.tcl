@@ -220,6 +220,16 @@ proc ADSIM::WriteSolver { root } {
     # Dimension selection
     set dimension [$solver_container selectNodes {string(value[@n="dimension_selection"]/@v)}]
     GiD_WriteCalculationFile puts "solver_type = \"$dimension\""
+
+    # Time integration. Always written when the field exists, so the calculation file
+    # records which scheme produced a result rather than leaving it to a default - these
+    # files are the record of a run. A model saved before this field existed returns an
+    # empty string here and writes nothing, which the solver's own "Explicit" default
+    # covers, so older models still produce the calculation file they always did.
+    set time_integration [$solver_container selectNodes {string(value[@n="time_integration"]/@v)}]
+    if {$time_integration != ""} {
+        GiD_WriteCalculationFile puts "time_integration = \"$time_integration\""
+    }
     
     # Calculation mode components
     set calc_mode_container [$solver_container selectNodes {container[@n="calculation_mode"]}]
@@ -240,6 +250,14 @@ proc ADSIM::WriteSolver { root } {
         # Reaction kinetics
         set reaction_kinetics [$calc_mode_container selectNodes {string(value[@n="reaction_kinetics"]/@v)}]
         GiD_WriteCalculationFile puts "reaction_kinetics = $reaction_kinetics"
+
+        # Streamline-upwind stabilization of the advective flux. Optional in the
+        # solver and off by default, so an older model that lacks the field writes
+        # nothing rather than writing a 0 - both give the same run.
+        set advection_stabilization [$calc_mode_container selectNodes {string(value[@n="advection_stabilization"]/@v)}]
+        if {$advection_stabilization != ""} {
+            GiD_WriteCalculationFile puts "advection_stabilization = $advection_stabilization"
+        }
 
         # Heat transport. With both off the temperature is held fixed and the
         # reaction enthalpy is ignored.

@@ -43,6 +43,7 @@ proc ADSIM::WriteMeshFile { filename } {
     
     # Write partial pressure boundary conditions
     ADSIM::WriteMeshPartialPressureBC $root
+    ADSIM::WriteMeshTimeFunctionsPerGas $root "partial_pressure_bc_tf" "gas_partial_pressure" {line point}
     
     # Write initial gas concentrations
     ADSIM::WriteMeshInitialConcentrations $root

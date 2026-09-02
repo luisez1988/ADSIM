@@ -1634,6 +1634,11 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             negative_lime_warned = false
         end
 
+        # The stage is done. Leave before sizing a step that will never be taken - with
+        # the stage end capped below, that step is exactly zero long and would trip the
+        # collapse guard on the way out.
+        current_time >= stage_end_time - t_eps && break
+
         # Land exactly on the next output time, or on the end of the stage, rather than
         # stepping over either. Capping at the stage end is what the explicit solver gets
         # for free from running a fixed number of steps.

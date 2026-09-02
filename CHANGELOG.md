@@ -88,7 +88,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tolerances as their explicit counterparts. All sixteen cases pass, and every pre-existing
   case scores identically to before.
 
+- **GiD problemtype can assign a time function to a partial pressure boundary.** The
+  solver has parsed a `partial_pressure_bc_tf` block since the block was added, but the
+  problemtype had no field to write one: `Partial_Pressure_BC.xml` carried the ten per-gas
+  value fields with no matching `time_function_gas_N`, and `WriteMeshFile.tcl` was the one
+  boundary whose value block had no `_tf` companion call. No mesh in the repository
+  contains the block, so the path had never been exercised end to end. Both halves are now
+  in place, reusing the existing `ADSIM::WriteMeshTimeFunctionsPerGas` helper unchanged.
+
+  Verified against a ramp from 0 to 113 kPa over 60 s on the `4mm_size` geometry: the
+  probed partial pressure tracks the curve to seven significant figures and holds at the
+  end value afterwards, with the second gas left constant by curve id 0. This is the
+  documented recipe in `Problemtype/Mesh file writting instructions.md` for blunting the
+  initial shock at an injection face, which until now could not be set up from the GUI.
+
+- **GiD problemtype exposes the new solver options.** `[solver] time_integration` is a
+  dropdown beside the dimension selector (Explicit / IMPES), and `advection_stabilization`
+  is a switch alongside the other solver components. The latter closes a pre-existing gap:
+  SU stabilization has been in the solver since it was added but was only reachable by
+  hand-editing the calculation file, which also made IMPES unusable from the GUI, since it
+  is the setting IMPES needs. Both are written by `WriteCalculationData.tcl`. A model saved
+  before these fields existed writes exactly the calculation file it wrote before, and the
+  solver's own defaults (`"Explicit"`, `0`) cover it.
+
 ### Fixed
+- IMPES: the final step of a stage sized itself before the loop could exit, and with the
+  step capped at the stage end that step is exactly zero long, tripping the collapse guard
+  on the way out. Only reachable when a stage ends exactly on an output boundary, which is
+  the normal case. The loop now leaves before sizing a step it will not take.
+
 - **Critical time step is now measured from the assembled operator rather than assumed
   from a closed form.** `calculate_critical_time_step` evaluated `λ_max` of `M̂⁻¹K`
   analytically as `4·coef/h_min²`, which is exact on a uniform *plane* quad mesh and only
