@@ -864,8 +864,14 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                 mul!(a_su, dN_dx, v_gp)
                                 qs_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
 
+                                #The companion term stabilizes the SAME transported quantity - the species
+                                #concentration - but along the streamline of the thermally driven velocity,
+                                #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
+                                #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
+                                #cannot restore the discrete maximum principle, and it carries units of
+                                #K m^3/s where a molar flux is required.
                                 mul!(aT_su, dN_dx, v_gpT)
-                                qs_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * T_e))
+                                qs_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
                             end
                         end
 

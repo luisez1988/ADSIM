@@ -262,13 +262,16 @@ $$
 \qquad
 \Delta t_{\text{adv}} = \frac{\theta_g h}{|\mathbf v|_{\max}},
 \qquad
-\Delta t_{su} = \frac{h^2}{2\max_e \tau^{*}|\mathbf v|^2} = \frac{h}{|\mathbf v|_{\max}},
+\Delta t_{su} = \frac{\theta_g h^2}{2\max_e \tau^{*}|\mathbf v|^2} = \frac{\theta_g h}{|\mathbf v|_{\max}},
 \qquad
 \Delta t_{\text{rxn}} = \frac{1}{2\kappa_{\max}},
 $$
 
-the $\Delta t_{su}$ form following from $\tau^{*}|\mathbf v|^2 \le h|\mathbf v|/2$, and
-combined as before:
+the $\Delta t_{su}$ form following from $\tau^{*}|\mathbf v|^2 \le h|\mathbf v|/2$. The
+$\theta_g$ is there for the same reason it appears in $\Delta t_{\text{adv}}$: the SU term
+is a flux like any other and is divided by the lumped mass, which carries $\theta_g$. So
+this limit is never below the advective one and `dt_courant` is reused for it in the code
+(`impes_solver.jl`, the harmonic sum). Combined as before:
 
 $$
 \frac{1}{\Delta t_{\text{comb}}} = \frac{1}{\Delta t_{\text{diff}}}

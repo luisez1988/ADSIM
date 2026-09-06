@@ -132,7 +132,7 @@ function arrhenius_coefficient(k_o, E, T)
 end
 
 """
-    interfacial_area_factor(C_g_co2, β_area)
+    interfacial_area_factor(C_g_co2, T, β_area)
 
 Interfacial-area factor a of the rate law, normalised at atmospheric CO2.
 
@@ -152,16 +152,35 @@ Moving this reference multiplies a by a constant and divides k_o by the same
 constant, so β, the residuals and the fit quality are unchanged by the choice;
 only the meaning of k_o changes.
 
-# Temperature
-The factor carries NO temperature dependence: both the Henry constant and the
-ideal-gas conversion are evaluated at T_ref, so a depends on the CO2 gas
-concentration alone. This is deliberate. The interfacial area is set by the
-capillary state of the pore network, not by how warm the specimen is, and
-letting T into this factor produces a strong spurious feedback in either
-direction: through K_H(T) the factor collapses as the specimen self-heats,
-while through the ideal-gas term alone it would grow by an order of magnitude
-over a typical adiabatic rise. The genuine temperature dependence of the rate
-remains, through the Arrhenius coefficient and through C_aq(T) in
+# What the factor is a function of
+Both sides of the exponent are the dissolved CO2 that a PARTIAL PRESSURE would
+give at T_ref, so the factor is a function of p_CO2 = C_g R T:
+
+    a = exp[ β K_H(T_ref) (p_CO2 - x_CO2 P_atm) ]
+
+The Henry constant is frozen at T_ref, because it is the calibration's unit of
+account and not a physical solubility here; the ideal-gas conversion uses the
+CURRENT temperature, because that is what makes the argument a pressure.
+
+An earlier revision froze T in that conversion as well, which made the local
+value a CONCENTRATION while the reference stayed a pressure - two different
+quantities either side of the same subtraction. The calibration regressed k_o
+against K_H° p_CO2, one value per pressure set and constant within a test, so
+freezing T there breaks the pairing the moment the specimen leaves T_ref: under
+the held partial pressure of the elemental tests the gas expands as it
+self-heats, C_g falls, and a collapses by about a factor of four over a 40 K
+rise. The shipped (k_o, β) pair then fails to reproduce the very tests it was
+fitted to, by some 28 percentage points of DoC.
+
+The concern that motivated freezing it - that a would "grow by an order of
+magnitude over an adiabatic rise" - applies to a closed constant-volume system,
+where C_g is held and heating raises the pressure. There the growth is physical
+rather than spurious: a higher pressure does force more CO2 into the menisci.
+What must not happen, and what the frozen form produced, is for a to move while
+the pressure driving it does not.
+
+The genuine temperature dependence of the RATE is unaffected and remains where
+it belongs, in the Arrhenius coefficient and in C_aq(T) of
 `extent_of_reaction_rate`.
 
 # Pairing with k_o
@@ -171,12 +190,13 @@ refitting the other rescales the rate by exp(β ΔC_aq).
 
 # Arguments
 - `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
+- `T`: Current absolute temperature [K], used only to recover p_CO2 = C_g R T
 - `β_area`: Interfacial-area coefficient β [m³/mol], 0 disables the factor
 
 # Returns
 - `a`: Dimensionless area factor, a > 0
 """
-function interfacial_area_factor(C_g_co2, β_area)
+function interfacial_area_factor(C_g_co2, T, β_area)
     if β_area == 0.0
         return 1.0
     end
@@ -186,9 +206,11 @@ function interfacial_area_factor(C_g_co2, β_area)
     P_atm = 101325.0      # Pa
     x_co2_atm = 420e-6    # mol/mol, CO2 mole fraction of air
 
-    # Dissolved CO2 the local gas concentration corresponds to at T_ref, and the
-    # value in equilibrium with the atmosphere. Both per m³ of water.
-    C_aq_ref = henry_solubility(T_ref) * R_gas * T_ref * C_g_co2
+    # Both terms are the dissolved CO2 that a partial pressure would give at T_ref,
+    # per m³ of water: the local one from p_CO2 = C_g R T, the reference one from the
+    # atmospheric partial pressure. Using T here rather than T_ref is what keeps the
+    # two sides of the subtraction the same kind of quantity - see the docstring.
+    C_aq_ref = henry_solubility(T_ref) * R_gas * T * C_g_co2
     C_aq_atm = henry_solubility(T_ref) * x_co2_atm * P_atm
 
     return exp(β_area * (C_aq_ref - C_aq_atm))
@@ -265,7 +287,7 @@ function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
     A_react = heaviside(Δ_lime) > 0.0 ? Δ_lime : 0.0
 
     k_T = arrhenius_coefficient(k_o, E, T)
-    a = interfacial_area_factor(C_g_co2, β_area)
+    a = interfacial_area_factor(C_g_co2, T, β_area)
 
     return k_T * a * C_aq * A_react
 end
@@ -1198,8 +1220,14 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             mul!(a_su, dN_dx, v_gp)
                             q_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
 
+                            #The companion term stabilizes the SAME transported quantity - the species
+                            #concentration - but along the streamline of the thermally driven velocity,
+                            #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
+                            #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
+                            #cannot restore the discrete maximum principle, and it carries units of
+                            #K m^3/s where a molar flux is required.
                             mul!(aT_su, dN_dx, v_gpT)
-                            qT_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * T_e))
+                            qT_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
                         end
                     end
                     for i in 1:4 #loop nodes in element

@@ -105,8 +105,16 @@ Evaluating `coth` every Gauss point is wasteful and numerically delicate near `P
 standard robust practical approximation (Brooks & Hughes 1982), implemented here:
 
 ```
-τ* ≈ (h / 2|v|) · min(Pe/3, 1)
+τ* ≈ (h / 2|v|) · min(Pe/6, 1)
 ```
+
+**Watch the Péclet convention.** This document uses `Pe ≡ |v|h/D` throughout, matching the
+`coth(Pe/2) − 2/Pe` form above; expanding that for small argument gives `Pe/6`, which is why
+the approximation carries a 6. Much of the SUPG literature instead defines `Pe ≡ |v|h/2D`,
+writes the exact factor as `coth(Pe) − 1/Pe`, and therefore quotes the approximation as
+`min(Pe/3, 1)`. The two are the same number; mixing the exact form from one convention with
+the approximation from the other overestimates `τ*` by a factor of two. `stab_tau` implements
+`(h/2|v|)·min(h|v|/(6 D_eff), 1)`, i.e. the `Pe ≡ |v|h/D` convention used here.
 
 ### Applied to ADSIM's species equation
 
@@ -117,8 +125,14 @@ work). Using this species' own effective diffusivity (matching the diffusion ter
 stabilization parameter `τ*`, an unfortunate but unavoidable symbol collision):
 
 ```
-D_g,eff = θ_g D_g τ_soil,   Pe_g = |v_g| h_e / D_g,eff,   τ*_g = (h_e/2|v_g|)·min(Pe_g/3, 1)
+D_g,eff = θ_g D_g τ_soil,   Pe_g = |v_g| h_e / D_g,eff,   τ*_g = (h_e/2|v_g|)·min(Pe_g/6, 1)
 ```
+
+Note that `v_g` here is the **superficial (Darcy)** velocity while `D_g,eff` carries `θ_g`, so
+`Pe_g = |v_g|h/(θ_g D_g τ_soil)` is built from the **pore** velocity `|v_g|/θ_g` against the
+diffusivity `D_g τ_soil` that actually acts on `C_g` once `θ_g` cancels between the flux and
+the lumped mass. That pairing is deliberate and is the physically meaningful Péclet number;
+quoting `D_g,eff` and `v_g` without it invites an error of `θ_g`.
 
 `D_g,eff` is set to zero when `diffusion = 0` in `[solver]`, matching what the assembled system
 actually contains rather than what the material file lists — `axisym_darcy_radial` in the
@@ -129,8 +143,22 @@ element operator shape but is driven by the opposite gradient (roles of `T` and 
 swapped, the product-rule split of `∇P = R(T∇C_tot + C_tot∇T)`):
 
 ```
-v_g^T = −(k/μ_g)·R·C_tot·∇T,   τ*_g,T = (h_e/2|v_g^T|)·min(Pe_g^T/3, 1)
+v_g^T = −(k/μ_g)·R·C_tot·∇T,   τ*_g,T = (h_e/2|v_g^T|)·min(Pe_g^T/6, 1)
 ```
+
+Both terms stabilize the **same transported quantity**, the species concentration; only the
+streamline along which they do it differs. So both contract `∇C_g`:
+
+```
+q^su_g   = ∫ τ*_g   (v_g  ·∇N_i)(v_g  ·∇C_g) dΩ
+q^su_g,T = ∫ τ*_g,T (v_g^T·∇N_i)(v_g^T·∇C_g) dΩ
+```
+
+Contracting `∇T` in the second, as an earlier revision did, is not a stabilization: it adds no
+diagonal weight to the `C_g` system, so it cannot restore the discrete maximum principle that
+is the whole point of the term, and it carries units of `K m³/s` where a molar flux is
+required. It is identically zero on an isothermal run, which is why no verification case
+caught it.
 
 `v_g` and `v_g^T` are not parallel in general, so `τ*_g ≠ τ*_g,T`. Axisymmetric formulation
 needs no special treatment: `r_gp` enters purely through the shared quadrature measure

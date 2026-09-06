@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `interfacial_area_factor` compared two different quantities. Its reference term was the
+  dissolved CO2 in equilibrium with atmospheric CO2, a partial pressure, while its local
+  term converted the gas concentration at the reference temperature, making it a
+  concentration. The two sides of the exponent were therefore not the same kind of
+  quantity, and the factor moved whenever the temperature did, at fixed pressure.
+  - The conversion now uses the current temperature, `C_aq = K_H(T_ref) R T C_g`, so both
+    terms are the dissolved CO2 that a partial pressure would give at `T_ref` and the
+    factor is a function of `p_CO2` alone. `interfacial_area_factor` gained a temperature
+    argument; the start-up time-step bound passes `T_ref`, since it is formed from initial
+    data before any run.
+  - This is the form the manuscript already specified (Eq. `area_factor`, with
+    `C_aq = K_H° p_CO2`); the code had deviated from it. The manuscript's surrounding prose
+    claimed both the Henry constant and the ideal-gas conversion were frozen, which is
+    self-contradictory, and has been corrected to match its own equation.
+  - Effect: under the held CO2 pressure of the calibration tests the gas expands as the
+    specimen self-heats, so the frozen form made `a` collapse about fourfold over a 40 K
+    rise. The calibrated `(k_o, beta)` pair consequently missed the tests it was fitted to
+    by up to 28 percentage points of degree of carbonation; that is now 0.7 pp, which is
+    the area-law fit residual. Isothermal results are unchanged, `T` being `T_ref` there —
+    which is why the verification suite, whose reaction cases are all isothermal, never
+    caught it.
+
 ### Added
 - **IMPES solver: the advective term is now optionally implicit.** New
   `[solver] time_integration = "IMPES"` selects `src/impes_solver.jl` in place of the
