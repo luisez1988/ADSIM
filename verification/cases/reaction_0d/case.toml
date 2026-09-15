@@ -24,11 +24,15 @@ check_steps = []
 # These duplicate the mesh and material files on purpose. If the two drift apart
 # the case fails rather than passing on a coincidence.
 [analytical]
-type    = "carbonation_isothermal"
+type    = "carbonation_fdm"    # RK4 integration of the rate law; see analytical.jl
 k_o     = 1.0e-3     # [reactants].lime_arrhenius_factor
 E       = 0.0        # [reactants].lime_activation_energy
-beta    = 0.0        # [reactants].lime_interfacial_area_beta
+beta    = 15.7       # [reactants].lime_interfacial_area_beta (dimensionless,
+                     # pressure-ratio form: a = exp[beta (p/P_atm - 1)], p total)
 T       = 298.15     # initial_temperature in the mesh
 theta_w = 0.1422     # porosity 0.474 x saturation 0.3
-C_co2   = 45.0       # concentration_bc value in the mesh
+C_co2   = 45.0       # concentration_bc value in the mesh; drives C_aq
+# Total gas concentration, which is what the interfacial-area factor follows.
+# Equal to C_co2 here because the material file declares a single gas, ["CO2"].
+C_total = 45.0
 p_r     = 0.1        # [reaction."Soil 1"].residual_lime

@@ -9,7 +9,7 @@
 
 module Analytical
 
-export erfc, diffusion_series, advection_diffusion, conduction_cosine, linear_profile, carbonation_isothermal, evaluate
+export erfc, diffusion_series, advection_diffusion, conduction_cosine, linear_profile, carbonation_isothermal, carbonation_fdm, evaluate
 export bessel_j0, bessel_j1, besselj0_zeros, conduction_disk
 
 # ---- erf / erfc -----------------------------------------------------------
@@ -194,6 +194,71 @@ gradient operator or the Dirichlet gate is visible immediately.
 linear_profile(x::Float64; v0, vL, L=1.0) = v0 + (vL - v0) * x / L
 
 # ---- Isothermal carbonation (0-D, constant CO2) ---------------------------
+#
+# Two references for the same rate law, sharing the coefficient helpers below so
+# the law is written once:
+#   carbonation_isothermal - closed form, exact whenever the coefficient is constant
+#   carbonation_fdm        - explicit finite-difference integration of the ODE
+# The FDM is the general one: it does not need a constant coefficient, so it stays
+# valid for cases the closed form cannot cover. On a constant-coefficient case the
+# two agree to round-off, which is itself a check that the law is coded the same
+# way twice.
+
+"""
+    _henry_solubility(T)
+
+Henry solubility, van 't Hoff form. Mirrors `henry_solubility` in the solver.
+"""
+function _henry_solubility(T)
+    K_H_ref = 3.3e-4
+    T_ref = 298.15
+    return K_H_ref * exp(2400.0 * (1.0 / T - 1.0 / T_ref))
+end
+
+"""
+    _area_factor(C_total, T, beta; R=8.3145)
+
+Interfacial-area factor, pressure-ratio form. Mirrors `interfacial_area_factor`
+in the solver, floor included:
+
+    a = exp[b (max{p/P_atm - 1, 0})],   p = C_total R T
+
+The driver is the TOTAL gas pressure, summed over species, not the CO2 partial
+pressure: the whole mixture presses on the menisci, and the chamber pressure the
+factor was calibrated against is a total. In a single-gas CO2 case the two
+coincide, which is why `carbonation_fdm` defaults `C_total` to `C_co2`.
+
+`beta` is DIMENSIONLESS here. The earlier dissolved-concentration form carried
+units of m3/mol and is not interchangeable; see the solver docstring.
+"""
+function _area_factor(C_total, T, beta; R=8.3145)
+    beta == 0.0 && return 1.0
+    P_atm = 101325.0
+    p = C_total * R * T
+    return exp(beta * max(p / P_atm - 1.0, 0.0))
+end
+
+"""
+    _carbonation_lambda(; k_o, E, beta, T, theta_w, C_co2, C_total, R=8.3145)
+
+Decay constant of the lime ODE, assembled exactly as the solver assembles it so
+the two are the same number rather than two expressions that happen to agree:
+
+    lambda = k_T * a(C_total) * theta_w * K_H(T) * R * T * C_co2
+
+The solver computes `r = k_T a C_aq (A_s - A_r)` with `C_aq = K_H R T C_g,CO2`
+per m3 of water, then `dA_s/dt = -theta_w r` per m3 of total volume.
+
+Note which concentration enters where, and that they are different: `C_aq` is
+dissolved CO2 and follows the CO2 partial pressure, while `a` is the gas-liquid
+interface and follows the total gas pressure.
+"""
+function _carbonation_lambda(; k_o, E, beta, T, theta_w, C_co2, C_total, R=8.3145)
+    k_T = k_o * exp(-E / (R * T))
+    a = _area_factor(C_total, T, beta; R=R)
+    return k_T * a * theta_w * _henry_solubility(T) * R * T * C_co2
+end
+
 """
     carbonation_isothermal(t; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145)
 
@@ -201,60 +266,93 @@ Degree of carbonation of a specimen held at constant temperature and constant
 CO2 concentration. This is Eq. (5.4) of
 `calibration_reactionrate/integrator_mathematics.md`:
 
-    DoC(t) = (1 - p_r) (1 - exp(-λ t))
+    DoC(t) = (1 - p_r) (1 - exp(-lambda t))
 
-Whenever λ is constant the rate law integrates in closed form, and the result is
-exact — the reference document records it as "exact to round-off at any step
-count". λ is constant here because the CO2 field is pinned by a Dirichlet
-boundary on every node and the temperature does not move (the case sets the
-reaction enthalpy to zero, so the reaction releases no heat).
-
-λ is assembled exactly as the solver assembles it, so the two are the same
-number rather than two expressions that happen to agree:
-
-    λ = k_T · a · θ_w · K_H(T) · R · T · C_co2
-
-The solver computes `r = k_T a C_aq (A_s - A_r)` with `C_aq = K_H R T C_g` per
-m³ of water, then `dA_s/dt = -θ_w r` per m³ of total volume. The notebook writes
-`λ = k_T θ_w K_H p_CO2`; since `p_CO2 = C_co2 R T` for an ideal gas the two are
-identical.
+Whenever lambda is constant the rate law integrates in closed form, and the
+result is exact - the reference document records it as "exact to round-off at
+any step count". lambda is constant here because the CO2 field is pinned by a
+Dirichlet boundary on every node and the temperature does not move (the case
+sets the reaction enthalpy to zero, so the reaction releases no heat).
 
 # Arguments (keyword, all mirroring the material file)
-- `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
+- `k_o`: Arrhenius factor [m3 mol^-1 s^-1]
 - `E`: activation energy [J/mol]
-- `beta`: interfacial-area coefficient [m³/mol]; 0 disables the area factor
+- `beta`: interfacial-area coefficient [-], dimensionless; 0 disables the factor
 - `T`: absolute temperature [K]
-- `theta_w`: volumetric water content, porosity × saturation [-]
-- `C_co2`: prescribed CO2 gas concentration [mol per m³ of gas]
+- `theta_w`: volumetric water content, porosity x saturation [-]
+- `C_co2`: prescribed CO2 gas concentration [mol per m3 of gas]; drives C_aq
+- `C_total`: prescribed TOTAL gas concentration [mol per m3 of gas]; drives the
+  interfacial-area factor. Defaults to `C_co2`, correct for a single-gas case
 - `p_r`: residual lime as a fraction of the initial lime [-]
 
 # Returns
 - Degree of carbonation [-], approaching `1 - p_r` rather than 1
 """
-function carbonation_isothermal(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145)
+function carbonation_isothermal(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r,
+                                C_total=nothing, R=8.3145)
+    t <= 0 && return 0.0
+    C_tot = C_total === nothing ? C_co2 : C_total
+    lam = _carbonation_lambda(; k_o=k_o, E=E, beta=beta, T=T, theta_w=theta_w,
+                                C_co2=C_co2, C_total=C_tot, R=R)
+    return (1.0 - p_r) * (1.0 - exp(-lam * t))
+end
+
+"""
+    carbonation_fdm(t; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145, substeps=20000)
+
+Degree of carbonation by explicit finite-difference integration of the same rate
+law, rather than by its closed-form solution.
+
+Integrates the lime ODE in normalised form, u = A_s / A_s0 with u(0) = 1,
+
+    du/dt = -lambda(u, t) (u - p_r),      DoC = 1 - u
+
+with classical RK4 over `substeps` uniform steps from 0 to `t`. lambda is rebuilt
+inside the step from `_carbonation_lambda`, so the law lives in one place and the
+scheme does not assume lambda is constant - that is the point of having this
+alongside `carbonation_isothermal`. On the constant-coefficient cases in the
+suite the two agree to round-off; where a future case lets the CO2 field or the
+temperature move, this one remains the valid reference.
+
+RK4 rather than forward Euler so that the reference is not itself a first-order
+approximation: the case tolerance has to measure ADSIM's forward-Euler lime
+update, and a reference carrying a comparable error would mask it. At the
+default `substeps` the integration error is far below the 0.5 % gate.
+
+# Arguments
+Identical to [`carbonation_isothermal`](@ref), including the `C_total` default,
+plus:
+- `substeps`: RK4 steps used to reach `t` [-]
+
+# Returns
+- Degree of carbonation [-], approaching `1 - p_r` rather than 1
+"""
+function carbonation_fdm(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r,
+                         C_total=nothing, R=8.3145, substeps::Int=20000)
     t <= 0 && return 0.0
 
-    # Henry solubility, van 't Hoff form (solver: henry_solubility)
-    K_H_ref = 3.3e-4
-    T_ref = 298.15
-    K_H = K_H_ref * exp(2400.0 * (1.0 / T - 1.0 / T_ref))
+    # Single-gas cases pin the total to the CO2 value; a mixed-gas case must say so.
+    C_tot = C_total === nothing ? C_co2 : C_total
 
-    # Interfacial-area factor (solver: interfacial_area_factor). Evaluated at the
-    # reference temperature by construction, and constant here because C_co2 is.
-    a = 1.0
-    if beta != 0.0
-        P_atm = 101325.0
-        x_co2_atm = 420e-6
-        K_H_at_ref = K_H_ref
-        C_aq_ref = K_H_at_ref * R * T_ref * C_co2
-        C_aq_atm = K_H_at_ref * x_co2_atm * P_atm
-        a = exp(beta * (C_aq_ref - C_aq_atm))
+    # du/dt as a closure so the coefficient is rebuilt at every stage rather than
+    # hoisted - the scheme must not bake in the constant-coefficient assumption.
+    du = (u, tau) -> -_carbonation_lambda(; k_o=k_o, E=E, beta=beta, T=T,
+                                            theta_w=theta_w, C_co2=C_co2,
+                                            C_total=C_tot, R=R) * (u - p_r)
+
+    h = t / substeps
+    u = 1.0
+    tau = 0.0
+    for _ in 1:substeps
+        k1 = du(u, tau)
+        k2 = du(u + 0.5 * h * k1, tau + 0.5 * h)
+        k3 = du(u + 0.5 * h * k2, tau + 0.5 * h)
+        k4 = du(u + h * k3, tau + h)
+        u += (h / 6.0) * (k1 + 2k2 + 2k3 + k4)
+        tau += h
     end
 
-    k_T = k_o * exp(-E / (R * T))
-    λ = k_T * a * theta_w * K_H * R * T * C_co2
-
-    return (1.0 - p_r) * (1.0 - exp(-λ * t))
+    return 1.0 - u
 end
 
 # ---- Bessel functions J0, J1 and the zeros of J0 --------------------------
@@ -405,8 +503,15 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
         # Uniform in space; x is ignored, t is the probe sample time.
         return carbonation_isothermal(t; k_o=g("k_o"), E=g("E", 0.0), beta=g("beta", 0.0),
                                       T=g("T", 298.15), theta_w=g("theta_w"),
-                                      C_co2=g("C_co2"), p_r=g("p_r", 0.0),
-                                      R=g("R", 8.3145))
+                                      C_co2=g("C_co2"), C_total=g("C_total", g("C_co2")),
+                                      p_r=g("p_r", 0.0), R=g("R", 8.3145))
+    elseif typ == "carbonation_fdm"
+        # Same law as carbonation_isothermal, integrated rather than solved.
+        return carbonation_fdm(t; k_o=g("k_o"), E=g("E", 0.0), beta=g("beta", 0.0),
+                               T=g("T", 298.15), theta_w=g("theta_w"),
+                               C_co2=g("C_co2"), C_total=g("C_total", g("C_co2")),
+                               p_r=g("p_r", 0.0), R=g("R", 8.3145),
+                               substeps=Int(g("substeps", 20000)))
     else
         error("Unknown analytical type '$typ'. Add it to Analytical.evaluate.")
     end

@@ -132,92 +132,99 @@ function arrhenius_coefficient(k_o, E, T)
 end
 
 """
-    interfacial_area_factor(C_g_co2, T, β_area)
+    interfacial_area_factor(C_g_total, T, β_area)
 
-Interfacial-area factor a of the rate law, normalised at atmospheric CO2.
+Interfacial-area factor a of the rate law, normalised at atmospheric pressure.
 
-    a = exp[β (C_aq - C_aq,atm)]
+    a = exp[β (p / P_atm - 1)]
 
 a stands for the specific gas-liquid interfacial area available to the reaction.
-Forcing CO2 into the pore network increases the area of meniscus in contact with
-the gas, so the rate rises faster with pressure than the linear C_aq term alone
-accounts for. Calibration against the elemental tests gives β of order 0.5
-m³/mol; β = 0 disables the factor and recovers the plain second-order law.
+Pressurising the pore network increases the area of meniscus in contact with the
+gas, so the rate rises faster with pressure than the linear C_aq term alone
+accounts for. β = 0 disables the factor and recovers the plain second-order law.
+
+# The driver is the TOTAL gas pressure
+p is the pressure of the gas phase as a whole, recovered from the ideal gas law
+over every species,
+
+    p = C_g,total R T,    C_g,total = Σ_α C_g,α
+
+not the CO2 partial pressure. What opens the interface is the gas phase pressing
+on the menisci, and every species in the mixture contributes to that. It is also
+what the calibration measured: the elemental tests report a chamber pressure of
+101.3 kPa + gauge, a total, and the fit regressed the rate against it.
+
+Using p_CO2 here instead would make the factor collapse to 1 wherever the pore
+gas is still mostly air, which is most of an injection run, and would leave the
+fitted β describing a quantity the tests never varied independently.
+
+# What the exponent is NOT
+The exponent is a relative overpressure, a pure number. β is therefore
+dimensionless. An earlier revision wrote it in dissolved CO2,
+a = exp[β K_H(T_ref) (p_CO2 - x_CO2 P_atm)], with β in m³/mol. The two agree in
+shape - both exponential in a pressure - and differ in scale by
+K_H(T_ref) P_atm = 33.44 mol/m³, so a β of 0.47 in the old form is 15.7 in this
+one. Values fitted against the old form DO NOT carry over; they must be refitted
+or rescaled, or the pressure sensitivity is lost by that factor.
+
+The reason for the change is that the old exponent was an absolute dissolved
+concentration. Fed a total gas concentration it grew without bound - an interior
+of ordinary air came out at a ~ 9e6 - which is not a statement about interface
+but about the concentration scale of the mixture. A pressure RATIO is bounded by
+the overpressure actually applied, which is what the tests varied and what the
+specimen responds to.
 
 # Reference state
-C_aq,atm = K_H(T_ref) x_CO2 P_atm = 1.40e-2 mol per m³ of water is the dissolved
-CO2 in equilibrium with the free atmosphere, so a = 1 describes a specimen
-sitting in air and a > 1 measures the extra interface that injected CO2 buys.
-Moving this reference multiplies a by a constant and divides k_o by the same
+a = 1 at p = P_atm, so a specimen sitting at ambient pressure reacts at the plain
+second-order rate and a > 1 measures the extra interface that pressurising buys.
+Moving that reference multiplies a by a constant and divides k_o by the same
 constant, so β, the residuals and the fit quality are unchanged by the choice;
 only the meaning of k_o changes.
 
-# What the factor is a function of
-Both sides of the exponent are the dissolved CO2 that a PARTIAL PRESSURE would
-give at T_ref, so the factor is a function of p_CO2 = C_g R T:
-
-    a = exp[ β K_H(T_ref) (p_CO2 - x_CO2 P_atm) ]
-
-The Henry constant is frozen at T_ref, because it is the calibration's unit of
-account and not a physical solubility here; the ideal-gas conversion uses the
-CURRENT temperature, because that is what makes the argument a pressure.
-
-An earlier revision froze T in that conversion as well, which made the local
-value a CONCENTRATION while the reference stayed a pressure - two different
-quantities either side of the same subtraction. The calibration regressed k_o
-against K_H° p_CO2, one value per pressure set and constant within a test, so
-freezing T there breaks the pairing the moment the specimen leaves T_ref: under
-the held partial pressure of the elemental tests the gas expands as it
-self-heats, C_g falls, and a collapses by about a factor of four over a 40 K
-rise. The shipped (k_o, β) pair then fails to reproduce the very tests it was
-fitted to, by some 28 percentage points of DoC.
-
-The concern that motivated freezing it - that a would "grow by an order of
-magnitude over an adiabatic rise" - applies to a closed constant-volume system,
-where C_g is held and heating raises the pressure. There the growth is physical
-rather than spurious: a higher pressure does force more CO2 into the menisci.
-What must not happen, and what the frozen form produced, is for a to move while
-the pressure driving it does not.
-
-The genuine temperature dependence of the RATE is unaffected and remains where
-it belongs, in the Arrhenius coefficient and in C_aq(T) of
-`extent_of_reaction_rate`.
+# Behaviour below atmospheric
+The exponent is floored at zero, so a >= 1. Below ambient pressure the factor
+would otherwise drop under 1 and suppress an already slow reaction, and that
+branch is extrapolation: the calibration covers 5 to 20 kPa of GAUGE pressure
+and says nothing about interface below ambient. The floor keeps the plain
+second-order rate as the lower bound of the law, which is what k_o means at the
+reference state.
 
 # Pairing with k_o
 β and k_o are fitted together and are not independent. Because a is large at
-injection pressures, k_o is correspondingly small; changing one without
-refitting the other rescales the rate by exp(β ΔC_aq).
+injection pressures, k_o is correspondingly small; changing one without refitting
+the other rescales the rate by exp(β Δp/P_atm).
 
 # Arguments
-- `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
-- `T`: Current absolute temperature [K], used only to recover p_CO2 = C_g R T
-- `β_area`: Interfacial-area coefficient β [m³/mol], 0 disables the factor
+- `C_g_total`: TOTAL gas concentration, summed over species [mol per m³ of gas].
+  Not the CO2 component - see above
+- `T`: Current absolute temperature [K], used to recover p = C_g,total R T
+- `β_area`: Interfacial-area coefficient β [-], dimensionless in this form;
+  0 disables the factor
 
 # Returns
-- `a`: Dimensionless area factor, a > 0
+- `a`: Dimensionless area factor, a >= 1
 """
-function interfacial_area_factor(C_g_co2, T, β_area)
+function interfacial_area_factor(C_g_total, T, β_area)
     if β_area == 0.0
         return 1.0
     end
 
     R_gas = 8.3145        # J mol⁻¹ K⁻¹
-    T_ref = 298.15        # K, reference temperature of the calibration
     P_atm = 101325.0      # Pa
-    x_co2_atm = 420e-6    # mol/mol, CO2 mole fraction of air
 
-    # Both terms are the dissolved CO2 that a partial pressure would give at T_ref,
-    # per m³ of water: the local one from p_CO2 = C_g R T, the reference one from the
-    # atmospheric partial pressure. Using T here rather than T_ref is what keeps the
-    # two sides of the subtraction the same kind of quantity - see the docstring.
-    C_aq_ref = henry_solubility(T_ref) * R_gas * T * C_g_co2
-    C_aq_atm = henry_solubility(T_ref) * x_co2_atm * P_atm
+    # Total gas pressure, ideal gas law over the whole mixture. The current
+    # temperature is what makes the argument a pressure rather than a concentration.
+    p = C_g_total * R_gas * T
 
-    return exp(β_area * (C_aq_ref - C_aq_atm))
+    # Relative overpressure, floored at zero so a >= 1 - see the docstring. The
+    # calibration covers overpressure only; below ambient the form is extrapolation.
+    overpressure = max(p / P_atm - 1.0, 0.0)
+
+    return exp(β_area * overpressure)
 end
 
 """
-    extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
+    extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, E, β_area)
 
 Non-negative extent-of-reaction rate r of Eq. (reaction_rate) of the manuscript,
 per unit volume of pore water.
@@ -232,6 +239,21 @@ Heaviside holds the rate at zero once A_s reaches A_r.
 The area factor supplies pressure sensitivity that the linear C_aq term cannot:
 across the calibration pressures C_aq spans only 1.14x while the fitted rate
 spans an order of magnitude. Setting β_area = 0 removes it.
+
+# Which gas concentration enters where
+The two terms are driven by different quantities and it matters which is which:
+
+  - `C_aq` is DISSOLVED CO2, so it comes from the CO2 partial concentration.
+    Henry's law dissolves each species according to its own partial pressure.
+  - `a` is the gas-liquid INTERFACE, so it comes from the TOTAL gas pressure.
+    The whole mixture presses on the menisci, and the calibration chamber
+    pressure the factor was fitted against is a total.
+
+Keeping C_aq on the CO2 component is also what keeps the CO2 sink first order in
+CO2. Driving it off the total instead makes the sink independent of how much CO2
+is actually present, and the positivity limiter in the IMPES step controller then
+drives the step to zero at the advancing front, where CO2 is scarce but the total
+is not.
 
 # Difference from the solubility-capped form
 Earlier versions capped the dissolved lime at the portlandite solubility limit,
@@ -260,26 +282,30 @@ of water, so the caller still recovers the total-volume rate as θ_w r and the
 downstream conversions are unchanged. `lime_solubility` no longer enters the rate.
 
 # Arguments
-- `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]
+- `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]; drives C_aq
+- `C_g_total`: Total gas concentration, summed over species [mol per m³ of gas];
+  drives the interfacial-area factor through the gas pressure
 - `C_lime`: Available lime concentration [mol per m³ of total volume]
 - `C_r`: Residual (shielded) lime concentration [mol per m³ of total volume]
 - `θ_w`: Volumetric water content [-]
 - `T`: Absolute temperature [K]
 - `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
 - `E`: Activation energy [J/mol]
-- `β_area`: Interfacial-area coefficient β [m³/mol], 0 disables the factor
+- `β_area`: Interfacial-area coefficient β [-], dimensionless, 0 disables the factor
 
 # Returns
 - `r`: Extent-of-reaction rate [mol per m³ of water per s], r >= 0
 """
-function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
+function extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, E, β_area)
     if θ_w <= 0.0 || C_g_co2 <= 0.0
         return 0.0
     end
 
     R_gas = 8.3145  # J mol⁻¹ K⁻¹
 
-    # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water]
+    # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water]. Henry's
+    # law dissolves CO2 according to ITS OWN partial pressure, so this is the CO2
+    # component - see "Which gas concentration enters where" above.
     C_aq = henry_solubility(T) * R_gas * T * C_g_co2
 
     # Lime remaining above the shielded residual, per unit total volume
@@ -287,7 +313,10 @@ function extent_of_reaction_rate(C_g_co2, C_lime, C_r, θ_w, T, k_o, E, β_area)
     A_react = heaviside(Δ_lime) > 0.0 ? Δ_lime : 0.0
 
     k_T = arrhenius_coefficient(k_o, E, T)
-    a = interfacial_area_factor(C_g_co2, T, β_area)
+
+    # The interface responds to the TOTAL gas pressure, so the area factor takes the
+    # total concentration rather than the CO2 component.
+    a = interfacial_area_factor(C_g_total, T, β_area)
 
     return k_T * a * C_aq * A_react
 end
@@ -674,7 +703,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     E_reaction = materials.reactants.activation_energy     # J/mol
     # Interfacial-area coefficient of the same rate law. Fitted jointly with k_o,
     # so the two must be taken from the same calibration.
-    β_area_reaction = materials.reactants.interfacial_area_beta  # m³/mol
+    β_area_reaction = materials.reactants.interfacial_area_beta  # dimensionless
 
     # Molar heat capacity of each gas species [J/(mol·K)], in gas_dictionary order.
     # This replaces the single hard-coded mass-basis value the solver used to assume
@@ -722,7 +751,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         if β_area_reaction == 0.0
             log_print("   Interfacial-area coefficient β: 0 (factor disabled, plain second-order law)")
         else
-            log_print(@sprintf("   Interfacial-area coefficient β: %.4g m³/mol (a = 1 at atmospheric CO2)",
+            log_print(@sprintf("   Interfacial-area coefficient β: %.4g [-] (a = 1 at atmospheric pressure)",
                                β_area_reaction))
         end
         if k_o_reaction <= 0.0
@@ -1068,7 +1097,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 props = elem_props[e]
 
                 #Extent-of-reaction rate r >= 0, per unit volume of water
-                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_lime[node_id],
+                # The area factor is driven by the total gas pressure, so the whole
+                # mixture is summed here; C_aq still uses the CO2 component alone.
+                C_g_tot = 0.0
+                for g in 1:NGases
+                    C_g_tot += C_g[node_id, g]
+                end
+
+                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_g_tot,
+                                            C_lime[node_id],
                                             props.residual_lime, props.θ_w, T[node_id],
                                             k_o_reaction, E_reaction, β_area_reaction)
 

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The interfacial-area factor is now driven by the total gas pressure, and `beta` is
+  dimensionless.** `interfacial_area_factor` took the CO2 gas concentration and returned
+  `a = exp[beta (C_aq - C_aq_atm)]`, an absolute dissolved concentration with `beta` in
+  m³/mol. It now takes the total gas concentration and returns
+
+      a = exp[beta max(p/P_atm - 1, 0)],    p = C_g,total R T,  C_g,total = sum_alpha C_g,alpha
+
+  - **Why the total pressure.** What opens the gas-liquid interface is the gas phase as a
+    whole pressing on the menisci, and every species contributes to that. It is also what
+    the calibration measured: the elemental tests report a chamber pressure of 101.3 kPa +
+    gauge, a total. Keeping `p_CO2` here would have collapsed the factor to 1 wherever the
+    pore gas is still mostly air, which is most of an injection run, and would have left
+    `beta` describing a quantity the tests never varied independently. The CO2 dependence
+    still enters the rate law once, through `C_aq` in `extent_of_reaction_rate`.
+  - **Why a ratio.** The old exponent was an absolute concentration, so fed a total gas
+    concentration it grew without bound — an interior of ordinary air came out at
+    `a ~ 9e6`, a statement about the concentration scale of the mixture rather than about
+    interface. A relative overpressure is bounded by the overpressure actually applied.
+  - **Reference state and floor.** `a = 1` at `p = P_atm`, so a specimen at ambient reacts
+    at the plain second-order rate. The exponent is floored at zero, so `a >= 1`: the
+    calibration covers gauge pressures only and says nothing about sub-ambient interface.
+  - **BREAKING for calibrated inputs.** `beta` is dimensionless in this form and the two
+    scales differ by `K_H(T_ref) P_atm = 33.44 mol/m³`, so a `beta` of 0.47 in the old form
+    is 15.7 in this one. Values carried over unconverted lose essentially all pressure
+    sensitivity. `k_o` moves with it, by `exp(beta_old * 33.42)`. Refit, or rescale both
+    together. `src/data/8mm_size_30_3_mat.toml` and the `reaction_0d` verification case have
+    been rescaled; every other shipped case runs `beta = 0` and is unaffected.
+  - `extent_of_reaction_rate` gained a `C_g_total` argument, and both solvers sum over
+    species at the call site. The start-up time-step bound now uses
+    `get_maximum_total_concentration`. `verification/src/analytical.jl` mirrors the new
+    form, including the floor, and `carbonation_isothermal` gained a `C_total` keyword.
+  - The GiD problemtype help text and the material-file comments were updated to match.
+
 ### Fixed
 - `interfacial_area_factor` compared two different quantities. Its reference term was the
   dissolved CO2 in equilibrium with atmospheric CO2, a partial pressure, while its local

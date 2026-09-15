@@ -22,7 +22,8 @@ specific_heat = 1.0
 reaction_enthalpy = -113800.0
 lime_arrhenius_factor = 0.0
 lime_activation_energy = 0.0
-# Interfacial-area coefficient of the factor a = exp(beta (C_aq - C_aq_atm)).
+# Interfacial-area coefficient of the factor a = exp(beta (p/P_atm - 1)),
+# with p the total gas pressure; beta is dimensionless.
 # Zero disables the factor and gives the plain second-order rate law.
 lime_interfacial_area_beta = 0.0
 

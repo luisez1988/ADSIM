@@ -158,10 +158,16 @@ and lives in [`ReactionProperties`](@ref) instead.
   `extent_of_reaction_rate` in `fully_explicit_solver.jl`.
 - `activation_energy::Float64`: Activation energy E of the carbonation reaction [J/mol]
 - `interfacial_area_beta::Float64`: Interfacial-area coefficient β of the factor
-  a = exp[β (C_aq - C_aq_atm)] [m³/mol]. Zero disables the factor and recovers the
-  plain second-order law, which is the default so that material files written
+  a = exp[β (p/P_atm - 1)] with p the TOTAL gas pressure, DIMENSIONLESS. Zero
+  disables the factor and recovers
+  the plain second-order law, which is the default so that material files written
   before the factor existed load unchanged. Fitted jointly with `arrhenius_factor`;
   see `interfacial_area_factor` in `fully_explicit_solver.jl`.
+
+  UNITS CHANGED: the earlier form a = exp[β (C_aq - C_aq_atm)] took β in m³/mol.
+  The conversion is β_new = β_old K_H(T_ref) P_atm = 33.44 β_old, so a β of 0.47
+  in the old form is 15.7 in this one. A value carried over unconverted leaves
+  almost no pressure sensitivity at all - refit or rescale it.
 """
 mutable struct ReactantProperties
     reaction_enthalpy::Float64

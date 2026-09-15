@@ -756,7 +756,15 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                 e == 0 && continue
                 props = elem_props[e]
 
-                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_lime[node_id],
+                # The area factor is driven by the total gas pressure, so the whole
+                # mixture is summed here; C_aq still uses the CO2 component alone.
+                C_g_tot = 0.0
+                for g in 1:NGases
+                    C_g_tot += C_g[node_id, g]
+                end
+
+                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_g_tot,
+                                            C_lime[node_id],
                                             props.residual_lime, props.θ_w, T[node_id],
                                             k_o_reaction, E_reaction, β_area_reaction)
 

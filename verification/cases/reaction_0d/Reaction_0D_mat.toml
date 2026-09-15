@@ -27,7 +27,7 @@ specific_heat = 4184.0
 reaction_enthalpy = 0.0
 lime_arrhenius_factor = 1.0e-3
 lime_activation_energy = 0.0
-lime_interfacial_area_beta = 0.0
+lime_interfacial_area_beta = 15.7
 
 # Soil properties
 [soil."Soil 1"]

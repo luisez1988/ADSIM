@@ -500,17 +500,19 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     β_area = materials.reactants.interfacial_area_beta
 
     # The area factor multiplies the rate, so it multiplies the decay constant too
-    # and must enter the time step. It grows with the CO2 partial pressure, so the
-    # largest initial concentration in the mesh gives the shortest step. That value
-    # is maximised over all species, which can only overestimate the CO2 present and
-    # so can only shorten the step: safe for a stability bound.
+    # and must enter the time step. It grows with the TOTAL gas pressure, so the
+    # largest total concentration in the problem gives the shortest step. The species
+    # are summed rather than maximised over, because that is the quantity the factor
+    # is a function of; the same helper the advective bound uses serves here, so
+    # prescribed inlets are counted too - an injection face above anything in the
+    # initial field would otherwise be missed, and the step would come out too long.
     #
     # T_ref is used for the pressure conversion because this bound is formed before
     # the run starts, from initial data alone. A specimen that self-heats at constant
     # volume raises its own pressure and so its own a; the solver's adaptive step
     # picks that up from the current state, and this figure is only the starting
     # estimate reported at start-up.
-    C_g_max = get_maximum_initial_concentration(mesh, length(materials.gas_dictionary))
+    C_g_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary))
     a_max = interfacial_area_factor(C_g_max, T_ref, β_area)
 
     # Loop through all elements
