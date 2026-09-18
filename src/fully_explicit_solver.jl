@@ -1757,23 +1757,50 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             end
                         end
 
-                        # Advective flux, Eq. (thermal_advective_flux). Consumes the
-                        # Gauss-point velocity cached when v was computed, which is why
-                        # that value is retained rather than discarded after projection
-                        # (tex:473). The leading minus is the manuscript's: it is adopted
-                        # so every nodal flux in Eq. (FEM_compact_energy) is a quantity to
-                        # be subtracted, matching the mass equation.
+                        # Advective flux, Eq. (thermal_advective_flux), in the
+                        # NON-CONSERVATIVE form (ρc)_g v·∇T rather than ∇·((ρc)_g v T).
+                        #
+                        # That is the form the left-hand side of this equation demands.
+                        # M^L_T dT/dt is C_mix ∂T/∂t, not ∂(C_mix T)/∂t, and the two
+                        # advective operators differ by exactly T ∇·((ρc)_g v), which the
+                        # gas mass balance ties to ∂(θ_g C)/∂t and to the reaction's CO2
+                        # sink. Pairing the divergence form with this left-hand side
+                        # therefore adds a spurious source wherever gas accumulates or is
+                        # consumed - and in a carbonation run the sink is the dominant
+                        # term, so the error is not small: on 8mm_size it put 17% more
+                        # energy into the column than the reaction released.
+                        #
+                        # The divergence form also had to be integrated by parts to be
+                        # assembled, and the ∮ N_i (ρc)_g T (v·n̂) dΓ it produces was never
+                        # assembled with it. That omission is invisible at an interior
+                        # node and on a wall, where v·n̂ = 0, but on a face gas crosses it
+                        # drained enthalpy at (ρc)_g |v| T per unit area with nothing
+                        # carried back - a sink proportional to the ABSOLUTE temperature,
+                        # which no amount of reaction heat behind it can balance. It held
+                        # the inflow row of 8mm_size near its initial temperature while
+                        # the interior one element away heated normally.
+                        #
+                        # v·∇T has neither problem. It needs no integration by parts, so
+                        # it has no surface term to forget, and it vanishes identically on
+                        # a uniform temperature field at every node, boundary nodes
+                        # included - which is the statement that a constant transports
+                        # nothing, and the check the divergence form failed.
+                        #
+                        # The leading sign is the manuscript's: every nodal flux in
+                        # Eq. (FEM_compact_energy) is a quantity to be subtracted, so a
+                        # positive v·∇T - temperature rising along the flow - is stored
+                        # here as a positive q̃_a and cools the node.
                         if calculate_heat_advection
                             ρc_gp = ρc_g_gp
-                            T_gp_T = 0.0
-                            for i in 1:4
-                                T_gp_T += N_p[i] * T_e[i]
-                            end
                             dN_dx_a = ShapeFunctions.get_dN_dx(e, p)
+                            gradT_a = dN_dx_a' * T_e          # [NDim]
                             vg = @view v_gp_cache[e, p, :]
-                            adv = dN_dx_a * vg          # [4 nodes]
+                            v_gradT = 0.0
+                            for d in 1:NDim
+                                v_gradT += vg[d] * gradT_a[d]
+                            end
                             for i in 1:4
-                                qa_c_T[nodes[i]] += -ρc_gp * T_gp_T * adv[i] * dV
+                                qa_c_T[nodes[i]] += ρc_gp * v_gradT * N_p[i] * dV
                             end
                         end
 

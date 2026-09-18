@@ -1375,17 +1375,22 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                             end
                         end
 
+                        # Advective flux, Eq. (thermal_advective_flux), in the
+                        # NON-CONSERVATIVE form (ρc)_g v·∇T. Identical to the explicit
+                        # solver, which carries the argument for why the divergence form
+                        # ∇·((ρc)_g v T) is the wrong partner for this left-hand side and
+                        # what it did to a boundary gas flows through.
                         if calculate_heat_advection
                             ρc_gp = ρc_g_gp
-                            T_gp_T = 0.0
-                            for i in 1:4
-                                T_gp_T += N_p[i] * T_e[i]
-                            end
                             dN_dx_a = ShapeFunctions.get_dN_dx(e, p)
+                            gradT_a = dN_dx_a' * T_e          # [NDim]
                             vg = @view v_gp_cache[e, p, :]
-                            adv = dN_dx_a * vg
+                            v_gradT = 0.0
+                            for d in 1:NDim
+                                v_gradT += vg[d] * gradT_a[d]
+                            end
                             for i in 1:4
-                                qa_c_T[nodes[i]] += -ρc_gp * T_gp_T * adv[i] * dV
+                                qa_c_T[nodes[i]] += ρc_gp * v_gradT * N_p[i] * dV
                             end
                         end
 

@@ -42,6 +42,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The GiD problemtype help text and the material-file comments were updated to match.
 
 ### Fixed
+- **The advective heat term is now `(rho c)_g v . grad(T)`, not `div((rho c)_g v T)`, and a
+  boundary gas flows through finally registers the heat the reaction releases there.** On an
+  adiabatic `8mm_size` run the inflow face stayed near its initial temperature while the
+  interior one element away heated normally, and a face that had consumed 99% of its lime
+  sat 52 K below the adiabatic rise that implies.
+  - **The mismatch.** `M^L_T dT/dt` is `C_mix dT/dt`, not `d(C_mix T)/dt`. The two advective
+    operators differ by `T div((rho c)_g v)`, which the gas mass balance ties to the gas
+    storage transient and to the reaction's CO2 sink. In a carbonation run that sink is the
+    dominant term, so pairing the divergence form with this left-hand side was not a small
+    error: over 1200 s it put 17% more energy into the column than the reaction released.
+  - **The missing surface term.** The divergence form had to be integrated by parts to be
+    assembled, and only the volume half `int grad(N_i) . ((rho c)_g v T)` ever was. Its
+    companion `oint N_i (rho c)_g T (v.n) dGamma` is zero at an interior node and zero on a
+    wall, where `v.n = 0` - which is why the lateral boundaries were always right - but on a
+    face gas crosses it is not. Dropping it drained enthalpy through that face at
+    `(rho c)_g |v| T` per unit area with nothing carried back: a sink proportional to the
+    ABSOLUTE temperature, roughly -0.2 K/s against the reaction's +0.06 K/s on `8mm_size`.
+  - **The check that settles it.** A uniform temperature field must produce zero advective
+    rate everywhere, since a constant transports nothing. The divergence form gave
+    -0.213 K/s on the inflow row and +0.191 K/s on the outflow row, machine zero elsewhere,
+    because `int grad(N_i) dOmega = oint N_i n dGamma` does not vanish for a boundary node.
+    `v . grad(T)` needs no integration by parts, so it has no surface term to forget and it
+    vanishes identically at every node, boundary nodes included.
+  - Effect on `8mm_size` at t = 1200 s: the temperature is now monotone towards the inlet
+    with the boundary node the hottest point in the column (366.5 K, was 320.5 K with the
+    peak stranded 8 cm inside), every node sits within a degree or two of the adiabatic rise
+    its own lime consumption implies, and the domain energy balance closes to 0.9% - the net
+    enthalpy an open system legitimately exchanges through its flow boundaries - against a
+    17% surplus before.
+  - Both solvers carried the same term and both are corrected. No verification case
+    exercises heat advection, so the suite neither caught this nor regresses on it: 16/16
+    still pass.
+
 - `interfacial_area_factor` compared two different quantities. Its reference term was the
   dissolved CO2 in equilibrium with atmospheric CO2, a partial pressure, while its local
   term converted the gas concentration at the reference temperature, making it a
