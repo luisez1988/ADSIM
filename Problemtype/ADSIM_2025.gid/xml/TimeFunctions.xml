@@ -9,11 +9,11 @@
      ramp shows only its endpoints and a table only its file and lookup rules.
 -->
 
-<container n="time_functions" pn="Time functions" icon="icon_scientific.png"
+<container n="time_functions" pn="Time functions" icon="icon_function_time.png"
            help="Curves f(t) that make boundary conditions vary in time. Add one curve per variation you need, then reference it by name from a boundary condition. Leaving a boundary condition set to Constant keeps the behaviour of a model without any time functions.">
 
 	<blockdata n="time_function" name="Time function 1" sequence='1'
-	           editable_name='unique' morebutton="1" icon="icon_scientific.png"
+	           editable_name='unique' morebutton="1" icon="icon_function_time.png"
 	           help="One curve f(t). Rename it to something meaningful: the name is what you pick from the Time variation field of a boundary condition.">
 
 		<value n="type" pn="Type" v="ramp" values="ramp,periodic,table,constant"
