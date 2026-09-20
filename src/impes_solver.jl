@@ -681,7 +681,38 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
 
     save_data = false
     negative_lime_warned = false
-    negative_conc_count = zeros(Int, NGases)
+
+    # Clamp accounting, split into the two populations the positivity limit of §5.1 already
+    # distinguishes but the counter never did.
+    #
+    #   :roundoff - the node held no more than C_floor before the update, so the negative
+    #               value is the same round-off the positivity bound deliberately skips
+    #               (see the C_floor guard below). A species fully displaced by a front
+    #               sits here for the rest of the run and contributes one count per step
+    #               per node, which is what made the old total look like an instability.
+    #   :material - the node held real gas and was still driven negative. THIS is the
+    #               population the "arresting an unstable mode" warning is about, and the
+    #               one whose created mass feeds the pressure feedback of §5.1.
+    #
+    # Both bins use the SAME C_floor as the positivity limit, so the two can never again
+    # disagree about what counts as round-off.
+    negative_conc_count = zeros(Int, NGases)          # material
+    negative_conc_count_roundoff = zeros(Int, NGases)
+    # Moles created by resetting a negative concentration to zero, per gas. The count says
+    # how often; this says how much, which is what the volume-consistency drift measures.
+    clamped_mass = zeros(Float64, NGases)
+    clamped_mass_roundoff = zeros(Float64, NGases)
+    # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is resolved.
+    # Per-node, per-gas material-clamp counter, so the top offenders can be classified
+    # against the boundary-condition dictionaries.
+    negative_conc_node_count = zeros(Int, Nnodes, NGases)
+    negative_conc_node_roundoff = zeros(Int, Nnodes, NGases)
+    # Reaction throttle, the OTHER documented way the volume-consistency identity of §4.3
+    # gets broken: the pressure RHS uses the unthrottled reaction rate because the throttle
+    # depends on an advective rate that is not known until after the solve. Indexed by gas
+    # so the threaded species loop has one writer per entry.
+    throttle_count = zeros(Int, NGases)
+    throttled_mass = zeros(Float64, NGases)
     last_output_step = 0
 
     # Adaptive-step and solver-health diagnostics, reset at every output.
@@ -1138,6 +1169,12 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                         dC_g_dt_rxn_allowed = min(-C_g[i, gas_idx] / dt - dC_g_dt[i, gas_idx], 0.0)
                         scale = dC_g_dt_rxn < 0.0 ?
                                 clamp(dC_g_dt_rxn_allowed / dC_g_dt_rxn, 0.0, 1.0) : 0.0
+                        # The pressure RHS above used the UNTHROTTLED rate, so whatever is
+                        # withheld here is exactly the amount by which Σ_α C_α^{n+1} will
+                        # miss C_t^{n+1}. Recorded so the volume-consistency warning has a
+                        # measured number to point at instead of a list of suspects.
+                        throttle_count[gas_idx] += 1
+                        throttled_mass[gas_idx] += -dC_g_dt_rxn * (1.0 - scale) * dt * M[i]
                         dC_g_dt_rxn *= scale
                         dC_lime_dt[i] *= scale
                     end
@@ -1168,17 +1205,22 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         # Nodes already essentially empty are skipped: there a small negative rate is
         # round-off, and dividing by it would collapse the step for no reason. The clamp
         # remains in place for exactly those.
+        #
+        # C_floor is hoisted out of the loop because the clamp below bins its events on the
+        # same threshold. The two used to disagree - the limit called a node round-off and
+        # skipped it while the counter scored it alongside a genuine overshoot - which is
+        # what made a run whose clamps are almost entirely displaced-species jitter report
+        # itself as an instability.
         #______________________________________________________
+        C_floor = 1.0e-6 * max(maximum(C_g), 1.0)
         dt_positivity = Inf
-        let C_floor = 1.0e-6 * max(maximum(C_g), 1.0)
-            for gas_idx in 1:NGases
-                for i in 1:Nnodes
-                    rate = dC_g_dt[i, gas_idx]
-                    rate < 0.0 || continue
-                    C_g[i, gas_idx] > C_floor || continue
-                    d = C_g[i, gas_idx] / (-rate)
-                    d < dt_positivity && (dt_positivity = d)
-                end
+        for gas_idx in 1:NGases
+            for i in 1:Nnodes
+                rate = dC_g_dt[i, gas_idx]
+                rate < 0.0 || continue
+                C_g[i, gas_idx] > C_floor || continue
+                d = C_g[i, gas_idx] / (-rate)
+                d < dt_positivity && (dt_positivity = d)
             end
         end
 
@@ -1234,15 +1276,34 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     lagrangian_correction = (λ_bc[i] / M[i]) * weight * P_boundary[i, gas_idx]
                 end
 
+                # Held before the update, so a clamp can be attributed to a node that had
+                # gas to lose or to one that was already empty.
+                C_before = C_g[i, gas_idx]
+
                 C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
 
                 C_MIN = 1e-12
                 if C_g[i, gas_idx] < C_MIN
                     if C_g[i, gas_idx] < 0.0
-                        negative_conc_count[gas_idx] += 1
-                        if !get(negative_conc_warned, gas_idx, false)
-                            log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
-                            negative_conc_warned[gas_idx] = true
+                        # Moles conjured by the reset. M[i] is the lumped nodal mass, so
+                        # this is directly comparable to the domain inventory below.
+                        created = -C_g[i, gas_idx] * M[i]
+
+                        if C_before > C_floor
+                            # Real gas driven negative: the population §5.1 is about.
+                            negative_conc_count[gas_idx] += 1
+                            clamped_mass[gas_idx] += created
+                            negative_conc_node_count[i, gas_idx] += 1
+                            if !get(negative_conc_warned, gas_idx, false)
+                                log_print("Warning: Negative concentration detected for gas $gas_name at step $step. Setting to zero.")
+                                negative_conc_warned[gas_idx] = true
+                            end
+                        else
+                            # Node was already empty to within the positivity limit's own
+                            # tolerance, which skips it for exactly this reason.
+                            negative_conc_count_roundoff[gas_idx] += 1
+                            clamped_mass_roundoff[gas_idx] += created
+                            negative_conc_node_roundoff[i, gas_idx] += 1
                         end
                     end
                     C_g[i, gas_idx] = 0.0
@@ -1625,32 +1686,77 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             # pcg_tol leaves a solution error of order pcg_tol times the condition number,
             # so 1e-8 on a stiff mesh is the tolerance talking. Warn only well above that,
             # and say which explanation to check first.
+            # Above the floor, name the two by-design causes with their measured size. If
+            # both are ~0 and the PCG residual is at tolerance, the operator and the species
+            # flux disagree on a Gauss-point coefficient - a solver defect, not a run.
             if consistency_max > 1.0e-6
-                log_print("        ⚠ That is well above the pressure solve's own accuracy floor. In order")
-                log_print("          of likelihood: the reaction throttle or the C_MIN clamp fired (both")
-                log_print("          break the identity by design - check the clamp count below), the PCG")
-                log_print("          is not converging (check its residual above), or the implicit operator")
-                log_print("          and the species advective flux disagree on a Gauss-point coefficient,")
-                log_print("          which would be a defect in the solver rather than in this run.")
+                log_print(@sprintf("        ⚠ above PCG floor: throttle %d (%.2e mol), clamp %.2e mol",
+                                   sum(throttle_count), sum(throttled_mass),
+                                   sum(clamped_mass) + sum(clamped_mass_roundoff)))
             end
             pcg_iters_total = 0; pcg_iters_max = 0; pcg_res_max = 0.0; pcg_solves = 0
             dt_min_seen = Inf; dt_max_seen = 0.0; consistency_max = 0.0
 
-            total_clamped = sum(negative_conc_count)
-            if total_clamped > 0
-                rate = total_clamped / (steps_since * Nnodes * NGases)
-                per_gas = join((@sprintf("%s=%d", materials.gas_dictionary[g],
-                                         negative_conc_count[g]) for g in 1:NGases), ", ")
-                log_print(@sprintf("      Negative-concentration detected %d times since the last output (%s)",
-                                   total_clamped, per_gas))
+            # Clamp report. "real" = the node held gas and was still driven negative, the
+            # only bin that can mean an unstable mode. "empty" = below the positivity floor
+            # C_floor, which the step limit skips as round-off; a species a front has fully
+            # displaced lives there for the rest of the run and would otherwise dominate.
+            total_material = sum(negative_conc_count)
+            total_roundoff = sum(negative_conc_count_roundoff)
+            if total_material + total_roundoff > 0
+                rate = total_material / (steps_since * Nnodes * NGases)
+                # Only worth naming the gases when more than one is involved; otherwise the
+                # split just repeats the total.
+                active = [g for g in 1:NGases
+                          if negative_conc_count[g] + negative_conc_count_roundoff[g] > 0]
+                gas_split = length(active) > 1 ?
+                    " (" * join((@sprintf("%s %d/%d", materials.gas_dictionary[g],
+                                          negative_conc_count[g],
+                                          negative_conc_count_roundoff[g])
+                                 for g in active), ", ") * ")" :
+                    (isempty(active) ? "" : " ($(materials.gas_dictionary[active[1]]))")
+                log_print(@sprintf("        Clamp real/empty: %d/%d%s, created %.2e mol",
+                                   total_material, total_roundoff, gas_split,
+                                   sum(clamped_mass) + sum(clamped_mass_roundoff)))
+
                 if rate > 1e-3
-                    log_print(@sprintf("      ⚠ That is %.2f%% of all nodal updates. A clamp firing this often is not", 100 * rate))
-                    log_print("        round-off: it is arresting an unstable mode and hiding it as a bounded")
-                    log_print("        oscillation. Lower the Courant number, and check that")
-                    log_print("        advection_stabilization is enabled.")
+                    log_print(@sprintf("        ⚠ real clamp %.2f%% of nodal updates - unstable mode, not round-off.", 100 * rate))
+                    log_print("          Lower the Courant number and check advection_stabilization.")
                 end
+
+                # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is
+                # resolved. Hits on pressure/composition-BC nodes would point at the
+                # Lagrangian boundary correction; hits scattered along the front do not.
+                # Ranked on the real bin, falling back to the empty one so the front is
+                # still locatable on a run with no real clamps at all.
+                node_material = vec(sum(negative_conc_node_count, dims = 2))
+                node_roundoff = vec(sum(negative_conc_node_roundoff, dims = 2))
+                rank_by = total_material > 0 ? node_material : node_roundoff
+                tops = String[]
+                for nid in sortperm(rank_by, rev = true)[1:min(6, Nnodes)]
+                    rank_by[nid] == 0 && break
+                    f = String[]
+                    haskey(mesh.absolute_pressure_bc, nid) && push!(f, "P")
+                    haskey(mesh.concentration_bc, nid) && push!(f, "C")
+                    haskey(mesh.partial_pressure_bc, nid) && push!(f, "pp")
+                    haskey(mesh.convective_heat_bc, nid) && push!(f, "heat")
+                    haskey(mesh.uniform_flow_bc, nid) && push!(f, "flow")
+                    isempty(f) && push!(f, "int")
+                    push!(tops, @sprintf("%d:%d/%d[%s]", nid, node_material[nid],
+                                         node_roundoff[nid], join(f, ",")))
+                end
+                isempty(tops) ||
+                    log_print("          top " * (total_material > 0 ? "real" : "empty") *
+                              ": " * join(tops, " "))
+                fill!(negative_conc_node_count, 0)
+                fill!(negative_conc_node_roundoff, 0)
             end
             fill!(negative_conc_count, 0)
+            fill!(negative_conc_count_roundoff, 0)
+            fill!(clamped_mass, 0.0)
+            fill!(clamped_mass_roundoff, 0.0)
+            fill!(throttle_count, 0)
+            fill!(throttled_mass, 0.0)
             last_output_step = step
 
             write_output_vtk(mesh, materials, output_counter, current_time, project_name, total_concentration)

@@ -42,6 +42,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The GiD problemtype help text and the material-file comments were updated to match.
 
 ### Fixed
+- **The IMPES clamp diagnostic no longer reports round-off as an instability.** On a
+  displacement run with a convective heat BC (`8mm_size_thermal`) the negative-concentration
+  counter reached 7.9% of all nodal updates and told the user to lower the Courant number.
+  Almost none of it was real.
+  - **The two populations.** Once CO2 has fully displaced Air behind the front, the swept
+    nodes sit at ~1e-11 mol/m³ against a total of 38 and trip the clamp once per step, for
+    the rest of the run. The positivity limit of `IMPES_FORMULATION_NOTES.md` §5.1 already
+    skips exactly these nodes as round-off, using `C_floor = 1e-6 max(C_g)`, but the counter
+    had no such floor - so the limit and the counter disagreed about what counted, and the
+    warning contradicted the limit 60 lines above it.
+  - **What the split shows.** `C_floor` is now hoisted and shared by both, and the clamp is
+    reported in two bins. On `8mm_size_thermal` at t = 1200 s the node-held-gas bin is 40
+    events against 18,981 already-empty ones - **0.21%** - and the warning no longer fires.
+    The bins are accompanied by the moles the clamp actually created (6.6e-07 mol, 0.15% of
+    the Air left in the domain), which is the quantity that drives the pressure feedback
+    §5.1 warns about and was previously invisible.
+  - **Why the count grew.** It tracks the size of the swept region, not instability: nodes
+    with Air < 1e-5 go 41 -> 56 -> 76 -> 81 of 162 over the run. A finer mesh would report
+    *more* clamps while being *more* accurate, so the old statistic moved the wrong way with
+    refinement.
+  - **Lowering the Courant number does not help**, and the log should stop suggesting it
+    first. Halving it from 0.98 to 0.5 changed the run from 17,233 to 17,558 steps and the
+    clamp rate from 23.4 to 21.3 events/step, because the step is set by the start-up ramp
+    on nearly every interval - the Courant condition is not the binding limit. A node at
+    zero driven negative by its neighbours' Gauss-point interpolation goes negative at any
+    `dt`.
+  - **The reaction throttle is now measured too.** The volume-consistency warning named it
+    and the clamp as the two by-design ways the §4.3 identity breaks, but neither was
+    counted. Both now report; on `8mm_size_thermal` the throttle fires 0 times, which leaves
+    the ~40 front clamps as the explanation for the 6.7e-03 drift.
+  - Per-node clamp localization with BC flags, previously only in the explicit solver, is
+    ported to IMPES and gains `partial_pressure_bc` and `convective_heat_bc` flags. It puts
+    the material clamps on the advancing front (nodes 80, 68, 63 - the cooled wall) rather
+    than on pressure-BC nodes, which exonerates the Lagrangian boundary correction.
+  - Diagnostics only: no physics or time-stepping behaviour changes, and the four IMPES
+    verification cases are unaffected (4/4 pass).
+
 - **The advective heat term is now `(rho c)_g v . grad(T)`, not `div((rho c)_g v T)`, and a
   boundary gas flows through finally registers the heat the reaction releases there.** On an
   adiabatic `8mm_size` run the inflow face stayed near its initial temperature while the

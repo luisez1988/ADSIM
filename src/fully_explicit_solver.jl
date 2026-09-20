@@ -1995,31 +1995,27 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 rate = total_clamped / (steps_since * Nnodes * NGases)
                 per_gas = join((@sprintf("%s=%d", materials.gas_dictionary[g],
                                          negative_conc_count[g]) for g in 1:NGases), ", ")
-                log_print(@sprintf("      Negative-concentration detected %d times since the last output (%s)",
-                                   total_clamped, per_gas))
+                log_print(@sprintf("        Clamp: %d (%s)", total_clamped, per_gas))
                 if rate > 1e-3
-                    log_print(@sprintf("      ⚠ That is %.2f%% of all nodal updates. A clamp firing this often is not", 100 * rate))
-                    log_print("        round-off: it is arresting an unstable mode and hiding it as a bounded")
-                    log_print("        oscillation. Re-check the critical time step and lower the Courant number.")
+                    log_print(@sprintf("        ⚠ clamp %.2f%% of nodal updates - unstable mode, not round-off.", 100 * rate))
+                    log_print("          Re-check the critical time step and lower the Courant number.")
                 end
 
                 # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is
-                # resolved. Top-10 most-clamped nodes this interval, classified against
-                # the boundary-condition dictionaries so a concentration of hits on
-                # pressure/concentration-BC nodes (vs. scattered interior nodes) points at
-                # the Lagrangian pressure-BC correction rather than a front oscillation.
+                # resolved. Hits on pressure/concentration-BC nodes would point at the
+                # Lagrangian boundary correction; hits scattered along the front do not.
                 node_totals = vec(sum(negative_conc_node_count, dims=2))
-                top_nodes = sortperm(node_totals, rev=true)[1:min(10, Nnodes)]
-                log_print("      Top clamped nodes (node: count [BC flags]):")
-                for nid in top_nodes
+                tops = String[]
+                for nid in sortperm(node_totals, rev=true)[1:min(6, Nnodes)]
                     node_totals[nid] == 0 && break
-                    flags = String[]
-                    haskey(mesh.absolute_pressure_bc, nid) && push!(flags, "pressure_bc")
-                    haskey(mesh.concentration_bc, nid) && push!(flags, "concentration_bc")
-                    haskey(mesh.uniform_flow_bc, nid) && push!(flags, "flow_bc")
-                    isempty(flags) && push!(flags, "interior")
-                    log_print(@sprintf("        node %d: %d [%s]", nid, node_totals[nid], join(flags, ",")))
+                    f = String[]
+                    haskey(mesh.absolute_pressure_bc, nid) && push!(f, "P")
+                    haskey(mesh.concentration_bc, nid) && push!(f, "C")
+                    haskey(mesh.uniform_flow_bc, nid) && push!(f, "flow")
+                    isempty(f) && push!(f, "int")
+                    push!(tops, @sprintf("%d:%d[%s]", nid, node_totals[nid], join(f, ",")))
                 end
+                isempty(tops) || log_print("          top: " * join(tops, " "))
                 fill!(negative_conc_node_count, 0)
             end
             fill!(negative_conc_count, 0)
