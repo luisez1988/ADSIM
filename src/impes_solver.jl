@@ -41,6 +41,18 @@ using Statistics
 # Number of startup steps traced when ADSIM_IMPES_DEBUG=1.
 const IMPES_DEBUG_STEPS = 12
 
+# Terms that can set the adaptive step, in the order they are counted. The first five
+# are the stability and positivity bounds themselves; "combined" is the harmonic sum
+# of the diffusion-like terms binding below all of them; "growth cap" is the step
+# climbing back towards the limit at dt_growth_max per step; "output snap" is the
+# shortened step that lands exactly on a snapshot time.
+const DT_LIMIT_NAMES = ("Courant", "diffusion", "conduction", "reaction", "positivity",
+                        "combined", "growth cap", "output snap")
+const DT_LIMIT_COURANT  = 1
+const DT_LIMIT_COMBINED = 6
+const DT_LIMIT_GROWTH   = 7
+const DT_LIMIT_SNAP     = 8
+
 
 """
     assemble_impes_operator!(A_elements, mesh, elem_props, μ_gas, C_g, T, R,
@@ -723,7 +735,39 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
     dt_min_seen = Inf
     dt_max_seen = 0.0
     consistency_max = 0.0
-    dt_limit_name = "startup ramp"
+    dt_limit_idx = DT_LIMIT_GROWTH
+    dt_limit_count = zeros(Int, length(DT_LIMIT_NAMES))
+
+    # Reaction limit on the live field. dt_reaction_fixed, from the start-up report, is
+    # evaluated at the lowest temperature the mesh file states and at the lime inventory
+    # at t = 0; it sizes the first step and is then replaced every step by the value the
+    # node loop below measures.
+    #
+    # Expect the two to agree for most of a typical run, and do not read that as the
+    # recomputation being pointless. λ is largest where the specimen is coldest and least
+    # reacted, so a global maximum over the mesh sits on whichever corner the front has
+    # not reached - which is the state the start-up figure already assumed. It moves once
+    # that corner has itself warmed or reacted, and it moves immediately on a problem
+    # whose coldest point is a convective boundary rather than the initial field, since
+    # the start-up reference reads the initial and prescribed temperatures only.
+    rxn_lambda = zeros(Float64, Nnodes)
+    dt_reaction = dt_reaction_fixed
+
+    # Trial-step control. positivity_safety is the margin the positivity bound has always
+    # carried; it is now applied to the step being taken rather than only to the next one.
+    # The retry cap bounds the cost of a step whose rates move under it - see the
+    # accept/reject block for what exhaustion means.
+    positivity_safety = 0.5
+    positivity_max_retries = 8
+    step_rejected = 0       # trials thrown away since the last output
+    step_exhausted = 0      # steps that ran out of retries and fell back to the throttle
+
+    # Assigned inside the trial loop and read after it, so they have to be locals of this
+    # scope rather than of the loop body.
+    t_next = current_time
+    dt_positivity = Inf
+    C_floor = 0.0
+    dC_g_dt_rxn_store = zeros(Float64, Nnodes)
 
     # Absolute time tolerance for the loop bound and the output snapping. Scaled to the
     # run length so it means the same thing whether the stage is 1 s or 1e6 s.
@@ -749,478 +793,560 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         # A Neumann flux ENTERS the rate -> evaluate at t_n.
         # A Dirichlet value is IMPOSED on the new state -> evaluate at t_{n+1}.
         #______________________________________________________
-        t_next = current_time + dt
-
-        if has_transient_flow
-            for (node_id, gas_idx, tf_id, q_const) in transient_flow
-                q_boundary[node_id, gas_idx] =
-                    bc_value(time_functions, tf_id, q_const, current_time, dt) *
-                    flow_node_influences[node_id]
-            end
-        end
-
-        # Level-n total concentration, the accumulation term of (IMPES-P).
-        for i in 1:Nnodes
-            s = 0.0
-            for g in 1:NGases
-                s += C_g[i, g]
-            end
-            total_concentration[i] = s
-        end
-
-        #reset flow vectors (q_boundary is prefilled and not reset here)
-        q_diffusion .= 0.0
-        q_advection .= 0.0
-        q_gravitational .= 0.0
-        q_thermal_press .= 0.0
-        q_stabilization .= 0.0
-        total_rate .= 0.0
-        q_source_sink .= 0.0
-
         #______________________________________________________
-        # Reaction kinetics, level n. Must run before the fluxes, which consume
-        # q_source_sink through b^n.
-        #______________________________________________________
-        if calculate_reaction && co2_gas_idx !== nothing
-            @threads for node_id in 1:Nnodes
-                e = node_owner[node_id]
-                e == 0 && continue
-                props = elem_props[e]
-
-                # The area factor is driven by the total gas pressure, so the whole
-                # mixture is summed here; C_aq still uses the CO2 component alone.
-                C_g_tot = 0.0
-                for g in 1:NGases
-                    C_g_tot += C_g[node_id, g]
-                end
-
-                r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_g_tot,
-                                            C_lime[node_id],
-                                            props.residual_lime, props.θ_w, T[node_id],
-                                            k_o_reaction, E_reaction, β_area_reaction)
-
-                dC_lime_dt[node_id] = -props.θ_w * r
-
-                if props.θ_g > 0.0
-                    q_source_sink[node_id] = -M[node_id] * (props.θ_w / props.θ_g) * r
-                else
-                    q_source_sink[node_id] = 0.0
-                end
-            end
-        end
-
-        # The total mobility Λ is frozen at level n. That is plain IMPES and it is what
-        # makes the pressure equation linear; see IMPES_FORMULATION_NOTES.md §8 for why
-        # the lag is acceptable here and what relinearizing it would cost.
-        pcg_it = 0
-        pcg_res = 0.0
-        pcg_ok = true
-
-        for c in 1:nchunks
-            qd_chunk[c] .= 0.0
-            qa_chunk[c] .= 0.0
-            qg_chunk[c] .= 0.0
-            qT_chunk[c] .= 0.0
-            qs_chunk[c] .= 0.0
-        end
-
-        #______________________________________________________
-        # Level-n explicit fluxes: diffusion, thermal pressure, gravity, SU.
+        # Trial step, §5.1.
         #
-        # The advective flux is NOT assembled here - it needs C_t^{n+1}, which does not
-        # exist yet. Everything assembled in this loop lands in b^n.
+        # The positivity bound cannot be known before the step is taken. It needs the
+        # species rates, which need the advective flux, which needs C_t^{n+1} from the
+        # implicit solve, which needs dt. So the step is taken on trial and re-taken at
+        # the bound it reports whenever it turns out to have been too long.
+        #
+        # The whole body has to be re-taken, not just the species update: dt enters the
+        # accumulation term of (IMPES-P), so C_t^{n+1} belongs to the step it was solved
+        # for. Advancing the species with a different dt against it would break the one
+        # identity the IMPES split rests on, Σ_α C_α^{n+1} = C_t^{n+1}, which is the very
+        # thing a rejected step is being rejected to protect.
         #______________________________________________________
-        @threads for c in 1:nchunks
-            qd_c = qd_chunk[c]
-            qg_c = qg_chunk[c]
-            qT_c = qT_chunk[c]
-            qs_c = qs_chunk[c]
-            q_aux = q_aux_chunk[c]
-            qT_aux = qT_aux_chunk[c]
-            qs_aux = qs_aux_chunk[c]
-            ρ_g_buf = ρ_g_chunk[c]
-            a_su = a_su_chunk[c]
-            aT_su = aT_su_chunk[c]
+        trial = 0
+        while true
+            trial += 1
 
-            for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
-                nodes = mesh.elements[e, :]
-                props = elem_props[e]
-                θ_g = props.θ_g
-                τ = props.tortuosity
-                k_intrinsic = props.permeability
+            t_next = current_time + dt
 
-                C_t = [total_concentration[nodes[i]] for i in 1:4]
-                T_e = [T[nodes[i]] for i in 1:4]
+            if has_transient_flow
+                for (node_id, gas_idx, tf_id, q_const) in transient_flow
+                    q_boundary[node_id, gas_idx] =
+                        bc_value(time_functions, tf_id, q_const, current_time, dt) *
+                        flow_node_influences[node_id]
+                end
+            end
 
-                for gas_idx in 1:NGases
-                    D_g = D_gas[gas_idx]
-                    μ_g = μ_gas[gas_idx]
-                    D_g_eff = calculate_diffusion ? (θ_g * D_g * τ) : 0.0
+            # Level-n total concentration, the accumulation term of (IMPES-P).
+            for i in 1:Nnodes
+                s = 0.0
+                for g in 1:NGases
+                    s += C_g[i, g]
+                end
+                total_concentration[i] = s
+            end
 
-                    C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
+            #reset flow vectors (q_boundary is prefilled and not reset here)
+            q_diffusion .= 0.0
+            q_advection .= 0.0
+            q_gravitational .= 0.0
+            q_thermal_press .= 0.0
+            q_stabilization .= 0.0
+            total_rate .= 0.0
+            q_source_sink .= 0.0
 
-                    # Diffusion, Eq. (diffusive_flux)
-                    if calculate_diffusion
-                        mul!(q_aux, K_elements[e], C_e, θ_g * D_g * τ, 0.0)
-                        for i in 1:4
-                            qd_c[nodes[i], gas_idx] += q_aux[i]
-                        end
+            #______________________________________________________
+            # Reaction kinetics, level n. Must run before the fluxes, which consume
+            # q_source_sink through b^n.
+            #______________________________________________________
+            if calculate_reaction && co2_gas_idx !== nothing
+                @threads for node_id in 1:Nnodes
+                    rxn_lambda[node_id] = 0.0
+                    e = node_owner[node_id]
+                    e == 0 && continue
+                    props = elem_props[e]
+
+                    # The area factor is driven by the total gas pressure, so the whole
+                    # mixture is summed here; C_aq still uses the CO2 component alone.
+                    C_g_tot = 0.0
+                    for g in 1:NGases
+                        C_g_tot += C_g[node_id, g]
                     end
 
-                    # Thermal pressure and SU stabilization, both level n.
-                    if calculate_advection
-                        fill!(qT_aux, 0.0)
-                        fill!(qs_aux, 0.0)
+                    r = extent_of_reaction_rate(C_g[node_id, co2_gas_idx], C_g_tot,
+                                                C_lime[node_id],
+                                                props.residual_lime, props.θ_w, T[node_id],
+                                                k_o_reaction, E_reaction, β_area_reaction)
 
-                        for p in 1:4
-                            N_p = ShapeFunctions.shape_funcs.N[p]
-                            C_gp = N_p' * C_e
-                            T_gp = N_p' * T_e
-                            C_tot_gp = N_p' * C_t
-                            dV = ShapeFunctions.get_weight(e, p)
-                            Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
-                            dN_dx = ShapeFunctions.get_dN_dx(e, p)
+                    dC_lime_dt[node_id] = -props.θ_w * r
 
-                            # Thermal contribution to the pressure gradient,
-                            # Eq. (thermal_pressure_flux). Driven by ∇T, which the energy
-                            # equation advances explicitly, so it stays explicit here.
-                            qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .*
-                                       (dN_dx * (dN_dx' * T_e))
+                    if props.θ_g > 0.0
+                        q_source_sink[node_id] = -M[node_id] * (props.θ_w / props.θ_g) * r
+                    else
+                        q_source_sink[node_id] = 0.0
+                    end
 
-                            # Streamline-upwind stabilization. The velocities driving τ*
-                            # are evaluated at ∇C_t^n, not ∇C_t^{n+1}: this term has to be
-                            # in b^n, which is formed before the pressure solve. The lag
-                            # is in the stabilization PARAMETER only, and it is what keeps
-                            # the summed equation exactly consistent with the species
-                            # equations. See IMPES_FORMULATION_NOTES.md §8.
-                            if calculate_stabilization
-                                v_gp = (-k_intrinsic * R * T_gp / μ_g) .* (dN_dx' * C_t)
-                                v_gpT = (-k_intrinsic * R * C_tot_gp / μ_g) .* (dN_dx' * T_e)
+                    # Eigenvalue the reaction contributes to this node's CO2 equation, on the
+                    # state the step is actually being taken from. It is cheap - two
+                    # exponentials on a loop that already runs over every node - and it has to
+                    # be done here because every factor in it moves: the lime is consumed, the
+                    # temperature rises, and under a convective boundary the face stays cold
+                    # while the interior does not.
+                    rxn_lambda[node_id] =
+                        reaction_decay_constant(C_g_tot, C_lime[node_id], props.residual_lime,
+                                                props.θ_w, props.θ_g, T[node_id],
+                                                k_o_reaction, E_reaction, β_area_reaction)
+                end
 
-                                τ_g = stab_tau(v_gp, h_elem[e], D_g_eff)
-                                τ_gT = stab_tau(v_gpT, h_elem[e], D_g_eff)
+                # Same factor of 1/2 the start-up bound carries: forward Euler on a decay of
+                # rate λ is stable to 2/λ and positive to 1/λ, and this sits below both.
+                λ_rxn_max = maximum(rxn_lambda)
+                dt_reaction = λ_rxn_max > 0.0 ? 1.0 / (2.0 * λ_rxn_max) : Inf
+            end
 
-                                mul!(a_su, dN_dx, v_gp)
-                                qs_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
+            # The total mobility Λ is frozen at level n. That is plain IMPES and it is what
+            # makes the pressure equation linear; see IMPES_FORMULATION_NOTES.md §8 for why
+            # the lag is acceptable here and what relinearizing it would cost.
+            pcg_it = 0
+            pcg_res = 0.0
+            pcg_ok = true
 
-                                #The companion term stabilizes the SAME transported quantity - the species
-                                #concentration - but along the streamline of the thermally driven velocity,
-                                #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
-                                #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
-                                #cannot restore the discrete maximum principle, and it carries units of
-                                #K m^3/s where a molar flux is required.
-                                mul!(aT_su, dN_dx, v_gpT)
-                                qs_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
+            for c in 1:nchunks
+                qd_chunk[c] .= 0.0
+                qa_chunk[c] .= 0.0
+                qg_chunk[c] .= 0.0
+                qT_chunk[c] .= 0.0
+                qs_chunk[c] .= 0.0
+            end
+
+            #______________________________________________________
+            # Level-n explicit fluxes: diffusion, thermal pressure, gravity, SU.
+            #
+            # The advective flux is NOT assembled here - it needs C_t^{n+1}, which does not
+            # exist yet. Everything assembled in this loop lands in b^n.
+            #______________________________________________________
+            @threads for c in 1:nchunks
+                qd_c = qd_chunk[c]
+                qg_c = qg_chunk[c]
+                qT_c = qT_chunk[c]
+                qs_c = qs_chunk[c]
+                q_aux = q_aux_chunk[c]
+                qT_aux = qT_aux_chunk[c]
+                qs_aux = qs_aux_chunk[c]
+                ρ_g_buf = ρ_g_chunk[c]
+                a_su = a_su_chunk[c]
+                aT_su = aT_su_chunk[c]
+
+                for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
+                    nodes = mesh.elements[e, :]
+                    props = elem_props[e]
+                    θ_g = props.θ_g
+                    τ = props.tortuosity
+                    k_intrinsic = props.permeability
+
+                    C_t = [total_concentration[nodes[i]] for i in 1:4]
+                    T_e = [T[nodes[i]] for i in 1:4]
+
+                    for gas_idx in 1:NGases
+                        D_g = D_gas[gas_idx]
+                        μ_g = μ_gas[gas_idx]
+                        D_g_eff = calculate_diffusion ? (θ_g * D_g * τ) : 0.0
+
+                        C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
+
+                        # Diffusion, Eq. (diffusive_flux)
+                        if calculate_diffusion
+                            mul!(q_aux, K_elements[e], C_e, θ_g * D_g * τ, 0.0)
+                            for i in 1:4
+                                qd_c[nodes[i], gas_idx] += q_aux[i]
                             end
                         end
 
-                        for i in 1:4
-                            qT_c[nodes[i], gas_idx] += qT_aux[i]
-                            qs_c[nodes[i], gas_idx] += qs_aux[i]
-                        end
-                    end
+                        # Thermal pressure and SU stabilization, both level n.
+                        if calculate_advection
+                            fill!(qT_aux, 0.0)
+                            fill!(qs_aux, 0.0)
 
-                    # Gravity, Eq. (gravitational_flux)
-                    if calculate_gravity
-                        fill!(q_aux, 0.0)
-                        for p in 1:4
-                            N_p = ShapeFunctions.shape_funcs.N[p]
-                            C_gp = N_p' * C_e
-                            dV = ShapeFunctions.get_weight(e, p)
-                            Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
-                            dN_dx = ShapeFunctions.get_dN_dx(e, p)
+                            for p in 1:4
+                                N_p = ShapeFunctions.shape_funcs.N[p]
+                                C_gp = N_p' * C_e
+                                T_gp = N_p' * T_e
+                                C_tot_gp = N_p' * C_t
+                                dV = ShapeFunctions.get_weight(e, p)
+                                Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
+                                dN_dx = ShapeFunctions.get_dN_dx(e, p)
 
-                            fill!(ρ_g_buf, 0.0)
-                            for i in 1:4
-                                for g in 1:NGases
-                                    ρ_g_buf[i] += C_g[nodes[i], g] * molar_mass_gas[g]
+                                # Thermal contribution to the pressure gradient,
+                                # Eq. (thermal_pressure_flux). Driven by ∇T, which the energy
+                                # equation advances explicitly, so it stays explicit here.
+                                qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .*
+                                           (dN_dx * (dN_dx' * T_e))
+
+                                # Streamline-upwind stabilization. The velocities driving τ*
+                                # are evaluated at ∇C_t^n, not ∇C_t^{n+1}: this term has to be
+                                # in b^n, which is formed before the pressure solve. The lag
+                                # is in the stabilization PARAMETER only, and it is what keeps
+                                # the summed equation exactly consistent with the species
+                                # equations. See IMPES_FORMULATION_NOTES.md §8.
+                                if calculate_stabilization
+                                    v_gp = (-k_intrinsic * R * T_gp / μ_g) .* (dN_dx' * C_t)
+                                    v_gpT = (-k_intrinsic * R * C_tot_gp / μ_g) .* (dN_dx' * T_e)
+
+                                    τ_g = stab_tau(v_gp, h_elem[e], D_g_eff)
+                                    τ_gT = stab_tau(v_gpT, h_elem[e], D_g_eff)
+
+                                    mul!(a_su, dN_dx, v_gp)
+                                    qs_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
+
+                                    #The companion term stabilizes the SAME transported quantity - the species
+                                    #concentration - but along the streamline of the thermally driven velocity,
+                                    #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
+                                    #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
+                                    #cannot restore the discrete maximum principle, and it carries units of
+                                    #K m^3/s where a molar flux is required.
+                                    mul!(aT_su, dN_dx, v_gpT)
+                                    qs_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
                                 end
                             end
-                            ρ_g_gp = N_p' * ρ_g_buf
 
-                            q_aux .-= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .*
-                                      (dN_dx * g_vector)
-                        end
-                        for i in 1:4
-                            qg_c[nodes[i], gas_idx] += q_aux[i]
-                        end
-                    end
-                end
-            end
-        end
-
-        for c in 1:nchunks
-            q_diffusion .+= qd_chunk[c]
-            q_gravitational .+= qg_chunk[c]
-            q_thermal_press .+= qT_chunk[c]
-            q_stabilization .+= qs_chunk[c]
-        end
-
-        #______________________________________________________
-        # (IMPES-P): assemble A^n and solve for C_t^{n+1}.
-        #______________________________________________________
-        if calculate_advection
-            assemble_impes_operator!(A_elements, mesh, elem_props, μ_gas, C_g, T, R,
-                                     chunk_bounds, nchunks)
-        else
-            for e in 1:Nelements
-                fill!(A_elements[e], 0.0)
-            end
-        end
-        impes_system_diagonal!(S_diag, mesh, A_elements, M, dt)
-
-        # b^n = Σ_α [q^b - q^d - q^T - q^g - q^su]_α + q^r + M C_t^n/Δt
-        #
-        # P_boundary gates each species exactly as it gates the explicit rate: a fully
-        # prescribed node contributes nothing, and it is a Dirichlet row anyway.
-        for i in 1:Nnodes
-            acc = 0.0
-            for g in 1:NGases
-                acc += (q_boundary[i, g] - q_diffusion[i, g] - q_thermal_press[i, g] -
-                        q_gravitational[i, g] - q_stabilization[i, g]) * P_boundary[i, g]
-            end
-            if calculate_reaction && co2_gas_idx !== nothing
-                # Unthrottled: the throttle depends on the advective rate, which is not
-                # known until after this solve. Where it later fires, the volume
-                # consistency of §4.3 is broken by exactly the throttled amount - which is
-                # what the consistency diagnostic below measures.
-                acc += q_source_sink[i] * P_boundary[i, co2_gas_idx]
-            end
-            rhs[i] = acc + M[i] * total_concentration[i] / dt
-        end
-
-        # Dirichlet values. Composition-prescribed nodes hold the total they were given;
-        # a pressure BC node is evaluated at t_{n+1}, the same convention and the same
-        # target the Lagrange multipliers below aim at.
-        for i in 1:Nnodes
-            C_t_new[i] = total_concentration[i]
-        end
-        for j in pressure_bc_nodes
-            tf_id = get(mesh.absolute_pressure_tf, j, 0)
-            P_bc = bc_value(time_functions, tf_id, mesh.absolute_pressure_bc[j], t_next)
-            C_t_new[j] = P_bc / (R * T[j])
-        end
-
-        pcg_it, pcg_res, pcg_ok =
-            impes_pcg!(C_t_new, rhs, mesh, A_elements, M, dt, S_diag, is_dirichlet,
-                       pcg_r, pcg_z, pcg_p, pcg_Ap, pcg_xdir, pcg_dx;
-                       tol = pcg_tol, maxiter = pcg_maxiter)
-
-        pcg_solves += 1
-        pcg_iters_total += pcg_it
-        pcg_iters_max = max(pcg_iters_max, pcg_it)
-        pcg_res_max = max(pcg_res_max, pcg_res)
-
-        if !pcg_ok
-            log_print(@sprintf("Warning: IMPES pressure solve did not converge at step %d (%d iterations, relative residual %.3e > %.1e).",
-                               step, pcg_it, pcg_res, pcg_tol))
-            log_print("         The velocity field this step is not trustworthy. Lower the " *
-                      "Courant number or raise impes_pcg_maxiter.")
-        end
-
-        if any(isnan, C_t_new)
-            error("Simulation failed: NaN in the IMPES pressure solution at step $step")
-        end
-
-        #______________________________________________________
-        # Advective flux from ∇C_t^{n+1}, and the Darcy velocities.
-        #
-        # Both need the same element gradient, so they share one loop. The Gauss-point
-        # C_gp and T_gp here are the identical interpolations assemble_impes_operator!
-        # used to build Λ, which is what makes Σ_α C_α^{n+1} = C_t^{n+1} exact.
-        #______________________________________________________
-        for c in 1:nchunks
-            qa_chunk[c] .= 0.0
-            v_chunk[c] .= 0.0
-        end
-        q_advection .= 0.0
-        v .= 0.0
-
-        # Nodal pressure at level n+1, so the velocity is built from ∇P^{n+1} in one
-        # gradient rather than from the product-rule split. Uses T^n: the energy equation
-        # has not run yet, and the difference is O(dt dT/dt), below the scheme's own error.
-        for i in 1:Nnodes
-            P[i] = C_t_new[i] * R * T[i]
-        end
-
-        @threads for c in 1:nchunks
-            qa_c = qa_chunk[c]
-            v_c = v_chunk[c]
-            q_aux = q_aux_chunk[c]
-            ρ_g_vel = ρ_g_chunk[c]
-
-            for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
-                nodes = mesh.elements[e, :]
-                props = elem_props[e]
-                k_intrinsic = props.permeability
-
-                C_t_e = [C_t_new[nodes[i]] for i in 1:4]
-                T_e = [T[nodes[i]] for i in 1:4]
-                P_e = [P[nodes[i]] for i in 1:4]
-
-                # Advective flux with the implicit gradient, Eq. (IMPES-S)
-                if calculate_advection
-                    for gas_idx in 1:NGases
-                        μ_g = μ_gas[gas_idx]
-                        C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
-                        fill!(q_aux, 0.0)
-
-                        for p in 1:4
-                            N_p = ShapeFunctions.shape_funcs.N[p]
-                            C_gp = N_p' * C_e
-                            T_gp = N_p' * T_e
-                            dV = ShapeFunctions.get_weight(e, p)
-                            Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
-                            dN_dx = ShapeFunctions.get_dN_dx(e, p)
-
-                            q_aux .+= (R * k_intrinsic * C_gp * T_gp * dV * Wp / μ_g) .*
-                                      (dN_dx * (dN_dx' * C_t_e))
-                        end
-
-                        for i in 1:4
-                            qa_c[nodes[i], gas_idx] += q_aux[i]
-                        end
-                    end
-                end
-
-                # Darcy velocities, Eq. (Darcy_law). Same convention as the explicit
-                # solver, including the arithmetic composition-weighted viscosity.
-                for p in 1:4
-                    N_p = ShapeFunctions.shape_funcs.N[p]
-                    dV = ShapeFunctions.get_weight(e, p)
-                    w = ShapeFunctions.shape_funcs.gauss_weights[p]
-                    dN_dx = ShapeFunctions.get_dN_dx(e, p)
-
-                    grad_P = dN_dx' * P_e
-                    C_total_gp = N_p' * C_t_e
-
-                    C_TOL = 1e-12
-                    μ_g_weighted = 0.0
-                    if C_total_gp > C_TOL
-                        for g in 1:NGases
-                            C_g_gp = 0.0
                             for i in 1:4
-                                C_g_gp += N_p[i] * C_g[nodes[i], g]
-                            end
-                            μ_g_weighted += (C_g_gp / C_total_gp) * μ_gas[g]
-                        end
-                    else
-                        μ_g_weighted = mean(μ_gas)
-                    end
-
-                    v_gp = -(k_intrinsic / μ_g_weighted) * grad_P
-
-                    mass_weight = props.θ_g * w * dV
-                    for i in 1:4
-                        v_c[nodes[i], :] += v_gp * N_p[i] * mass_weight
-                    end
-
-                    if calculate_gravity
-                        ρ_g = ρ_g_vel
-                        fill!(ρ_g, 0.0)
-                        for i in 1:4
-                            for g in 1:NGases
-                                ρ_g[i] += C_g[nodes[i], g] * molar_mass_gas[g]
+                                qT_c[nodes[i], gas_idx] += qT_aux[i]
+                                qs_c[nodes[i], gas_idx] += qs_aux[i]
                             end
                         end
-                        ρ_g_gp = N_p' * ρ_g
 
-                        v_g_gp = (k_intrinsic / μ_g_weighted) * ρ_g_gp * g_vector
-                        for i in 1:4
-                            v_c[nodes[i], :] += v_g_gp * N_p[i] * mass_weight
+                        # Gravity, Eq. (gravitational_flux)
+                        if calculate_gravity
+                            fill!(q_aux, 0.0)
+                            for p in 1:4
+                                N_p = ShapeFunctions.shape_funcs.N[p]
+                                C_gp = N_p' * C_e
+                                dV = ShapeFunctions.get_weight(e, p)
+                                Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
+                                dN_dx = ShapeFunctions.get_dN_dx(e, p)
+
+                                fill!(ρ_g_buf, 0.0)
+                                for i in 1:4
+                                    for g in 1:NGases
+                                        ρ_g_buf[i] += C_g[nodes[i], g] * molar_mass_gas[g]
+                                    end
+                                end
+                                ρ_g_gp = N_p' * ρ_g_buf
+
+                                q_aux .-= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .*
+                                          (dN_dx * g_vector)
+                            end
+                            for i in 1:4
+                                qg_c[nodes[i], gas_idx] += q_aux[i]
+                            end
                         end
-                        v_gp = v_gp + v_g_gp
-                    end
-
-                    for d in 1:NDim
-                        v_gp_cache[e, p, d] = v_gp[d]
                     end
                 end
             end
-        end
 
-        for c in 1:nchunks
-            q_advection .+= qa_chunk[c]
-            v .+= v_chunk[c]
-        end
-
-        for i in 1:Nnodes
-            if M[i] > 0.0
-                v[i, :] ./= M[i]
+            for c in 1:nchunks
+                q_diffusion .+= qd_chunk[c]
+                q_gravitational .+= qg_chunk[c]
+                q_thermal_press .+= qT_chunk[c]
+                q_stabilization .+= qs_chunk[c]
             end
-        end
 
-        #______________________________________________________
-        # Species rates, Eq. (IMPES-S).
-        #______________________________________________________
-        @threads for gas_idx in 1:NGases
-            gas_name = materials.gas_dictionary[gas_idx]
+            #______________________________________________________
+            # (IMPES-P): assemble A^n and solve for C_t^{n+1}.
+            #______________________________________________________
+            if calculate_advection
+                assemble_impes_operator!(A_elements, mesh, elem_props, μ_gas, C_g, T, R,
+                                         chunk_bounds, nchunks)
+            else
+                for e in 1:Nelements
+                    fill!(A_elements[e], 0.0)
+                end
+            end
+            impes_system_diagonal!(S_diag, mesh, A_elements, M, dt)
+
+            # b^n = Σ_α [q^b - q^d - q^T - q^g - q^su]_α + q^r + M C_t^n/Δt
+            #
+            # P_boundary gates each species exactly as it gates the explicit rate: a fully
+            # prescribed node contributes nothing, and it is a Dirichlet row anyway.
+            for i in 1:Nnodes
+                acc = 0.0
+                for g in 1:NGases
+                    acc += (q_boundary[i, g] - q_diffusion[i, g] - q_thermal_press[i, g] -
+                            q_gravitational[i, g] - q_stabilization[i, g]) * P_boundary[i, g]
+                end
+                if calculate_reaction && co2_gas_idx !== nothing
+                    # Unthrottled: the throttle depends on the advective rate, which is not
+                    # known until after this solve. Where it later fires, the volume
+                    # consistency of §4.3 is broken by exactly the throttled amount - which is
+                    # what the consistency diagnostic below measures.
+                    acc += q_source_sink[i] * P_boundary[i, co2_gas_idx]
+                end
+                rhs[i] = acc + M[i] * total_concentration[i] / dt
+            end
+
+            # Dirichlet values. Composition-prescribed nodes hold the total they were given;
+            # a pressure BC node is evaluated at t_{n+1}, the same convention and the same
+            # target the Lagrange multipliers below aim at.
+            for i in 1:Nnodes
+                C_t_new[i] = total_concentration[i]
+            end
+            for j in pressure_bc_nodes
+                tf_id = get(mesh.absolute_pressure_tf, j, 0)
+                P_bc = bc_value(time_functions, tf_id, mesh.absolute_pressure_bc[j], t_next)
+                C_t_new[j] = P_bc / (R * T[j])
+            end
+
+            pcg_it, pcg_res, pcg_ok =
+                impes_pcg!(C_t_new, rhs, mesh, A_elements, M, dt, S_diag, is_dirichlet,
+                           pcg_r, pcg_z, pcg_p, pcg_Ap, pcg_xdir, pcg_dx;
+                           tol = pcg_tol, maxiter = pcg_maxiter)
+
+            pcg_solves += 1
+            pcg_iters_total += pcg_it
+            pcg_iters_max = max(pcg_iters_max, pcg_it)
+            pcg_res_max = max(pcg_res_max, pcg_res)
+
+            if !pcg_ok
+                log_print(@sprintf("Warning: IMPES pressure solve did not converge at step %d (%d iterations, relative residual %.3e > %.1e).",
+                                   step, pcg_it, pcg_res, pcg_tol))
+                log_print("         The velocity field this step is not trustworthy. Lower the " *
+                          "Courant number or raise impes_pcg_maxiter.")
+            end
+
+            if any(isnan, C_t_new)
+                error("Simulation failed: NaN in the IMPES pressure solution at step $step")
+            end
+
+            #______________________________________________________
+            # Advective flux from ∇C_t^{n+1}, and the Darcy velocities.
+            #
+            # Both need the same element gradient, so they share one loop. The Gauss-point
+            # C_gp and T_gp here are the identical interpolations assemble_impes_operator!
+            # used to build Λ, which is what makes Σ_α C_α^{n+1} = C_t^{n+1} exact.
+            #______________________________________________________
+            for c in 1:nchunks
+                qa_chunk[c] .= 0.0
+                v_chunk[c] .= 0.0
+            end
+            q_advection .= 0.0
+            v .= 0.0
+
+            # Nodal pressure at level n+1, so the velocity is built from ∇P^{n+1} in one
+            # gradient rather than from the product-rule split. Uses T^n: the energy equation
+            # has not run yet, and the difference is O(dt dT/dt), below the scheme's own error.
+            for i in 1:Nnodes
+                P[i] = C_t_new[i] * R * T[i]
+            end
+
+            @threads for c in 1:nchunks
+                qa_c = qa_chunk[c]
+                v_c = v_chunk[c]
+                q_aux = q_aux_chunk[c]
+                ρ_g_vel = ρ_g_chunk[c]
+
+                for e in (chunk_bounds[c] + 1):chunk_bounds[c + 1]
+                    nodes = mesh.elements[e, :]
+                    props = elem_props[e]
+                    k_intrinsic = props.permeability
+
+                    C_t_e = [C_t_new[nodes[i]] for i in 1:4]
+                    T_e = [T[nodes[i]] for i in 1:4]
+                    P_e = [P[nodes[i]] for i in 1:4]
+
+                    # Advective flux with the implicit gradient, Eq. (IMPES-S)
+                    if calculate_advection
+                        for gas_idx in 1:NGases
+                            μ_g = μ_gas[gas_idx]
+                            C_e = [C_g[nodes[i], gas_idx] for i in 1:4]
+                            fill!(q_aux, 0.0)
+
+                            for p in 1:4
+                                N_p = ShapeFunctions.shape_funcs.N[p]
+                                C_gp = N_p' * C_e
+                                T_gp = N_p' * T_e
+                                dV = ShapeFunctions.get_weight(e, p)
+                                Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
+                                dN_dx = ShapeFunctions.get_dN_dx(e, p)
+
+                                q_aux .+= (R * k_intrinsic * C_gp * T_gp * dV * Wp / μ_g) .*
+                                          (dN_dx * (dN_dx' * C_t_e))
+                            end
+
+                            for i in 1:4
+                                qa_c[nodes[i], gas_idx] += q_aux[i]
+                            end
+                        end
+                    end
+
+                    # Darcy velocities, Eq. (Darcy_law). Same convention as the explicit
+                    # solver, including the arithmetic composition-weighted viscosity.
+                    for p in 1:4
+                        N_p = ShapeFunctions.shape_funcs.N[p]
+                        dV = ShapeFunctions.get_weight(e, p)
+                        w = ShapeFunctions.shape_funcs.gauss_weights[p]
+                        dN_dx = ShapeFunctions.get_dN_dx(e, p)
+
+                        grad_P = dN_dx' * P_e
+                        C_total_gp = N_p' * C_t_e
+
+                        C_TOL = 1e-12
+                        μ_g_weighted = 0.0
+                        if C_total_gp > C_TOL
+                            for g in 1:NGases
+                                C_g_gp = 0.0
+                                for i in 1:4
+                                    C_g_gp += N_p[i] * C_g[nodes[i], g]
+                                end
+                                μ_g_weighted += (C_g_gp / C_total_gp) * μ_gas[g]
+                            end
+                        else
+                            μ_g_weighted = mean(μ_gas)
+                        end
+
+                        v_gp = -(k_intrinsic / μ_g_weighted) * grad_P
+
+                        mass_weight = props.θ_g * w * dV
+                        for i in 1:4
+                            v_c[nodes[i], :] += v_gp * N_p[i] * mass_weight
+                        end
+
+                        if calculate_gravity
+                            ρ_g = ρ_g_vel
+                            fill!(ρ_g, 0.0)
+                            for i in 1:4
+                                for g in 1:NGases
+                                    ρ_g[i] += C_g[nodes[i], g] * molar_mass_gas[g]
+                                end
+                            end
+                            ρ_g_gp = N_p' * ρ_g
+
+                            v_g_gp = (k_intrinsic / μ_g_weighted) * ρ_g_gp * g_vector
+                            for i in 1:4
+                                v_c[nodes[i], :] += v_g_gp * N_p[i] * mass_weight
+                            end
+                            v_gp = v_gp + v_g_gp
+                        end
+
+                        for d in 1:NDim
+                            v_gp_cache[e, p, d] = v_gp[d]
+                        end
+                    end
+                end
+            end
+
+            for c in 1:nchunks
+                q_advection .+= qa_chunk[c]
+                v .+= v_chunk[c]
+            end
 
             for i in 1:Nnodes
-                dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] -
-                                        q_advection[i, gas_idx] - q_thermal_press[i, gas_idx] -
-                                        q_gravitational[i, gas_idx] - q_stabilization[i, gas_idx]) *
-                                       P_boundary[i, gas_idx]) / M[i]
-
-                if gas_name == "CO2" && calculate_reaction
-                    dC_g_dt_rxn = (q_source_sink[i] * P_boundary[i, gas_idx]) / M[i]
-
-                    if C_g[i, gas_idx] + dt * (dC_g_dt[i, gas_idx] + dC_g_dt_rxn) < 0.0
-                        dC_g_dt_rxn_allowed = min(-C_g[i, gas_idx] / dt - dC_g_dt[i, gas_idx], 0.0)
-                        scale = dC_g_dt_rxn < 0.0 ?
-                                clamp(dC_g_dt_rxn_allowed / dC_g_dt_rxn, 0.0, 1.0) : 0.0
-                        # The pressure RHS above used the UNTHROTTLED rate, so whatever is
-                        # withheld here is exactly the amount by which Σ_α C_α^{n+1} will
-                        # miss C_t^{n+1}. Recorded so the volume-consistency warning has a
-                        # measured number to point at instead of a list of suspects.
-                        throttle_count[gas_idx] += 1
-                        throttled_mass[gas_idx] += -dC_g_dt_rxn * (1.0 - scale) * dt * M[i]
-                        dC_g_dt_rxn *= scale
-                        dC_lime_dt[i] *= scale
-                    end
-
-                    dC_g_dt[i, gas_idx] += dC_g_dt_rxn
+                if M[i] > 0.0
+                    v[i, :] ./= M[i]
                 end
+            end
+
+            #______________________________________________________
+            # Species rates, Eq. (IMPES-S).
+            #
+            # UNTHROTTLED. The positivity test below has to see the rate the physics asked
+            # for, not one already cut to fit the step: a throttled rate is by construction
+            # exactly -C/dt, so it reports back the very step it was cut to and tells the
+            # controller nothing. The reaction part is kept aside so the throttle can still be
+            # applied afterwards, on whichever step the trial loop settles on.
+            #______________________________________________________
+            @threads for gas_idx in 1:NGases
+                is_co2 = calculate_reaction && gas_idx == co2_gas_idx
+
+                for i in 1:Nnodes
+                    dC_g_dt[i, gas_idx] = ((q_boundary[i, gas_idx] - q_diffusion[i, gas_idx] -
+                                            q_advection[i, gas_idx] - q_thermal_press[i, gas_idx] -
+                                            q_gravitational[i, gas_idx] - q_stabilization[i, gas_idx]) *
+                                           P_boundary[i, gas_idx]) / M[i]
+
+                    if is_co2
+                        rxn = (q_source_sink[i] * P_boundary[i, gas_idx]) / M[i]
+                        dC_g_dt_rxn_store[i] = rxn
+                        dC_g_dt[i, gas_idx] += rxn
+                    end
+                end
+            end
+
+            #______________________________________________________
+            # Positivity limit, §5.1, and the accept/reject test that closes the trial.
+            #
+            #     Δt <= min over (i,α) with dC_α/dt < 0 of  C_α / (-dC_α/dt)
+            #
+            # This is not a linear stability bound and it is not redundant with the Courant
+            # one. Under IMPES the C_MIN clamp stops being harmless: a species driven below
+            # zero is reset to zero, which CREATES mass, and unlike the explicit solver the
+            # pressure equation now responds to that mass immediately - higher total, higher
+            # pressure, higher velocity, more overshoot. The clamp becomes a positive feedback
+            # rather than a cosmetic floor, so the step has to be chosen to keep it silent.
+            #
+            # Nodes already essentially empty are skipped: there a small negative rate is
+            # round-off, and dividing by it would collapse the step for no reason. The clamp
+            # remains in place for exactly those.
+            #
+            # C_floor is hoisted out of the loop because the clamp below bins its events on the
+            # same threshold. The two used to disagree - the limit called a node round-off and
+            # skipped it while the counter scored it alongside a genuine overshoot - which is
+            # what made a run whose clamps are almost entirely displaced-species jitter report
+            # itself as an instability.
+            #______________________________________________________
+            C_floor = 1.0e-6 * max(maximum(C_g), 1.0)
+            dt_positivity = Inf
+            for gas_idx in 1:NGases
+                for i in 1:Nnodes
+                    rate = dC_g_dt[i, gas_idx]
+                    rate < 0.0 || continue
+                    C_g[i, gas_idx] > C_floor || continue
+                    d = C_g[i, gas_idx] / (-rate)
+                    d < dt_positivity && (dt_positivity = d)
+                end
+            end
+
+            # Accept, or throw the trial away and take it again shorter.
+            #
+            # Carrying this bound into the NEXT step, which is what it used to do, cannot stop
+            # the violation it has just measured: that step has already been applied by the
+            # time the bound exists, and the clamp has already created the mass. Rejecting
+            # here costs one extra pressure solve and keeps the species non-negative by
+            # construction.
+            #
+            # The replacement step is the bound itself rather than a blind halving, so a trial
+            # that overshot by a factor of two and one that overshot by fifty both land in a
+            # single retry. positivity_safety is the same 0.5 the bound always carried: a
+            # margin against the rate changing over the step, not a fraction of a stability
+            # limit.
+            #
+            # A trial that keeps failing is one whose rates move under it, the bound being
+            # read from a state the shorter step then changes. The count is capped rather than
+            # iterated to convergence; on exhaustion the step is taken with the throttle and
+            # the clamp behind it, as it was before, and counted so the log can say so.
+            if isfinite(dt_positivity) && dt > positivity_safety * dt_positivity
+                if trial <= positivity_max_retries
+                    dt = positivity_safety * dt_positivity
+                    step_rejected += 1
+                    continue
+                end
+                step_exhausted += 1
+            end
+            break
+        end  # trial step
+
+        #______________________________________________________
+        # Reaction throttle - the backstop, §5.1.
+        #
+        # With the trial loop above this should be silent, and its count in the output
+        # block is the measure of whether it is. What it withholds is exactly the amount
+        # by which Σ_α C_α^{n+1} will miss C_t^{n+1}, because the pressure RHS used the
+        # unthrottled rate, so the volume-consistency warning has a measured number to
+        # point at instead of a list of suspects.
+        #______________________________________________________
+        if calculate_reaction && co2_gas_idx !== nothing
+            for i in 1:Nnodes
+                rxn = dC_g_dt_rxn_store[i]
+                rxn < 0.0 || continue
+                C_g[i, co2_gas_idx] + dt * dC_g_dt[i, co2_gas_idx] < 0.0 || continue
+
+                transport = dC_g_dt[i, co2_gas_idx] - rxn
+                allowed = min(-C_g[i, co2_gas_idx] / dt - transport, 0.0)
+                scale = clamp(allowed / rxn, 0.0, 1.0)
+
+                throttle_count[co2_gas_idx] += 1
+                throttled_mass[co2_gas_idx] += -rxn * (1.0 - scale) * dt * M[i]
+                dC_g_dt[i, co2_gas_idx] = transport + rxn * scale
+                dC_lime_dt[i] *= scale
             end
         end
 
         for i in 1:Nnodes
             for gas_idx in 1:NGases
                 total_rate[i] += dC_g_dt[i, gas_idx]
-            end
-        end
-
-        #______________________________________________________
-        # Positivity limit, for the NEXT step's size.
-        #
-        #     Δt <= min over (i,α) with dC_α/dt < 0 of  C_α / (-dC_α/dt)
-        #
-        # This is not a linear stability bound and it is not redundant with the Courant
-        # one. Under IMPES the C_MIN clamp stops being harmless: a species driven below
-        # zero is reset to zero, which CREATES mass, and unlike the explicit solver the
-        # pressure equation now responds to that mass immediately - higher total, higher
-        # pressure, higher velocity, more overshoot. The clamp becomes a positive feedback
-        # rather than a cosmetic floor, so the step has to be chosen to keep it silent.
-        #
-        # Nodes already essentially empty are skipped: there a small negative rate is
-        # round-off, and dividing by it would collapse the step for no reason. The clamp
-        # remains in place for exactly those.
-        #
-        # C_floor is hoisted out of the loop because the clamp below bins its events on the
-        # same threshold. The two used to disagree - the limit called a node round-off and
-        # skipped it while the counter scored it alongside a genuine overshoot - which is
-        # what made a run whose clamps are almost entirely displaced-species jitter report
-        # itself as an instability.
-        #______________________________________________________
-        C_floor = 1.0e-6 * max(maximum(C_g), 1.0)
-        dt_positivity = Inf
-        for gas_idx in 1:NGases
-            for i in 1:Nnodes
-                rate = dC_g_dt[i, gas_idx]
-                rate < 0.0 || continue
-                C_g[i, gas_idx] > C_floor || continue
-                d = C_g[i, gas_idx] / (-rate)
-                d < dt_positivity && (dt_positivity = d)
             end
         end
 
@@ -1596,37 +1722,44 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         # 0.5 rather than the Courant number: this bound says "do not consume more than
         # half of what is there", which is a margin against the rate changing over the
         # step, not a fraction of a linear stability limit.
-        dt_target = min(courant_number * min(dt_explicit, dt_reaction_fixed),
+        dt_target = min(courant_number * min(dt_explicit, dt_reaction),
                         0.5 * dt_positivity)
 
-        # Name the term that actually set the step, for the output log. Compared on the
-        # same footing the step was chosen on - each candidate carries the factor it
-        # entered with - so the winner here is the one that produced dt_target, not
-        # whichever raw limit happens to be smallest.
-        let cands = (("Courant", courant_number * dt_courant),
-                     ("diffusion", courant_number * dt_diffusion_fixed),
-                     ("conduction", courant_number * dt_conduction_fixed),
-                     ("reaction", courant_number * dt_reaction_fixed),
-                     ("positivity", 0.5 * dt_positivity))
+        # Which term set the step. Each candidate carries the factor it entered with, so
+        # the winner here is the one that produced dt_target, not whichever raw limit
+        # happens to be smallest.
+        #
+        # Recorded per step and reported as a share of the output interval rather than as
+        # a single name. The previous version kept one name and overwrote it whenever the
+        # growth cap was below the physics limit, which is true on every step that follows
+        # a reduction, so a run whose step was being repeatedly halved and ramped back
+        # reported "startup ramp" from beginning to end and the term doing the halving
+        # never appeared at all.
+        dt_limit_idx = DT_LIMIT_COURANT
+        let cands = (courant_number * dt_courant,
+                     courant_number * dt_diffusion_fixed,
+                     courant_number * dt_conduction_fixed,
+                     courant_number * dt_reaction,
+                     0.5 * dt_positivity)
             best = Inf
-            for (nm, val) in cands
-                if val < best
-                    best = val
-                    dt_limit_name = nm
+            for k in eachindex(cands)
+                if cands[k] < best
+                    best = cands[k]
+                    dt_limit_idx = k
                 end
             end
             # The harmonic sum can bind below every individual term.
             if courant_number * dt_explicit < 0.95 * best
                 best = courant_number * dt_explicit
-                dt_limit_name = "combined"
+                dt_limit_idx = DT_LIMIT_COMBINED
             end
-            # The growth cap is named only while the step is still climbing towards what
-            # the physics allows. Once it settles there the cap sits a factor
-            # dt_growth_max above the step by construction, so it is the smallest
-            # candidate on almost every step and would be reported as the limit for the
-            # whole run - which is exactly backwards.
+            # The growth cap binds whenever the step is climbing back towards what the
+            # physics allows, whether that is the opening ramp or a recovery from a
+            # reduction. Either way it is the cap that set this step, and the share it
+            # takes over an interval is the measure of how much of the run is spent
+            # recovering rather than running at the limit.
             if dt_growth_max * dt < 0.95 * best
-                dt_limit_name = "startup ramp"
+                dt_limit_idx = DT_LIMIT_GROWTH
             end
         end
 
@@ -1674,9 +1807,33 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                               calc_params["units"]["time_unit"]))
 
             steps_since = max(1, step - last_output_step)
-            log_print(@sprintf("        Steps %d, dt %.4e to %.4e %s (limit: %s)",
-                               steps_since, dt_min_seen, dt_max_seen,
-                               calc_params["units"]["time_unit"], dt_limit_name))
+            # Rejected trials are named only when there are some. They are real work - one
+            # pressure solve each - so they belong next to the step count rather than in a
+            # line of their own, and a run that never rejects should not have to say so.
+            retry_note = step_rejected > 0 ?
+                @sprintf(" (+%d rejected%s)", step_rejected,
+                         step_exhausted > 0 ? @sprintf(", %d unresolved", step_exhausted) : "") : ""
+            log_print(@sprintf("        Steps %d%s, dt %.4e to %.4e %s",
+                               steps_since, retry_note, dt_min_seen, dt_max_seen,
+                               calc_params["units"]["time_unit"]))
+
+            # Census of what set the step over the interval. Terms below 1% are dropped;
+            # the line is there to show which bound is doing the work, not to account for
+            # every step.
+            let tot = sum(dt_limit_count)
+                if tot > 0
+                    parts = String[]
+                    for k in sortperm(dt_limit_count, rev = true)
+                        share = 100.0 * dt_limit_count[k] / tot
+                        share < 1.0 && break
+                        push!(parts, @sprintf("%s %.0f%%", DT_LIMIT_NAMES[k], share))
+                    end
+                    isempty(parts) || log_print("        Step set by: " * join(parts, ", "))
+                end
+            end
+            fill!(dt_limit_count, 0)
+            step_rejected = 0
+            step_exhausted = 0
             if pcg_solves > 0
                 log_print(@sprintf("        PCG: %.1f iterations mean, %d max, residual %.2e max",
                                    pcg_iters_total / pcg_solves, pcg_iters_max, pcg_res_max))
@@ -1781,10 +1938,15 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             # The stage end writes its own output through the loop condition above, so
             # only an output boundary arms save_data.
             save_data = t_snap == next_output_time
+            # The snap overrides whatever the physics asked for, and the step it leaves
+            # behind is the one the growth cap then ramps away from. Counting it on its
+            # own keeps a short remainder from being read as a stability event.
+            dt_limit_idx = DT_LIMIT_SNAP
         else
             dt = dt_target
             save_data = false
         end
+        dt_limit_count[dt_limit_idx] += 1
 
         # A step that has collapsed to zero or below cannot advance the run. Fail loudly
         # rather than spin.

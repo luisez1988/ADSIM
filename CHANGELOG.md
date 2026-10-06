@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The IMPES step-limit report is now a census of what actually set the step, and the
+  reaction limit is recomputed from the live field instead of being frozen at start-up.**
+  - The old report kept a single name and overwrote it with `"startup ramp"` whenever the
+    growth cap sat below the physics limit. That is true on every step following a
+    reduction, so a run whose step was being repeatedly halved and ramped back reported
+    `"startup ramp"` from the first output to the last, and the term doing the halving
+    never appeared. The line is now a share over the output interval, e.g.
+    `Step set by: growth cap 72%, combined 22%, positivity 6%`, with terms below 1%
+    dropped. Steps shortened to land on a snapshot time are counted separately from
+    stability reductions, so a short remainder is no longer readable as an instability.
+  - What this showed on an adiabatic `8mm_size` run at CN 0.98: the step is set by the
+    combined diffusion-like bound for the first four load steps, the positivity bound
+    starts binding at load step 5, and from load step 7 onward two thirds to four fifths
+    of all steps are the growth cap, i.e. the run spends most of its steps climbing back
+    from reductions rather than running at the limit. The same case at CN 0.30 is
+    `combined 96-100%` throughout. The old report called both of them "startup ramp".
+  - `dt_reaction` is recomputed each step as `1/(2 max_i λ_i)` over the current `T`,
+    `C_lime` and gas composition, through a new `reaction_decay_constant` that
+    `get_maximum_reaction_parameters` now also calls, so the start-up figure and the
+    running one cannot drift apart. Every factor in λ moves during a run: the lime is
+    consumed, and λ *falls* as the specimen heats, because the Arrhenius exponent is
+    `-E/RT` while the Henry exponent is `+2400/T` and for `E = 7.5 kJ/mol` the retrograde
+    solubility wins. A carbonation run is fastest where it is coldest.
+  - Expect the frozen and live values to agree over most of a typical run; that is not the
+    recomputation being pointless. λ is largest where the specimen is coldest and least
+    reacted, so a global maximum sits on whichever corner the front has not reached, which
+    is the state the start-up figure already assumed. On `8mm_size` at both 10% and 30%
+    lime the two are identical to five digits for all 1200 s, because the bottom row never
+    warms past 293.4 K or loses measurable lime, and the two runs are step-for-step the
+    same. They separate once that corner has itself reacted, and immediately on a problem
+    whose coldest point is a convective boundary:
+    `get_minimum_reference_temperature` reads the initial field and `temperature_bc` only,
+    so a `convective_heat_bc` whose `T_inf` is below both is not represented in the
+    start-up bound at all.
+  - Where it does separate, it separates widely. On the 3% lime convective validation case
+    the live value runs from 1.414 s to 26.97 s over 1200 s as the cold rows carbonate,
+    against a frozen 1.414 s - a factor of 19, and on a case whose start-up report names
+    "Reactive" as the limiting scale. It still never sets the step there, because the
+    combined diffusion-like bound is an order of magnitude tighter, so the correction is
+    to the reported limit rather than to the run.
+
 - **The interfacial-area factor is now driven by the total gas pressure, and `beta` is
   dimensionless.** `interfacial_area_factor` took the CO2 gas concentration and returned
   `a = exp[beta (C_aq - C_aq_atm)]`, an absolute dissolved concentration with `beta` in

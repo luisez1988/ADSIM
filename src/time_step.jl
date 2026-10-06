@@ -491,7 +491,6 @@ initial gas concentration in the mesh.
 """
 function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     param_max = 0.0
-    R_gas = 8.3145                  # J mol⁻¹ K⁻¹
     M_lime = 74.093                 # Molar mass of Ca(OH)2 [g/mol]
 
     # The kinetics belong to the reaction, so the same set applies to every material
@@ -509,11 +508,11 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     #
     # T_ref is used for the pressure conversion because this bound is formed before
     # the run starts, from initial data alone. A specimen that self-heats at constant
-    # volume raises its own pressure and so its own a; the solver's adaptive step
-    # picks that up from the current state, and this figure is only the starting
-    # estimate reported at start-up.
+    # volume raises its own pressure and so its own a, and it changes T and consumes
+    # its lime besides. The IMPES solver recomputes this bound from the live field on
+    # every step; what is returned here is the starting estimate and the figure the
+    # start-up report prints.
     C_g_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary))
-    a_max = interfacial_area_factor(C_g_max, T_ref, β_area)
 
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
@@ -538,19 +537,20 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
                             (1.0 - n) * 1e6) / M_lime          # [mol/m³ total]
                 A_react = C_lime_0 * (1.0 - reaction.residual_lime)
 
-                # Holding the lime and the area factor fixed, the rate law is first
-                # order in the CO2 gas concentration:
-                #   dC_g/dt|rxn = -(θ_w/θ_g) k_T a K_H R T (A_s - A_r) C_g
-                # so the bracket below is the decay constant of that equation.
+                # The decay constant of that first-order equation, from the same helper
+                # the solver's adaptive step calls on the live field, so the start-up
+                # figure and the running one cannot drift apart.
                 #
                 # The solubility cap was removed from the rate law, so A_react is now
                 # the full lime inventory above the residual rather than A_aq,sat.
                 # For typical mixtures that is larger by two orders of magnitude, and
                 # the reactive time scale is correspondingly shorter.
-                k_T = arrhenius_coefficient(k_o, E_a, T_ref)
-
-                param = (θ_w / θ_g) * k_T * a_max * henry_solubility(T_ref) *
-                        R_gas * T_ref * A_react
+                #
+                # C_g_max is passed through the area factor's own argument rather than
+                # a pre-multiplied a_max, which is the same number: the factor is
+                # evaluated at the same total concentration and the same T_ref.
+                param = reaction_decay_constant(C_g_max, C_lime_0, C_lime_0 - A_react,
+                                                θ_w, θ_g, T_ref, k_o, E_a, β_area)
                 param_max = max(param_max, param)
             end
         end

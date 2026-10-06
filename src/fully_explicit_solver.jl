@@ -321,6 +321,52 @@ function extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, 
     return k_T * a * C_aq * A_react
 end
 
+
+"""
+    reaction_decay_constant(C_g_total, C_lime, C_r, θ_w, θ_g, T, k_o, E, β_area)
+
+Rate at which the reaction drains CO2 from the gas phase, per unit of CO2 already there.
+
+Holding the lime and the area factor fixed, the reactive part of the CO2 species equation
+is first order in its own concentration,
+
+    dC_g,CO2/dt|rxn = -(θ_w/θ_g) k_T a K_H R T (A_s - A_r) C_g,CO2 = -λ C_g,CO2
+
+and λ is the bracket. It is the eigenvalue the reaction contributes to that node's
+equation, so it is what the explicit stability limit is built from, and `1/λ` is the time
+in which the reaction would empty a node of CO2 if nothing resupplied it.
+
+Every factor here moves during a run. λ falls as the lime is consumed, and it falls as the
+specimen heats: the Arrhenius exponent is -E/RT while the Henry exponent is +2400/T, so
+for E = 7.5 kJ/mol the product goes as T exp(1498/T) and the retrograde solubility wins.
+A carbonation run is therefore fastest where it is coldest - which is the face of a
+specimen held at a convective boundary, not its interior.
+
+# Arguments
+- `C_g_total`: total gas concentration [mol/m³ of gas], for the area factor
+- `C_lime`: lime remaining, A_s [mol/m³ total]
+- `C_r`: shielded residual lime, A_r [mol/m³ total]
+- `θ_w`, `θ_g`: volumetric water and gas contents [-]
+- `T`: absolute temperature [K]
+- `k_o`, `E`: Arrhenius factor [m³ mol⁻¹ s⁻¹] and activation energy [J/mol]
+- `β_area`: interfacial-area exponent [-]
+
+# Returns
+- Decay constant λ [1/s]; zero where there is no water, no gas or no lime left to react
+"""
+function reaction_decay_constant(C_g_total, C_lime, C_r, θ_w, θ_g, T, k_o, E, β_area)
+    (θ_w > 0.0 && θ_g > 0.0 && T > 0.0) || return 0.0
+
+    Δ_lime = C_lime - C_r
+    Δ_lime > 0.0 || return 0.0
+
+    R_gas = 8.3145  # J mol⁻¹ K⁻¹
+
+    return (θ_w / θ_g) * arrhenius_coefficient(k_o, E, T) *
+           interfacial_area_factor(C_g_total, T, β_area) *
+           henry_solubility(T) * R_gas * T * Δ_lime
+end
+
 #=
 IMPLEMENTATION NOTES:
 =====================
