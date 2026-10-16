@@ -1,11 +1,10 @@
 #______________________________________________________
 # vtk_reader.jl
 #
-# Minimal reader for the ASCII legacy VTK files that ADSIM
-# writes (see src/write_vtk.jl). This is what replaces the
-# manual "Plot Over Line -> export CSV" step in ParaView:
-# every field ADSIM saves is already in the .vtk file, so we
-# parse it directly and build the 1D profile ourselves.
+# Minimal reader of the ADSIM ASCII legacy VTK files (see
+# src/write_vtk.jl). Replaces the manual ParaView
+# "Plot Over Line -> export CSV" step: the .vtk file is
+# parsed directly and the 1D profile built here.
 #______________________________________________________
 
 module VTKReader
@@ -31,7 +30,7 @@ struct VTKData
     vectors::Dict{String,Matrix{Float64}}
 end
 
-# Pull "Time = 300.0" and "Time Step 1" out of the header comment line.
+# Parse "Time = 300.0" and "Time Step 1" from the header comment line
 function _parse_header(line::AbstractString)
     t = 0.0
     step = 0
@@ -46,8 +45,7 @@ end
     read_vtk(path) -> VTKData
 
 Read an ADSIM legacy-ASCII UNSTRUCTURED_GRID `.vtk` file.
-Only POINTS, SCALARS and VECTORS blocks are needed for verification;
-CELLS / CELL_TYPES are skipped.
+POINTS, SCALARS and VECTORS blocks only; CELLS / CELL_TYPES skipped.
 """
 function read_vtk(path::AbstractString)
     lines = readlines(path)
@@ -103,8 +101,7 @@ function read_vtk(path::AbstractString)
     return VTKData(time, step, points, scalars, vectors)
 end
 
-# Resolve a per-node value array for `field`: a scalar directly, or a chosen
-# component / magnitude of a vector field.
+# Per-node values of `field`: scalar, or component / magnitude of a vector field
 function _field_values(vtk::VTKData, field::AbstractString, component::Symbol)
     if haskey(vtk.scalars, field)
         return vtk.scalars[field]
@@ -123,21 +120,17 @@ end
 """
     line_profile(vtk, field; axis=:y, origin=0.0, component=:magnitude, center=(0.0,0.0))
 
-Build a 1D profile of `field` along coordinate `axis` (`:x`, `:y` or `:z`),
-which is exactly what a ParaView "Plot Over Line" produced. `position`
-is measured as `abs(coord - origin)`, so set `origin` to the location of
-the driving boundary to match an analytical solution written with x=0 at
-that boundary.
+Build a 1D profile of `field` along coordinate `axis` (`:x`, `:y` or `:z`), equivalent
+to ParaView "Plot Over Line". `position = abs(coord - origin)`; set `origin` at the driving
+boundary to match an analytical solution with x = 0 there.
 
-Returns `(position, value)` sorted by position. Nodes that share the same
-position (e.g. the two columns of a 1D strip mesh) are averaged.
+Returns `(position, value)` sorted by position. Nodes at the same position (e.g. the two
+columns of a 1D strip mesh) are averaged.
 
-`axis = :radius` instead measures each node's distance from `center` and scores
-an axisymmetric solution. That path deliberately keeps every node as its own
-sample rather than averaging a ring: on a mesh that is not itself axisymmetric,
-the spread between nodes at equal radius IS the error such a solution must not
-have, and averaging it away would hide a direction-dependent operator — which is
-the whole reason a 2D case is in the suite.
+`axis = :radius`: distance of each node from `center`, for axisymmetric solutions. Every
+node kept as its own sample, without ring averaging: on a non-axisymmetric mesh the spread
+between nodes at equal radius is the error to detect (direction-dependent operator), the
+purpose of the 2D case.
 """
 function line_profile(vtk::VTKData, field::AbstractString; axis::Symbol=:y,
                       origin::Float64=0.0, component::Symbol=:magnitude,
@@ -154,7 +147,7 @@ function line_profile(vtk::VTKData, field::AbstractString; axis::Symbol=:y,
     col = axis === :x ? 1 : axis === :y ? 2 : 3
     coord = vtk.points[:, col]
 
-    # Average duplicate coordinates (round to tame float noise like 0.0999999).
+    # Average duplicate coordinates (rounded against float noise such as 0.0999999)
     acc = Dict{Float64,Vector{Float64}}()
     for k in eachindex(coord)
         key = round(coord[k]; digits=9)

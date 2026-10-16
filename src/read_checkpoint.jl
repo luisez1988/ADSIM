@@ -14,15 +14,12 @@ using JLD2
 """
     find_latest_checkpoint(project_name::String, output_dir::String="output")
 
-Find the most recent checkpoint file for a given project.
+Return `(checkpoint_file, stage_number)` of the highest-stage checkpoint of a project;
+`(nothing, 0)` if none.
 
 # Arguments
-- `project_name::String`: Base name of the project (e.g., "Test")
-- `output_dir::String`: Directory containing checkpoint files (default: "output")
-
-# Returns
-- `(checkpoint_file::String, stage_number::Int)`: Path to checkpoint and its stage number
-- `(nothing, 0)`: If no checkpoint files are found
+- `project_name`: Project base name (e.g., "Test")
+- `output_dir`: Checkpoint directory
 """
 function find_latest_checkpoint(project_name::String, output_dir::String="output")
     
@@ -71,15 +68,8 @@ end
 """
     validate_checkpoint_dimensions(checkpoint_data::Dict, mesh, materials)
 
-Validate that checkpoint dimensions match current mesh and materials.
-
-# Arguments
-- `checkpoint_data::Dict`: Loaded checkpoint data
-- `mesh`: Current mesh data structure
-- `materials`: Current material data structure
-
-# Returns
-- `(valid::Bool, message::String)`: Validation result and error/warning message
+Check checkpoint dimensions and formulation against the current mesh and materials.
+Returns `(valid, message)`.
 """
 function validate_checkpoint_dimensions(checkpoint_data::Dict, mesh, materials)
     
@@ -112,10 +102,8 @@ function validate_checkpoint_dimensions(checkpoint_data::Dict, mesh, materials)
         push!(errors, "Dimension mismatch: checkpoint has $(checkpoint_data["NDim"])D, expected 2D")
     end
 
-    # Check the geometric formulation. Plane strain and axisymmetric are different physics
-    # on the same mesh, so resuming across them would continue from a state the current
-    # equations never produced. Checkpoints written before this field existed are plane by
-    # construction, since that was the only formulation available.
+    # Geometric formulation. Plane strain and axisymmetric are different physics on the
+    # same mesh; resuming across them is invalid. Checkpoints without this field are plane.
     ckpt_axi = get(checkpoint_data, "axisymmetric", false)
     current_axi = Axisymmetric
     if ckpt_axi != current_axi
@@ -138,20 +126,17 @@ end
 """
     load_checkpoint(checkpoint_file::String, mesh, materials)
 
-Load simulation state from checkpoint file and restore global variables.
+Load the simulation state from a checkpoint file. Mutates the state globals.
 
-# Arguments
-- `checkpoint_file::String`: Path to the checkpoint file
-- `mesh`: Current mesh data structure (for validation)
-- `materials`: Current material data structure (for validation)
+`mesh` and `materials` used for validation only.
 
 # Returns
-- Named tuple with:
-  - `success::Bool`: Whether loading was successful
-  - `current_time::Float64`: Simulation time from checkpoint
-  - `output_counter::Int`: Output counter from checkpoint
-  - `next_output_time::Float64`: Next output time from checkpoint
-  - `message::String`: Status or error message
+Named tuple:
+- `success::Bool`
+- `current_time::Float64`: Simulation time of the checkpoint
+- `output_counter::Int`
+- `next_output_time::Float64`
+- `message::String`: Status or error message
 """
 function load_checkpoint(checkpoint_file::String, mesh, materials)
     
@@ -187,7 +172,7 @@ function load_checkpoint(checkpoint_file::String, mesh, materials)
         # Material properties (per soil type)
         global C_lime_residual = checkpoint_data["C_lime_residual"]
         
-        # Dimension parameters (validate but don't overwrite as they're set in initialize_variables)
+        # Dimension parameters (already validated against initialize_variables)
         global NDim = checkpoint_data["NDim"]
         global Nnodes = checkpoint_data["Nnodes"]
         global Nelements = checkpoint_data["Nelements"]
@@ -213,13 +198,7 @@ end
 """
     get_checkpoint_summary(checkpoint_file::String)
 
-Get summary information from a checkpoint file without fully loading it.
-
-# Arguments
-- `checkpoint_file::String`: Path to the checkpoint file
-
-# Returns
-- `String`: Formatted summary of checkpoint contents
+Return a formatted summary of a checkpoint file.
 """
 function get_checkpoint_summary(checkpoint_file::String)
     if !isfile(checkpoint_file)

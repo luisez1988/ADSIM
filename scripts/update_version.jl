@@ -1,7 +1,7 @@
 #!/usr/bin/env julia
 #______________________________________________________
 # ADSIM Version Update Script
-# Updates version strings across all project files
+# Version string update across all project files
 #______________________________________________________
 
 using Pkg
@@ -9,11 +9,8 @@ using Pkg
 """
     update_version(new_version::String)
 
-Update version strings across all ADSIM project files.
-Reads from VERSION file if new_version is not provided.
-
-# Arguments
-- `new_version::String`: New version string (e.g., "0.1.0")
+Update the version string (e.g., "0.1.0") in all ADSIM project files.
+The script entry point reads it from VERSION when no argument is given.
 
 # Updated Files
 1. VERSION (source of truth)

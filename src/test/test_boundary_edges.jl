@@ -1,5 +1,4 @@
-# Test for boundary edge identification and normal calculation
-# This test verifies the identify_boundary_edges() and calculate_edge_outward_normal() functions
+# Test of identify_boundary_edges() and calculate_edge_outward_normal()
 
 using Printf
 using LinearAlgebra
@@ -10,7 +9,7 @@ include("../read_mesh.jl")
 """
 Test boundary edge identification and normal calculation.
 
-This test uses the Advection_test.mesh file which has:
+Advection_test.mesh:
 - 22 nodes arranged in a 2-column grid (0.0 to 1.0 height, 0.1 width)
 - 10 elements (vertical stack)
 - Pressure BCs at nodes 1 and 2 (bottom edge)

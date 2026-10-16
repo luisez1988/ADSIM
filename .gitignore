@@ -40,6 +40,7 @@ ADSIM_app/
 
 # Claude Code local settings
 .claude/settings.local.json
+.claude/Writing_comments_instructions.md
 
 # --- Verification suite -------------------------------------------------
 # The global *.toml / *.mesh rules above would otherwise hide the

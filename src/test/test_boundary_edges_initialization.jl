@@ -1,5 +1,4 @@
-# Test for boundary edge initialization in global variables
-# Verifies that boundary_edges are correctly precomputed during initialization
+# Test of the boundary_edges global precomputed at initialization
 
 using Printf
 
@@ -10,7 +9,7 @@ include("../initialize_variables.jl")  # Defines NGases global
 include("../initialize_flows.jl")
 
 """
-Test that boundary edges are properly initialized as a global variable.
+Test the initialization of the global `boundary_edges`.
 """
 function test_boundary_edges_initialization()
     println("="^70)

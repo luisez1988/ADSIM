@@ -1,13 +1,12 @@
 #------------------------------------------------------------------------------
 # ADSIM Mesh Reader Module
-# This module contains functions to read and parse .mesh files for ADSIM
-# FEM calculations
+# Reading and parsing of .mesh files for ADSIM FEM calculations
 #------------------------------------------------------------------------------
 
 """
 MeshData
 
-Structure to store all mesh data and associated boundary/initial conditions.
+Mesh data with boundary and initial conditions.
 
 # Fields
 - `num_nodes::Int`: Total number of nodes in the mesh
@@ -23,30 +22,23 @@ Structure to store all mesh data and associated boundary/initial conditions.
 - `initial_temperature::Dict{Int, Float64}`: Initial temperature (elem_id => temperature)
 - `temperature_bc::Dict{Int, Float64}`: Prescribed temperature (node_id => T), Eq. (temperature_BC)
 - `convective_heat_bc::Dict{Int, Vector{Float64}}`: Convective heat BC (node_id => [h_c, T_inf]),
-  Eq. (conduction_flux_BC). h_c = 0 is an adiabatic boundary, which is also what an
-  unset boundary gives, since zero flux is the natural condition of the weak form.
-  The manuscript requires the two thermal boundary sets to be disjoint.
+  Eq. (conduction_flux_BC). h_c = 0 or unset boundary: adiabatic (natural condition of
+  the weak form). The two thermal boundary sets must be disjoint.
 - `materials::Dict{Int, Int}`: Material assignment (elem_id => material_index)
 
-Time-dependent boundaries are carried in parallel `*_tf` fields holding the id of
-the time function that drives each value, with 0 meaning "no curve, hold the
-constant". They are stored separately rather than as extra columns on the value
-lines because `parse_concentration_bc!` consumes every remaining field as a gas
-value and has no way to know how many gases there are. A mesh file written
-before this feature existed simply has no `*_tf` blocks, every id defaults to 0,
-and the boundaries behave exactly as they did.
+Time-dependent boundaries: parallel `*_tf` fields with the time function id of each
+value, 0 = constant. Stored separately instead of as extra columns, since
+`parse_concentration_bc!` reads every remaining field as a gas value without knowing
+the number of gases. Without `*_tf` blocks every id defaults to 0 (constant boundaries).
 
 - `concentration_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...])
 - `uniform_flow_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...])
 - `absolute_pressure_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
 - `temperature_bc_tf::Dict{Int, Int}`: Curve id (node_id => tf_id)
 - `partial_pressure_bc_tf::Dict{Int, Vector{Int}}`: Curve ids (node_id => [gas1, gas2, ...]),
-  driving `partial_pressure_bc`. Added later than the other four `*_tf` fields, which is
-  why the re-imposition it drives (`fully_explicit_solver.jl`) looks up the curve inline
-  each step rather than through a pre-filtered `transient_*` list: unlike the other BCs,
-  partial_pressure_bc is already re-applied unconditionally every step (it tracks the
-  evolving temperature via the ideal gas law), so there was no separate "only touch this
-  if time-driven" fast path to fit the ramp into.
+  for `partial_pressure_bc`. The solver looks up the curve inline each step instead of a
+  pre-filtered `transient_*` list, since partial_pressure_bc is re-applied every step
+  (follows T via the ideal gas law).
 """
 
 mutable struct MeshData
@@ -96,13 +88,13 @@ end
 """
 BoundaryNodeInfluence
 
-Structure to store boundary node information with influence lengths.
+Boundary node influence lengths.
 
 # Fields
-- `node_influences::Dict{Int, Float64}`: Dictionary mapping node_id => total_influence_length [m]
+- `node_influences::Dict{Int, Float64}`: node_id => total influence length [m]
 
-The influence length represents the portion of boundary edges contributing to each node.
-For edges where both nodes have pressure BC, each node receives half the edge length.
+Influence length: portion of boundary edges assigned to each node. Edges with the
+condition on both nodes give half the edge length to each node.
 """
 struct BoundaryNodeInfluence
     node_influences::Dict{Int, Float64}
@@ -116,14 +108,7 @@ end
 """
 read_mesh_file(filename::String) -> MeshData
 
-Read an ADSIM .mesh file and return a MeshData structure containing all
-geometrical and physical data.
-
-# Arguments
-- `filename::String`: Path to the .mesh file
-
-# Returns
-- `MeshData`: Structure containing all mesh information
+Read an ADSIM .mesh file into a `MeshData` structure (geometry and physical data).
 
 # Example
 ```julia
@@ -192,8 +177,8 @@ function read_mesh_file(filename::String)
             elseif line == "convective_heat_bc"
                 line_idx = parse_convective_heat_bc!(mesh, lines, line_idx + 1)
 
-            # Parse time function ids attached to the boundary conditions above.
-            # Optional blocks: a mesh file without them has constant boundaries.
+            # Time function ids of the boundary conditions above.
+            # Optional blocks; without them boundaries are constant.
             elseif line == "concentration_bc_tf"
                 line_idx = parse_bc_tf_vector!(mesh.concentration_bc_tf, lines,
                                                line_idx + 1, "concentration_bc_tf")
@@ -233,13 +218,7 @@ parse_mesh_counters!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> In
 
 Parse the MESH counter line and store node/element counts.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_mesh_counters!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     parts = split(strip(lines[line_idx]))
@@ -254,13 +233,7 @@ parse_coordinates!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> Int
 
 Parse nodal coordinates from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_coordinates!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     mesh.coordinates = zeros(Float64, mesh.num_nodes, 2)
@@ -284,13 +257,7 @@ parse_elements!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> Int
 
 Parse element connectivity from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_elements!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     mesh.elements = zeros(Int, mesh.num_elements, 4)
@@ -317,13 +284,7 @@ parse_concentration_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int) ->
 
 Parse concentration boundary conditions from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_concentration_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -354,13 +315,7 @@ parse_uniform_flow_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> 
 
 Parse uniform flow boundary conditions from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_uniform_flow_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -390,13 +345,7 @@ parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -
 
 Parse absolute pressure boundary conditions from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_absolute_pressure!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -429,16 +378,10 @@ end
 
 Parse the `temperature_bc` block: a prescribed nodal temperature, Eq. (temperature_BC).
 
-Format matches every other nodal block — a counter line, then that many
-`node_id value` lines, then `end temperature_bc`.
+Same format as the other nodal blocks: counter line, `node_id value` lines,
+`end temperature_bc`.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines of the mesh file
-- `line_idx::Int`: Index of the counter line
-
-# Returns
-- `Int`: Index of the first line after the block
+Mutates `mesh`. Returns the index of the first line after the block.
 """
 function parse_temperature_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     counter = parse(Int, strip(lines[line_idx]))
@@ -466,17 +409,10 @@ Parse the `convective_heat_bc` block, Eq. (conduction_flux_BC):
 
     q_d . n = h_c (T - T_inf)
 
-Each data line carries `node_id h_c T_inf`. `h_c = 0` is an adiabatic boundary,
-which is also what leaving the node out entirely gives, since zero flux is the
-natural boundary condition of the weak form.
+Data lines: `node_id h_c T_inf`. `h_c = 0` or omitted node: adiabatic (natural
+condition of the weak form).
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines of the mesh file
-- `line_idx::Int`: Index of the counter line
-
-# Returns
-- `Int`: Index of the first line after the block
+Mutates `mesh`. Returns the index of the first line after the block.
 """
 function parse_convective_heat_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     counter = parse(Int, strip(lines[line_idx]))
@@ -510,13 +446,9 @@ Parse a block of per-gas time function ids, one line per node:
     42 1 0
     end concentration_bc_tf
 
-Shares one parser between the concentration and flow blocks since they have the
-same shape. Ids are 1-based references into the `[[time_function]]` section of
-the calculation file; 0 means the gas keeps the constant value from the matching
-value block.
-
-# Returns
-- `Int`: Next line index to process
+Shared by the concentration and flow blocks (same layout). Ids: 1-based references to
+the `[[time_function]]` section of the calculation file; 0 = constant value from the
+matching value block. Mutates `target`, returns the next line index.
 """
 function parse_bc_tf_vector!(target::Dict{Int, Vector{Int}}, lines::Vector{String},
                              line_idx::Int, block::String)
@@ -548,11 +480,8 @@ Parse a block of single time function ids, one line per node:
     4 2
     end temperature_bc_tf
 
-The scalar counterpart of `parse_bc_tf_vector!`, used by the absolute pressure
-and prescribed temperature boundaries.
-
-# Returns
-- `Int`: Next line index to process
+Scalar version of `parse_bc_tf_vector!`, for absolute pressure and prescribed
+temperature boundaries. Mutates `target`, returns the next line index.
 """
 function parse_bc_tf_scalar!(target::Dict{Int, Int}, lines::Vector{String},
                              line_idx::Int, block::String)
@@ -578,13 +507,7 @@ parse_partial_pressure_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
 
 Parse partial pressure boundary conditions from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_partial_pressure_bc!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -615,13 +538,7 @@ parse_initial_concentrations!(mesh::MeshData, lines::Vector{String}, line_idx::I
 
 Parse initial gas concentrations from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_initial_concentrations!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -652,13 +569,7 @@ parse_initial_temperature!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
 
 Parse initial temperature from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_initial_temperature!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -689,13 +600,7 @@ parse_materials!(mesh::MeshData, lines::Vector{String}, line_idx::Int) -> Int
 
 Parse material assignments from the mesh file.
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure to populate
-- `lines::Vector{String}`: All lines from the file
-- `line_idx::Int`: Current line index
-
-# Returns
-- `Int`: Next line index to process
+Mutates `mesh`. Returns the next line index.
 """
 function parse_materials!(mesh::MeshData, lines::Vector{String}, line_idx::Int)
     # Read counter
@@ -726,14 +631,7 @@ end
 """
 get_element_nodes(mesh::MeshData, elem_id::Int) -> Vector{Int}
 
-Get the node IDs that define a specific element.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `elem_id::Int`: Element ID (1-based)
-
-# Returns
-- `Vector{Int}`: Vector of 4 node IDs
+Return the 4 node IDs of an element (1-based `elem_id`).
 
 # Example
 ```julia
@@ -749,14 +647,7 @@ end
 """
 get_node_coordinates(mesh::MeshData, node_id::Int) -> Tuple{Float64, Float64}
 
-Get the coordinates of a specific node.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `node_id::Int`: Node ID (1-based)
-
-# Returns
-- `Tuple{Float64, Float64}`: (x, y) coordinates
+Return the (x, y) coordinates of a node (1-based `node_id`).
 
 # Example
 ```julia
@@ -772,14 +663,7 @@ end
 """
 get_element_material(mesh::MeshData, elem_id::Int) -> Union{Int, Nothing}
 
-Get the material index assigned to an element.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `elem_id::Int`: Element ID
-
-# Returns
-- `Union{Int, Nothing}`: Material index or nothing if not assigned
+Return the material index of an element; `nothing` if unassigned.
 """
 function get_element_material(mesh::MeshData, elem_id::Int)
     return get(mesh.materials, elem_id, nothing)
@@ -789,14 +673,7 @@ end
 """
 get_node_elements(mesh::MeshData, node_id::Int) -> Vector{Int}
 
-Get all element IDs that contain a specific node.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `node_id::Int`: Node ID (1-based)
-
-# Returns
-- `Vector{Int}`: Vector of element IDs that contain this node
+Return the IDs of all elements containing a node (1-based `node_id`).
 
 # Example
 ```julia
@@ -809,7 +686,7 @@ function get_node_elements(mesh::MeshData, node_id::Int)
     
     # Loop through all elements
     for elem_id in 1:mesh.num_elements
-        # Check each node position directly without creating a slice
+        # Direct comparison, no slice allocation
         if mesh.elements[elem_id, 1] == node_id || 
            mesh.elements[elem_id, 2] == node_id || 
            mesh.elements[elem_id, 3] == node_id || 
@@ -824,14 +701,7 @@ end
 """
     has_pressure_bc(mesh::MeshData, node_id::Int) -> Bool
 
-Check if a node has a constant pressure boundary condition.
-
-# Arguments
-- `mesh::MeshData`: The mesh data structure
-- `node_id::Int`: The node ID to check
-
-# Returns
-- `Bool`: true if the node has a pressure BC, false otherwise
+Return `true` if the node has an absolute pressure boundary condition.
 """
 function has_pressure_bc(mesh::MeshData, node_id::Int)
     return haskey(mesh.absolute_pressure_bc, node_id)
@@ -841,18 +711,9 @@ end
 """
     calculate_edge_outward_normal(mesh::MeshData, node_i::Int, node_j::Int) -> Tuple{Float64, Vector{Float64}}
 
-Calculate the length and outward normal vector for a boundary edge between two nodes.
+Compute the length l_e [m] and unit outward normal n̂ of the boundary edge `node_i -> node_j`.
 
-For 2D quadrilateral elements with counter-clockwise node ordering, the outward normal
-is obtained by rotating the edge vector 90° clockwise.
-
-# Arguments
-- `mesh::MeshData`: The mesh data structure
-- `node_i::Int`: First node ID of the edge
-- `node_j::Int`: Second node ID of the edge
-
-# Returns
-- `Tuple{Float64, Vector{Float64}}`: Edge length l_e [m] and unit outward normal vector n̂ [dimensionless]
+Counter-clockwise node ordering: outward normal = edge vector rotated 90° clockwise.
 
 # Formula
 Given edge vector: `edge_vec = x_j - x_i = [dx, dy]`
@@ -895,16 +756,15 @@ end
 """
     identify_boundary_edges(mesh::MeshData) -> Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}}
 
-Identify all boundary edges where both nodes have pressure boundary conditions.
+Identify all boundary edges with the condition on both nodes (default: absolute pressure BC).
 
-This function efficiently identifies boundary edges by only examining elements connected
-to nodes with pressure BCs, avoiding unnecessary iteration over the entire mesh.
+Only elements connected to BC nodes are examined, no full-mesh iteration.
 
 # Arguments
-- `mesh::MeshData`: The mesh data structure
+- `bc_nodes`: Node set of the condition; defaults to the absolute-pressure boundary
 
 # Returns
-- `Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}}`: Vector of boundary edge information tuples:
+- Vector of edge tuples:
   - `element_id::Int`: Element containing the edge
   - `node_i::Int`: First node of the edge
   - `node_j::Int`: Second node of the edge (following element node ordering)
@@ -912,11 +772,10 @@ to nodes with pressure BCs, avoiding unnecessary iteration over the entire mesh.
   - `n_hat::Vector{Float64}`: Unit outward normal vector [dimensionless]
 
 # Algorithm
-1. Extract all nodes with pressure BCs from `mesh.absolute_pressure_bc`
-2. For each pressure BC node, find all connected elements
-3. Check each element edge: if both nodes have pressure BC, it's a boundary edge
-4. Calculate edge geometry (length and outward normal) and store
-5. Remove duplicates (same edge may be found from both nodes)
+1. For each BC node, find all connected elements
+2. Element edge with both nodes in the BC set: boundary edge
+3. Compute edge geometry (length and outward normal)
+4. Remove duplicates (same edge found from both nodes)
 
 # Example
 ```julia
@@ -934,10 +793,8 @@ function identify_boundary_edges(mesh::MeshData, bc_nodes = keys(mesh.absolute_p
     # Use a Set to avoid duplicate edges
     boundary_edge_set = Set{Tuple{Int, Int, Int}}()  # (element_id, min_node, max_node)
 
-    # The node set defaults to the absolute-pressure boundary, which is what this was
-    # originally written for. Making it a parameter lets the thermal boundary reuse the
-    # same edge geometry: an edge belongs to a condition when BOTH its nodes carry that
-    # condition, whichever condition it is.
+    # Node set as a parameter (default: absolute-pressure boundary), reused by the thermal
+    # boundary. An edge belongs to a condition when BOTH nodes have it.
     bc_node_set = Set(bc_nodes)
 
     # For each BC node, examine connected elements
@@ -960,10 +817,9 @@ function identify_boundary_edges(mesh::MeshData, bc_nodes = keys(mesh.absolute_p
                 local_node_i = elem_nodes[i]
                 local_node_j = elem_nodes[j]
                 
-                # Check if both nodes carry the condition
+                # Both nodes in the BC set
                 if (local_node_i in bc_node_set) && (local_node_j in bc_node_set)
-                    # Store edge with normalized node ordering to avoid duplicates
-                    # (element_id, min_node, max_node) ensures uniqueness
+                    # Normalized ordering (element_id, min_node, max_node), no duplicates
                     min_node = min(local_node_i, local_node_j)
                     max_node = max(local_node_i, local_node_j)
                     push!(boundary_edge_set, (elem_id, min_node, max_node))
@@ -1007,36 +863,30 @@ end
 """
     get_boundary_node_influences(mesh::MeshData) -> BoundaryNodeInfluence
 
-Calculate the influence length for each node on pressure boundary edges.
+Compute the influence length of each node on the boundary edges of a condition.
 
-For each boundary edge where both nodes have pressure boundary conditions,
-the edge length is distributed equally between the two nodes (each gets l_e/2).
-If a node appears on multiple boundary edges, the influence lengths are accumulated.
+Boundary edge (both nodes in the BC set): l_e/2 to each node, accumulated over edges.
 
 # Arguments
-- `mesh::MeshData`: The mesh data structure
-- `bc_nodes`: Node set carrying the condition; defaults to the absolute-pressure boundary
-- `axisymmetric::Bool`: When true, weight each edge by the radius at its midpoint, so the
-  returned quantity is the ring measure `l_e * r̄_e` of Eq. (ax_nodal_Lagrange_System1) rather
-  than the edge length. The `2π` is cancelled throughout, as everywhere else in the
-  axisymmetric formulation.
+- `bc_nodes`: Node set of the condition; defaults to the absolute-pressure boundary
+- `axisymmetric`: Weight each edge by its midpoint radius, giving the ring measure
+  `l_e * r̄_e` of Eq. (ax_nodal_Lagrange_System1) instead of the edge length. `2π`
+  cancelled, as in the rest of the axisymmetric formulation.
 
 # Returns
-- `BoundaryNodeInfluence`: Structure containing a dictionary that maps node_id => total_influence_length [m]
-  (plane strain) or ring measure [m²] (axisymmetric)
+- `BoundaryNodeInfluence`: node_id => influence length [m] (plane strain) or ring
+  measure [m²] (axisymmetric)
 
 # Algorithm
-1. Extract all nodes with pressure BCs from `mesh.absolute_pressure_bc`
-2. For each pressure BC node, find all connected elements
-3. Check each element edge: if both nodes have pressure BC, it's a boundary edge
-4. Calculate edge length and distribute half to each node
-5. Accumulate influence lengths for nodes appearing on multiple edges
+1. For each BC node, find all connected elements
+2. Element edge with both nodes in the BC set: boundary edge
+3. Half the edge length to each node
+4. Accumulate over nodes on multiple edges
 
-# Note on the axis of symmetry
-An edge lying on the axis has `r̄_e = 0` and therefore contributes nothing. That is the correct
-result rather than a special case: Eq. (ax_external_flux) vanishes on such an edge because the
-ring it generates has zero area, which reproduces the absence of flux through the axis without
-any Neumann condition being imposed there.
+# Axis of symmetry
+Edges on the axis have `r̄_e = 0` and contribute nothing, without a special case:
+Eq. (ax_external_flux) vanishes there (zero ring area), i.e. no flux through the axis
+without an imposed Neumann condition.
 
 # Example
 ```julia
@@ -1057,9 +907,8 @@ function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absol
     # Use a Set to avoid processing duplicate edges
     processed_edges = Set{Tuple{Int, Int}}()  # (min_node, max_node)
 
-    # Node set is a parameter for the same reason as in identify_boundary_edges: the
-    # convective heat boundary needs the tributary edge length of its own nodes, and
-    # the geometry involved is identical.
+    # Node set as a parameter (as in identify_boundary_edges), reused by the convective
+    # heat boundary for its tributary edge lengths
     bc_node_set = Set(bc_nodes)
 
     # For each BC node, examine connected elements
@@ -1078,9 +927,9 @@ function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absol
                 local_node_i = elem_nodes[i]
                 local_node_j = elem_nodes[j]
                 
-                # Check if both nodes carry the condition
+                # Both nodes in the BC set
                 if (local_node_i in bc_node_set) && (local_node_j in bc_node_set)
-                    # Create normalized edge identifier to avoid duplicates
+                    # Normalized edge identifier, no duplicates
                     min_node = min(local_node_i, local_node_j)
                     max_node = max(local_node_i, local_node_j)
                     edge_key = (min_node, max_node)
@@ -1092,9 +941,8 @@ function get_boundary_node_influences(mesh::MeshData, bc_nodes = keys(mesh.absol
                         # Calculate edge length
                         l_e, _ = calculate_edge_outward_normal(mesh, local_node_i, local_node_j)
 
-                        # Axisymmetric: the boundary measure is the area of the ring the edge
-                        # generates, l_e * r̄_e with r̄_e the midpoint radius (Eq.
-                        # ax_nodal_Lagrange_System1). r is the first coordinate.
+                        # Axisymmetric boundary measure: ring area l_e * r̄_e, r̄_e = midpoint
+                        # radius (Eq. ax_nodal_Lagrange_System1). r = first coordinate.
                         if axisymmetric
                             r_bar = 0.5 * (mesh.coordinates[local_node_i, 1] +
                                            mesh.coordinates[local_node_j, 1])

@@ -1,15 +1,11 @@
 """
     write_vtk.jl
 
-Module for writing VTK output files for ADSIM visualization in ParaView.
+Legacy VTK output of ADSIM results (mesh, nodal scalar and vector fields) for ParaView.
 
-This module provides functionality to export simulation results in VTK (Visualization Toolkit)
-format, including mesh data with nodal scalar and vector fields.
+Velocity vectors: 2 components (x, y) in 2D, 3 components (x, y, z) in 3D.
 
-For 2D simulations, velocity vectors have 2 components (x, y).
-For 3D simulations, velocity vectors have 3 components (x, y, z).
-
-Note: This module requires read_mesh.jl to be included first to access the MeshData type.
+Requires read_mesh.jl to be included first (MeshData type).
 """
 
 module WriteVTK
@@ -24,33 +20,27 @@ export write_vtk_file, write_vtk_series
 Write one VTK snapshot of the ADSIM state.
 
 # Arguments
-- `filename::String`: Base filename (without extension or step number)
-- `time_step::Int`: Output counter, used for the `_NNNNNN` suffix
-- `time::Float64`: Physical time of the snapshot
-- `mesh`: Mesh data structure
-- `gas_names::Vector{String}`: Gas species names, in solver order
-- `fields::NamedTuple`: The nodal fields to write, by name:
+- `filename`: Base filename (without extension or step number)
+- `time_step`: Output counter, for the `_NNNNNN` suffix
+- `time`: Physical time of the snapshot
+- `gas_names`: Gas species names, solver order
+- `fields`: Nodal fields by name:
   `concentrations`, `total_concentration`, `absolute_pressure`,
   `concentration_rates`, `reaction_rates`, `lime_concentration`,
   `caco3_concentration`, `degree_of_carbonation`, `volumetric_binder_content`,
   `gas_seepage_velocity`, `temperature`, `temperature_rate`, `heat_flux`
 
-The fields are named rather than positional because most of them share a type:
-thirteen were bare `Vector{Float64}` or `Matrix{Float64}`, so a transposed pair
-would have been written under the wrong label with nothing to catch it. That had
-already happened once.
+Named instead of positional fields: most share the type `Vector{Float64}` or
+`Matrix{Float64}`, and a swapped pair would be written under the wrong label without error.
 
 # Note
-Vector fields (`gas_seepage_velocity`, `heat_flux`) are padded to three components,
-as VTK requires, regardless of the mesh dimensionality.
+Vector fields (`gas_seepage_velocity`, `heat_flux`) padded to three components (VTK
+requirement) for any mesh dimensionality.
 """
 function write_vtk_file(filename::String, time_step::Int, time::Float64, mesh,
                         gas_names::Vector{String}, fields::NamedTuple)
-    # Fields arrive as a NamedTuple rather than as sixteen positional arguments.
-    # Thirteen of them were bare Vector{Float64} or Matrix{Float64}, so any two could
-    # be swapped with no complaint from the compiler - and that had already happened,
-    # with `reaction_rates` being fed dC_lime_dt. A mismatched name is now an error at
-    # the call site instead of a silently mislabelled output field.
+    # NamedTuple instead of sixteen positional arguments of the same types: a mismatched
+    # name is an error at the call site instead of a mislabelled output field.
     concentrations            = fields.concentrations
     total_concentration       = fields.total_concentration
     absolute_pressure         = fields.absolute_pressure
@@ -113,7 +103,7 @@ function write_vtk_file(filename::String, time_step::Int, time::Float64, mesh,
         write_vtk_vector_field(io, "Gas_Seepage_Velocity", gas_seepage_velocity, ndim)
 
         # Total heat flux q_d + q_a, Eqs. (fourier) and (heat_advection), projected
-        # from the Gauss points. Zero throughout when heat transport is disabled.
+        # from the Gauss points. Zero with heat transport disabled.
         write_vtk_vector_field(io, "Heat_Flux", heat_flux, ndim)
     end
     
@@ -125,7 +115,7 @@ end
     write_vtk_mesh(io::IO, nodes::Matrix{Float64}, elements::Matrix{Int}, 
                    Nnodes::Int, Nelements::Int, ndim::Int, nodes_per_element::Int)
 
-Write mesh geometry and topology to legacy VTK file.
+Write mesh geometry and topology to a legacy VTK file.
 """
 function write_vtk_mesh(io::IO, nodes::Matrix{Float64}, elements::Matrix{Int}, 
                         Nnodes::Int, Nelements::Int, ndim::Int, nodes_per_element::Int)
@@ -164,7 +154,7 @@ end
 """
     get_vtk_cell_type(ndim::Int, nodes_per_element::Int)
 
-Get VTK cell type identifier based on dimensionality and nodes per element.
+Return the VTK cell type identifier for the dimensionality and nodes per element.
 
 VTK Cell Types:
 - 1: Vertex
@@ -200,9 +190,8 @@ end
 """
     sanitize_value(x::Float64, threshold::Float64=1e-30)
 
-Clamp very small values to zero to avoid numerical noise in VTK files.
-Values with absolute value less than threshold are set to 0.0.
-This prevents ParaView parsing issues with extreme scientific notation.
+Return 0.0 for |x| < threshold, otherwise x. Avoids ParaView parsing issues with
+extreme exponents.
 """
 function sanitize_value(x::Float64, threshold::Float64=1e-30)
     return abs(x) < threshold ? 0.0 : x
@@ -211,8 +200,7 @@ end
 """
     write_vtk_scalar_field(io::IO, field_name::String, data::Vector{Float64})
 
-Write a scalar field to legacy VTK file.
-Very small values (|x| < 1e-30) are clamped to zero to avoid ParaView parsing issues.
+Write a scalar field to a legacy VTK file. |x| < 1e-30 written as zero.
 """
 function write_vtk_scalar_field(io::IO, field_name::String, data::Vector{Float64})
     println(io, "SCALARS $field_name float 1")
@@ -225,9 +213,8 @@ end
 """
     write_vtk_vector_field(io::IO, field_name::String, data::Matrix{Float64}, ndim::Int)
 
-Write a vector field to legacy VTK file.
-Legacy VTK format requires 3 components for vectors, so z=0 is added for 2D.
-Very small values (|x| < 1e-30) are clamped to zero to avoid ParaView parsing issues.
+Write a vector field to a legacy VTK file. Three components required, z = 0 for 2D.
+|x| < 1e-30 written as zero.
 """
 function write_vtk_vector_field(io::IO, field_name::String, data::Matrix{Float64}, ndim::Int)
     nnodes = size(data, 1)
@@ -238,7 +225,7 @@ function write_vtk_vector_field(io::IO, field_name::String, data::Matrix{Float64
             # Legacy VTK requires 3 components even for 2D
             println(io, "$(sanitize_value(data[i, 1])) $(sanitize_value(data[i, 2])) 0.0")
         else
-            # 3D: write x, y, and z components
+            # 3D: x, y, z components
             println(io, "$(sanitize_value(data[i, 1])) $(sanitize_value(data[i, 2])) $(sanitize_value(data[i, 3]))")
         end
     end

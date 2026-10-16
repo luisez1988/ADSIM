@@ -1,25 +1,20 @@
 """
     write_probes.jl
 
-Module for writing node probe time series for ADSIM.
+Node probe time series output for ADSIM.
 
-A probe follows a single node through the whole simulation and records every
-nodal state variable at a fixed sampling interval, producing one CSV file per
-node. The fields and their names match the point data of the VTK output, so a
-probe series and a VTK snapshot of the same node agree column for column.
+One CSV file per probed node with every nodal state variable at a fixed sampling
+interval. Field names and order match the VTK point data.
 
-The sampling interval is the "time interval between data saved" set in GiD under
-Calculation Data > Simulation probing, which reaches the solver as
-`data_saving_interval`. It is independent of the VTK output cadence, so nodes can
-be sampled far more finely than the mesh is dumped.
+Sampling interval: "time interval between data saved" in GiD (Calculation Data >
+Simulation probing), passed to the solver as `data_saving_interval`. Independent of
+the VTK output interval.
 
-Sampling never alters the time stepping. A sample is taken at the first step at
-or past each scheduled probe time and stamped with the true current time, rather
-than shortening dt to land on it exactly. Snapping dt to probe times would change
-the integration and therefore the results.
+Sampling does not modify the time stepping. A sample is taken at the first step at or
+after each scheduled probe time, with the actual current time. Snapping dt to probe
+times would change the integration and the results.
 
-Note: This module requires read_mesh.jl to be included first to access the
-MeshData type.
+Requires read_mesh.jl to be included first (MeshData type).
 """
 
 module WriteProbes
@@ -29,9 +24,8 @@ using ..ADSIMVersion: get_version
 
 export ProbeWriter, init_node_probes, probe_sample!, close_probes!
 
-# Rows written between flushes. Keeping the streams open and flushing in blocks
-# avoids a syscall per sample, while bounding how much of the tail is lost if the
-# solver dies part way through a run.
+# Rows between flushes. Block flushing avoids a syscall per sample and bounds the
+# data lost if the solver stops mid-run.
 const FLUSH_EVERY = 25
 
 """
@@ -47,8 +41,8 @@ Handle for a set of open node probes.
 - `next_time::Float64`: Time at which the next sample is due [time unit]
 - `rows_since_flush::Int`: Rows written since the last flush
 - `nsamples::Int`: Total rows written per node
-- `ngases::Int`: Number of gas species, fixing the per-gas column count
-- `ndim::Int`: Mesh dimensionality, fixing the velocity column count
+- `ngases::Int`: Number of gas species (per-gas column count)
+- `ndim::Int`: Mesh dimensionality (velocity column count)
 """
 mutable struct ProbeWriter
     node_ids::Vector{Int}
@@ -68,35 +62,25 @@ end
 
 Open one CSV probe file per requested node and write its header.
 
-Returns `nothing` when probing is not active, which is the case when no nodes
-were requested or the sampling interval is not positive. Callers should treat a
-`nothing` writer as a no-op; [`probe_sample!`](@ref) and [`close_probes!`](@ref)
-both accept it.
+Returns `nothing` when probing is inactive (no nodes requested or non-positive
+interval). [`probe_sample!`](@ref) and [`close_probes!`](@ref) accept `nothing` as a no-op.
 
-Node ids outside the mesh are reported and skipped rather than aborting the run,
-so a stale probe list in an input file does not cost a simulation.
+Node ids outside the mesh are reported and skipped instead of aborting the run.
 
 # Arguments
-- `project_name`: Project name, used in the file name
-- `stage::Int`: Calculation stage, used in the file name
-- `mesh`: Mesh data structure, for the node count and coordinates
-- `gas_names::Vector{String}`: Gas species names, in solver column order
-- `probing_nodes`: Dictionary holding `"nodes_to_probe"` and `"number_of_nodes"`
-- `interval::Float64`: Sampling interval [time unit]
-- `units::Dict`: Unit labels, recorded in the file preamble
-- `start_time::Float64`: Time of the first sample [time unit]
-- `log_print`: Logging function
-
-# Returns
-- `Union{ProbeWriter, Nothing}`: Probe handle, or `nothing` when inactive
+- `project_name`, `stage`: Used in the file name
+- `gas_names`: Gas species names, solver column order
+- `probing_nodes`: Dictionary with `"nodes_to_probe"` and `"number_of_nodes"`
+- `interval`: Sampling interval [time unit]
+- `units`: Unit labels for the file preamble
+- `start_time`: Time of the first sample [time unit]
 """
 function init_node_probes(project_name, stage::Int, mesh, gas_names::Vector{String},
                           probing_nodes, interval::Float64, units,
                           start_time::Float64, log_print)
     requested = Int[Int(n) for n in get(probing_nodes, "nodes_to_probe", Int[])]
 
-    # The count field and the id list are written independently by the GiD
-    # interface, so a mismatch means the input file is inconsistent.
+    # Count and id list written independently by GiD; mismatch = inconsistent input file
     declared = Int(get(probing_nodes, "number_of_nodes", length(requested)))
     if declared != length(requested)
         log_print("Warning: [probing] declares number_of_nodes = $(declared) but lists " *
@@ -112,7 +96,7 @@ function init_node_probes(project_name, stage::Int, mesh, gas_names::Vector{Stri
         return nothing
     end
 
-    # Drop ids the mesh cannot resolve, and duplicates, keeping the requested order
+    # Drop ids outside the mesh and duplicates, requested order kept
     node_ids = Int[]
     for nid in requested
         if nid < 1 || nid > mesh.num_nodes
@@ -156,9 +140,8 @@ end
 
 Write the commented preamble and the column header row of one probe file.
 
-The preamble records what was simulated and in which units, so a probe file
-remains interpretable on its own once separated from the input deck. Every line
-of it starts with `#`, which the common readers skip by default.
+Preamble with project, node and units, such that the file is self-describing. Lines
+start with `#` (skipped by common CSV readers).
 """
 function write_probe_header(io::IO, project_name, stage::Int, node_id::Int, mesh,
                             gas_names::Vector{String}, interval::Float64, units, ndim::Int)
@@ -178,7 +161,7 @@ function write_probe_header(io::IO, project_name, stage::Int, node_id::Int, mesh
                 "temperature=$(get(units, "temperature_unit", "K"))")
     println(io, "# concentrations are in mol/m^3, rates per unit time")
 
-    # Column order mirrors the VTK point data, so the two outputs line up
+    # Same column order as the VTK point data
     cols = String["time"]
     push!(cols, "Total_Concentration")
     push!(cols, "Absolute_Pressure")
@@ -211,20 +194,16 @@ end
 
 Record one row per probed node if a sample is due at `time`.
 
-Does nothing when `pw` is `nothing`, or when `time` has not yet reached the next
-scheduled probe time and `force` is not set. Pass `force=true` to record the
-initial state regardless of schedule.
+No-op when `pw` is `nothing`, or when `time` is before the next probe time without
+`force`. `force=true` records the initial state.
 
-The schedule advances in whole multiples of the interval rather than from the
-sample time, so the series does not drift when a step overshoots a probe time. If
-several probe times fall inside one step, the schedule skips past them: the
-solver cannot report state it never computed.
+Schedule advances in whole multiples of the interval (no drift when a step overshoots a
+probe time). Multiple probe times within one step: skipped, no interpolation.
 
 # Arguments
-- `pw::Union{ProbeWriter, Nothing}`: Probe handle
-- `time::Float64`: Current simulation time [time unit]
-- remaining arguments: the nodal state arrays, as passed to the VTK writer
-- `force::Bool`: Record unconditionally, used for the first sample
+- `time`: Current simulation time [time unit]
+- Remaining positional arguments: nodal state arrays, as passed to the VTK writer
+- `force`: Record unconditionally (first sample)
 """
 function probe_sample!(pw::Union{ProbeWriter, Nothing}, time::Float64,
                        C_g, dC_g_dt, total_concentration, P, T, dT_dt,
@@ -266,8 +245,7 @@ function probe_sample!(pw::Union{ProbeWriter, Nothing}, time::Float64,
         pw.rows_since_flush = 0
     end
 
-    # Advance the schedule past `time` in one step, so a tiny interval relative to
-    # dt costs a division rather than a long loop
+    # Advance past `time` with one division instead of a loop (small interval vs. dt)
     if time >= pw.next_time
         missed = floor((time - pw.next_time) / pw.interval) + 1
         pw.next_time += missed * pw.interval
@@ -279,9 +257,7 @@ end
 """
     close_probes!(pw, log_print) -> Nothing
 
-Flush and close every open probe file, reporting what was written.
-
-Accepts `nothing`, so callers need not test whether probing was active.
+Flush and close every open probe file and log the written files. No-op for `nothing`.
 """
 function close_probes!(pw::Union{ProbeWriter, Nothing}, log_print)
     pw === nothing && return nothing

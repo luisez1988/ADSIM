@@ -1,11 +1,10 @@
 #______________________________________________________
 # probe_reader.jl
 #
-# Reads the node probe time series ADSIM writes when the
-# [probing] block of the calculation file names one or more
-# nodes. A probe is one node sampled over time, which is the
-# natural output for a 0-D case where the whole point is the
-# time history rather than a spatial profile.
+# Reader of the ADSIM node probe time series ([probing]
+# block of the calculation file). One node sampled over time,
+# the relevant output for 0-D cases (time history instead of
+# spatial profile).
 #______________________________________________________
 
 module ProbeReader
@@ -35,9 +34,8 @@ end
 
 Parse one `<project>_node<id>_stage<n>.csv` written by `WriteProbes`.
 
-The file carries a `#`-prefixed preamble (project, stage, node id, coordinates,
-sampling interval, units), then a single header row, then one comma-separated
-row per sample written in `%.8e`.
+File layout: `#`-prefixed preamble (project, stage, node id, coordinates, sampling
+interval, units), one header row, one comma-separated `%.8e` row per sample.
 """
 function read_probe(path::AbstractString)
     isfile(path) || error("probe file not found: $path")
@@ -78,10 +76,9 @@ end
 """
     probe_series(probe, field) -> (time, value)
 
-Pull one named column out of a probe alongside its time column.
+Return one named probe column with the time column.
 
-Errors listing the available columns if the field is absent, so a typo in a
-case file reports what it should have said.
+Missing field: error listing the available columns.
 """
 function probe_series(probe::ProbeData, field::AbstractString)
     haskey(probe.values, field) ||

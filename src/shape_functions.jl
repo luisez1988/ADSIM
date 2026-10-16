@@ -1,8 +1,8 @@
 """
     shape_functions.jl
 
-Module for isoparametric shape functions and Jacobian calculations for 4-noded quad elements.
-Uses 2x2 Gaussian quadrature (4 Gauss points) for integration.
+Isoparametric shape functions and Jacobians for 4-noded quad elements.
+2x2 Gaussian quadrature (4 Gauss points).
 """
 
 module ShapeFunctions
@@ -15,7 +15,7 @@ export ShapeFunctionData, initialize_shape_functions!, get_N, get_B, get_invJ, g
 """
     ShapeFunctionData
 
-Structure to store precomputed shape function values and element-specific Jacobian data.
+Precomputed shape function values and element Jacobian data.
 
 # Fields
 - `N::Vector{Vector{Float64}}`: Shape functions at each Gauss point [4 Gauss points][4 nodes]
@@ -25,26 +25,23 @@ Structure to store precomputed shape function values and element-specific Jacobi
 - `weight::Matrix{Float64}`: Quadrature measure at each element and Gauss point [Nelements, 4 Gauss points]
 - `dN_dx::Array{Float64, 4}`: Shape function derivatives in physical coordinates, B · J^-1,
   at each element and Gauss point [Nelements, 4 Gauss points, 4 nodes, 2 coords]
-- `axisymmetric::Bool`: True when `weight` carries the radius factor of Appendix `app:axisymmetric`
+- `axisymmetric::Bool`: True when `weight` includes the radius factor of Appendix `app:axisymmetric`
 - `gauss_points::Matrix{Float64}`: Gauss point coordinates in isoparametric space [4 points, 2 coords (ξ, η)]
 - `gauss_weights::Vector{Float64}`: Gauss point weights [4 points]
 
-`dN_dx` is the quantity every flux term actually consumes. It is stored rather than recomputed
-from `B` and `invJ` at each use, because the product is element- and Gauss-point-specific but
-time-invariant, so recomputing it inside the time loop is pure waste.
+`dN_dx` is used by every flux term. Stored instead of recomputed from `B` and `invJ`:
+element- and Gauss-point-specific but time-invariant.
 
-`weight` is what carries the plane/axisymmetric distinction, and it is the ONLY thing that does.
-The axisymmetric appendix reduces to a single substitution: wherever the plane formulation
-multiplies an integrand by the area measure `|det J| W_gp`, the axisymmetric one multiplies it by
-`r_gp |det J| W_gp`, leaving every gradient and stiffness contraction untouched. Folding `r_gp`
-into a cached measure at initialization therefore makes every quadrature sum in the solver correct
-in both formulations with no branch, no second code path and no extra arithmetic per time step:
+`weight` is the ONLY field with the plane/axisymmetric distinction. The axisymmetric
+formulation replaces the area measure `|det J| W_gp` by `r_gp |det J| W_gp`, with gradients
+and stiffness contractions unchanged. `r_gp` included in the cached measure at
+initialization: every quadrature sum valid for both formulations, no branch, no extra
+arithmetic per time step.
 
     weight[e, p] = axisymmetric ? r_gp * |det J| : |det J|
 
-`detJ` is kept separately and still means the Jacobian determinant. The split is deliberate and is
-what makes the change auditable: a site reading `get_weight` is a quadrature sum and must carry the
-radius, a site reading `get_detJ` is geometry and must not.
+`detJ` stored separately (Jacobian determinant only). `get_weight` sites are quadrature
+sums (with radius); `get_detJ` sites are geometry (without radius).
 """
 mutable struct ShapeFunctionData
     N::Vector{Vector{Float64}}
@@ -64,14 +61,7 @@ global shape_funcs::Union{ShapeFunctionData, Nothing} = nothing
 """
     compute_shape_functions(ξ::Float64, η::Float64)
 
-Compute the shape functions for a 4-noded quad element at isoparametric coordinates (ξ, η).
-
-# Arguments
-- `ξ::Float64`: Isoparametric coordinate ξ
-- `η::Float64`: Isoparametric coordinate η
-
-# Returns
-- `Vector{Float64}`: Shape function values at the 4 nodes [N₁, N₂, N₃, N₄]
+Compute the 4-node quad shape functions [N₁, N₂, N₃, N₄] at isoparametric coordinates (ξ, η).
 
 # Shape functions
 N₁ = 1/4 * (1 - ξ) * (1 - η)
@@ -91,17 +81,8 @@ end
 """
     compute_shape_function_derivatives(ξ::Float64, η::Float64)
 
-Compute the derivatives of shape functions for a 4-noded quad element 
-in isoparametric coordinates (ξ, η).
-
-# Arguments
-- `ξ::Float64`: Isoparametric coordinate ξ
-- `η::Float64`: Isoparametric coordinate η
-
-# Returns
-- `Matrix{Float64}`: Derivatives of shape functions [4 nodes, 2 coords]
-  - Column 1: ∂N/∂ξ for each node
-  - Column 2: ∂N/∂η for each node
+Compute the 4-node quad shape function derivatives [4 nodes, 2 coords] at (ξ, η).
+Column 1: ∂N/∂ξ, column 2: ∂N/∂η.
 
 # Derivatives
 ∂N₁/∂ξ = -1/4 * (1 - η),  ∂N₁/∂η = -1/4 * (1 - ξ)
@@ -130,39 +111,26 @@ end
 """
     compute_jacobian(B::Matrix{Float64}, X_nodes::Matrix{Float64})
 
-Compute the Jacobian matrix for the transformation from isoparametric to physical coordinates.
+Compute the 2×2 Jacobian of the isoparametric-to-physical mapping.
 
 # Arguments
-- `B::Matrix{Float64}`: Derivatives of shape functions [4 nodes, 2 coords]
-- `X_nodes::Matrix{Float64}`: Physical coordinates of element nodes [4 nodes, 2 coords (x, y)]
-
-# Returns
-- `Matrix{Float64}`: Jacobian matrix [2×2]
+- `B`: Shape function derivatives [4 nodes, 2 coords]
+- `X_nodes`: Physical node coordinates [4 nodes, 2 coords (x, y)]
 
 # Formula
 J = Bᵀ · X_nodes
 """
 function compute_jacobian(B::Matrix{Float64}, X_nodes::Matrix{Float64})
-    # J = B^T * X_nodes
-    # B is [4 nodes, 2 coords], so B^T is [2, 4]
-    # X_nodes is [4 nodes, 2 coords]
-    # Result is [2, 2]
+    # [2, 4] * [4, 2] -> [2, 2]
     return B' * X_nodes
 end
 
 """
     inverse_and_determinant(J::Matrix{Float64})
 
-Compute the inverse and determinant of a 2×2 Jacobian matrix.
-
-# Arguments
-- `J::Matrix{Float64}`: Jacobian matrix [2×2]
-
-# Returns
-- `Tuple{Matrix{Float64}, Float64}`: (Inverse Jacobian [2×2], Determinant)
+Return `(inv(J), det(J))` of a 2×2 Jacobian. Errors on a singular Jacobian.
 """
 function inverse_and_determinant(J::Matrix{Float64})
-    # For a 2x2 matrix: det(J) = J[1,1]*J[2,2] - J[1,2]*J[2,1]
     detJ = J[1, 1] * J[2, 2] - J[1, 2] * J[2, 1]
     
     if abs(detJ) < 1e-12
@@ -182,33 +150,27 @@ end
 """
     initialize_shape_functions!(mesh; axisymmetric = false)
 
-Initialize shape function data structure with precomputed values at Gauss points
-and element-specific Jacobian data. Stores data globally within the module.
+Precompute Gauss-point shape functions and element Jacobian data. Mutates the module
+global `shape_funcs`.
 
 # Arguments
-- `mesh`: Mesh data structure containing:
-  - `num_elements`: Number of elements
-  - `elements`: Element connectivity matrix [num_elements, 4 nodes]
-  - `coordinates`: Node coordinates [num_nodes, 2 coords]
-- `axisymmetric::Bool`: When true, fold the Gauss point radius into the cached quadrature
-  measure per Appendix `app:axisymmetric`. The first coordinate is the radius `r` and the
-  second is the axial coordinate `z`; this pairing is fixed by Eq. `ax_gravity`, which puts
-  gravity along the axis of revolution, and ADSIM's gravity vector already runs along `y`.
+- `mesh`: Uses `num_elements`, `elements` [num_elements, 4] and `coordinates` [num_nodes, 2]
+- `axisymmetric`: Include the Gauss-point radius in the cached quadrature measure
+  (Appendix `app:axisymmetric`). First coordinate = radius `r`, second = axial `z`;
+  fixed by Eq. `ax_gravity` (gravity along the axis of revolution, i.e. `y`).
 
 # Notes
-Uses 2×2 Gaussian quadrature (4 Gauss points) with coordinates:
+2×2 Gaussian quadrature (4 Gauss points):
 - ξ₁, η₁ = -0.577350269, -0.577350269
 - ξ₂, η₂ = -0.577350269,  0.577350269
 - ξ₃, η₃ =  0.577350269,  0.577350269
 - ξ₄, η₄ =  0.577350269, -0.577350269
 
-All weights equal 1.0 for 2×2 quadrature.
-Data is stored in global variable `shape_funcs` accessible within the module.
+All weights equal 1.0.
 """
 function initialize_shape_functions!(mesh; axisymmetric::Bool = false)
-    # The radius is the first coordinate. A negative one is meaningless on a meridian
-    # section and would flip the sign of every quadrature weight in its element, so it is
-    # rejected here rather than left to produce a plausible-looking wrong answer.
+    # Radius = first coordinate. Negative radius is not valid on a meridian section and
+    # flips the sign of the element quadrature weights; rejected here.
     if axisymmetric
         r_min = minimum(@view mesh.coordinates[:, 1])
         if r_min < 0.0
@@ -270,11 +232,10 @@ function initialize_shape_functions!(mesh; axisymmetric::Bool = false)
             invJ_elements[e, p, :, :] = invJ
             detJ_elements[e, p] = detJ
 
-            # Quadrature measure. Plane strain integrates over the area element; the
-            # axisymmetric formulation integrates over the solid of revolution, whose
-            # measure carries the radius (Eq. ax_measures, with the common 2*pi cancelled).
-            # r_gp is interpolated by the same shape functions that map the element,
-            # because the radius IS one of the two physical coordinates (Eq. ax_radius).
+            # Quadrature measure. Plane strain: area element. Axisymmetric: solid of
+            # revolution, measure includes the radius (Eq. ax_measures, 2*pi cancelled).
+            # r_gp interpolated with the element shape functions, since the radius is a
+            # physical coordinate (Eq. ax_radius).
             if axisymmetric
                 r_gp = 0.0
                 for i in 1:4
@@ -285,22 +246,19 @@ function initialize_shape_functions!(mesh; axisymmetric::Bool = false)
                 weight_elements[e, p] = abs(detJ)
             end
 
-            # Physical-coordinate derivatives dN/dx. The chain rule gives
-            # dN_i/dx_j = sum_k B[i,k] * dxi_k/dx_j, and compute_jacobian returns
-            # J[k,j] = dx_j/dxi_k, so the matrix of dxi_k/dx_j is the TRANSPOSE of
-            # inv(J), not inv(J) itself. The two coincide whenever J is diagonal -
-            # axis-aligned rectangular elements - which is why every 1D verification
-            # case passed while this was missing; on a skewed quad the element failed
-            # the gradient patch test, keeping the right principal conductivities but
-            # rotating their directions. Cached so the time loop never re-forms it.
+            # Physical-coordinate derivatives dN/dx. Chain rule:
+            # dN_i/dx_j = sum_k B[i,k] * dxi_k/dx_j, with J[k,j] = dx_j/dxi_k from
+            # compute_jacobian, therefore dxi_k/dx_j = TRANSPOSE of inv(J). Identical for
+            # diagonal J (axis-aligned rectangles, all 1D verification cases). Without the
+            # transpose, skewed quads fail the gradient patch test (correct principal
+            # conductivities, rotated directions). Cached for the time loop.
             dN_dx_elements[e, p, :, :] = B_gauss[p] * transpose(invJ)
         end
     end
 
-    # An element with every node on the axis has zero measure everywhere and would
-    # contribute nothing while still owning nodes, leaving them with no equation. The
-    # appendix notes that r_gp > 0 for any element with at least one node off the axis,
-    # so a vanishing weight means a degenerate mesh rather than a legitimate limit.
+    # Element with all nodes on the axis: zero measure, nodes without an equation.
+    # r_gp > 0 for any element with at least one node off the axis (appendix), therefore
+    # zero weight = degenerate mesh.
     if axisymmetric
         for e in 1:Nelements
             if maximum(@view weight_elements[e, :]) <= 0.0
@@ -321,13 +279,7 @@ end
 """
     get_N(p::Int)
 
-Get precomputed shape functions at Gauss point p.
-
-# Arguments
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- `Vector{Float64}`: Shape function values at the 4 nodes
+Return the precomputed nodal shape function values at Gauss point `p` (1-4).
 """
 function get_N(p::Int)
     if shape_funcs === nothing
@@ -339,13 +291,7 @@ end
 """
     get_B(p::Int)
 
-Get precomputed shape function derivatives at Gauss point p.
-
-# Arguments
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- `Matrix{Float64}`: Shape function derivatives [4 nodes, 2 coords]
+Return the precomputed isoparametric derivatives [4 nodes, 2 coords] at Gauss point `p` (1-4).
 """
 function get_B(p::Int)
     if shape_funcs === nothing
@@ -357,17 +303,10 @@ end
 """
     get_invJ(e::Int, p::Int)
 
-Get precomputed inverse Jacobian for element e at Gauss point p.
+Return a 2×2 view of the inverse Jacobian of element `e` at Gauss point `p` (1-4).
 
-# Arguments
-- `e::Int`: Element index
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- A 2×2 view of the inverse Jacobian matrix
-
-Returns a view rather than a copy: this is called once per element per Gauss point per gas per
-time step, so slicing here would allocate in the innermost loop.
+View instead of copy: called per element, Gauss point, gas and time step; a slice would
+allocate in the innermost loop.
 """
 function get_invJ(e::Int, p::Int)
     if shape_funcs === nothing
@@ -379,18 +318,8 @@ end
 """
     get_dN_dx(e::Int, p::Int)
 
-Get the precomputed physical-coordinate shape function derivatives dN/dx = B · J^-1 for
-element e at Gauss point p.
-
-# Arguments
-- `e::Int`: Element index
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- A [4 nodes, 2 coords] view of the derivative matrix
-
-This replaces the `B * invJ` product previously formed at each use site. Returns a view, so it
-allocates nothing.
+Return a [4 nodes, 2 coords] view of the physical derivatives dN/dx = B · J^-1 of element
+`e` at Gauss point `p` (1-4). No allocation.
 """
 function get_dN_dx(e::Int, p::Int)
     if shape_funcs === nothing
@@ -402,14 +331,7 @@ end
 """
     get_detJ(e::Int, p::Int)
 
-Get precomputed Jacobian determinant for element e at Gauss point p.
-
-# Arguments
-- `e::Int`: Element index
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- `Float64`: Determinant of Jacobian
+Return the Jacobian determinant of element `e` at Gauss point `p` (1-4).
 """
 function get_detJ(e::Int, p::Int)
     if shape_funcs === nothing
@@ -421,20 +343,12 @@ end
 """
     get_weight(e::Int, p::Int)
 
-Get the precomputed quadrature measure for element e at Gauss point p: `|det J|` under plane
-strain, `r_gp |det J|` under the axisymmetric formulation.
+Return the quadrature measure of element `e` at Gauss point `p` (1-4), to be multiplied by
+the Gauss weight: `|det J|` for plane strain, `r_gp |det J|` for axisymmetry.
 
-# Arguments
-- `e::Int`: Element index
-- `p::Int`: Gauss point index (1-4)
-
-# Returns
-- `Float64`: Measure to multiply the Gauss weight by
-
-This is what every quadrature sum in the solver must use — lumped masses, all nodal fluxes, and
-both sums of the point-to-grid velocity transfer. `get_detJ` remains the Jacobian determinant and
-must not be substituted for it: on an axisymmetric run the two differ by the radius factor, and
-using the wrong one produces a plane-strain answer on a mesh the user declared axisymmetric.
+Required by every quadrature sum in the solver: lumped masses, nodal fluxes, both sums of
+the point-to-grid velocity transfer. Not interchangeable with `get_detJ`: they differ by the
+radius factor under axisymmetry, and `get_detJ` gives a plane-strain result.
 """
 function get_weight(e::Int, p::Int)
     if shape_funcs === nothing
@@ -446,7 +360,7 @@ end
 """
     is_axisymmetric()
 
-True when the cached quadrature measure carries the radius factor.
+Return `true` when the cached quadrature measure includes the radius factor.
 """
 function is_axisymmetric()
     if shape_funcs === nothing

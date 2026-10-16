@@ -1,34 +1,29 @@
 #______________________________________________________
 # ADSIM: IMPES solver
 #
-# IMplicit Pressure, Explicit Species. The advective term is made implicit by
-# solving the SUMMED species equations for the total concentration C_t^{n+1}
-# first, then advancing each species explicitly with the resulting gradient.
+# IMplicit Pressure, Explicit Species. Implicit advective term: the SUMMED species
+# equations are solved for the total concentration C_t^{n+1} first, then each
+# species is advanced explicitly with the resulting gradient.
 #
-# The full derivation, including why this is a reorganization of the equations
-# already in fully_explicit_solver.jl rather than a new governing equation, is in
-# src/IMPES_FORMULATION_NOTES.md. The short version:
+# Full derivation in src/IMPES_FORMULATION_NOTES.md (a reorganization of the
+# equations of fully_explicit_solver.jl, no new governing equation). Summary:
 #
-# ADSIM's advective flux is not written as v·∇C_α. It is written as a DIFFUSION
-# operator acting on the total concentration, because the driving pressure is a
-# function of that total (P = R T C_t):
+# The ADSIM advective flux is a DIFFUSION operator on the total concentration,
+# since the driving pressure depends on that total (P = R T C_t):
 #
 #     q^a_{α,i} = ∫ (R k C_α T / μ_α) ∇N_i · ∇C_t dΩ
 #
-# with pressure diffusivity D_P = R k C_α T / μ_α ≈ 2.6e-3 m²/s on the 2 mm
-# carbonation mesh, three orders above the molecular 1.6e-6 m²/s. Forward Euler on
-# a diffusion operator costs Δt ∝ h²/D_P, which is the 7.85e-4 s step and the
-# 1.7 million steps that step implies.
+# Pressure diffusivity D_P = R k C_α T / μ_α ≈ 2.6e-3 m²/s on the 2 mm carbonation
+# mesh, three orders above the molecular 1.6e-6 m²/s. Forward Euler requires
+# Δt ∝ h²/D_P: 7.85e-4 s, i.e. 1.7 million steps.
 #
-# Making ∇C_t implicit means every species equation contains the same unknown
-# field C_t^{n+1} while advancing only its own C_α, so the one closed equation
-# available for C_t^{n+1} is the sum of the species equations. That sum is
-# (IMPES-P) below. What is left explicit is δq^a/δC_α, a genuine first-order
-# advection operator with an O(θ_g h/|v|) Courant limit.
+# With implicit ∇C_t, every species equation contains the unknown C_t^{n+1} but
+# advances only its own C_α, therefore the closed equation for C_t^{n+1} is the sum
+# of the species equations, (IMPES-P) below. The explicit remainder δq^a/δC_α is a
+# first-order advection operator with an O(θ_g h/|v|) Courant limit.
 #
-# This file carries its own time loop but reuses every free function of
-# fully_explicit_solver.jl (mass assembly, element properties, kinetics closures,
-# stab_tau, VTK output). fully_explicit_solver.jl itself is untouched.
+# Own time loop; reuses the free functions of fully_explicit_solver.jl (mass
+# assembly, element properties, kinetics closures, stab_tau, VTK output).
 #
 # Author: Luis Zambrano-Cruzatty
 #______________________________________________________
@@ -41,11 +36,10 @@ using Statistics
 # Number of startup steps traced when ADSIM_IMPES_DEBUG=1.
 const IMPES_DEBUG_STEPS = 12
 
-# Terms that can set the adaptive step, in the order they are counted. The first five
-# are the stability and positivity bounds themselves; "combined" is the harmonic sum
-# of the diffusion-like terms binding below all of them; "growth cap" is the step
-# climbing back towards the limit at dt_growth_max per step; "output snap" is the
-# shortened step that lands exactly on a snapshot time.
+# Terms that can set the adaptive step, in counting order. First five: stability and
+# positivity bounds. "combined": harmonic sum of the diffusion-like terms, below all
+# of them. "growth cap": step recovering towards the limit at dt_growth_max per step.
+# "output snap": shortened step ending exactly at a snapshot time.
 const DT_LIMIT_NAMES = ("Courant", "diffusion", "conduction", "reaction", "positivity",
                         "combined", "growth cap", "output snap")
 const DT_LIMIT_COURANT  = 1
@@ -62,22 +56,19 @@ Assemble the per-element 4×4 operators of the implicit total-concentration equa
 
     (A u)_i = ∫ Λ ∇N_i · ∇u dΩ ,    Λ = R k T Σ_α (C_α / μ_α)
 
-`Λ` is the total mobility of Eq. (IMPES-P): the sum over species of the coefficient the
-explicit advective flux already carries, which is exactly what makes the summed equation
-reproduce the species equations term by term.
+`Λ`: total mobility of Eq. (IMPES-P), the species sum of the explicit advective flux
+coefficient. The summed equation reproduces the species equations term by term.
 
-`Λ` is evaluated **at each Gauss point**, not averaged over the element. That is not an
-accuracy nicety, it is the condition for exact volume consistency: the species step
-contracts the same Gauss-point coefficients against ∇C_t^{n+1}, so unless the two
-assemblies agree point by point, Σ_α C_α^{n+1} drifts away from C_t^{n+1}. Element
-averaging would let the cached geometric `K_e` be reused and would break precisely this.
+`Λ` evaluated **at each Gauss point**, without element averaging. Required for exact
+volume consistency: the species step contracts the same Gauss-point coefficients against
+∇C_t^{n+1}; any mismatch makes Σ_α C_α^{n+1} drift from C_t^{n+1}. Element averaging
+(reuse of cached `K_e`) breaks this.
 
-The quadrature measure comes from `ShapeFunctions.get_weight`, which already carries
-`r_gp` on an axisymmetric run, so both formulations are handled without a special case.
+Quadrature measure from `ShapeFunctions.get_weight` (includes `r_gp` for axisymmetry),
+no special case.
 
-Threaded over element chunks with no reduction: each element owns its own `A_e`, so
-there is nothing to race on and nothing whose summation order could depend on the
-thread count.
+Threaded over element chunks, no reduction: one `A_e` per element, no race,
+thread-count-independent result.
 """
 function assemble_impes_operator!(A_elements::Vector{Matrix{Float64}}, mesh, elem_props,
                                   μ_gas::Vector{Float64}, C_g::Matrix{Float64},
@@ -100,11 +91,10 @@ function assemble_impes_operator!(A_elements::Vector{Matrix{Float64}}, mesh, ele
 
                 T_gp = N_p[1]*T[n1] + N_p[2]*T[n2] + N_p[3]*T[n3] + N_p[4]*T[n4]
 
-                # Σ_α C_α/μ_α at the Gauss point. Note this is C_t divided by the
-                # HARMONIC mole-fraction mean viscosity, whereas the reported Darcy
-                # velocity below uses the arithmetic mean - a pre-existing inconsistency
-                # in the formulation, ~1% for a CO2/air mixture, reproduced here rather
-                # than silently changed. See IMPES_FORMULATION_NOTES.md §8.
+                # Σ_α C_α/μ_α at the Gauss point: C_t over the HARMONIC mole-fraction mean
+                # viscosity. The reported Darcy velocity uses the arithmetic mean. Known
+                # inconsistency of the formulation (~1% for CO2/air), kept for consistency
+                # with the explicit solver. See IMPES_FORMULATION_NOTES.md §8.
                 mobility = 0.0
                 for g in 1:NG
                     C_gp = N_p[1]*C_g[n1, g] + N_p[2]*C_g[n2, g] +
@@ -136,11 +126,11 @@ end
 """
     impes_system_diagonal!(diag, mesh, A_elements, M, dt) -> diag
 
-Diagonal of `S = M/Δt + A`, for the Jacobi preconditioner.
+Compute the diagonal of `S = M/Δt + A` for the Jacobi preconditioner. Mutates `diag`.
 
-Serial: four scatter-adds per element is a rounding error beside the assembly it follows,
-and a serial pass needs no per-chunk buffers and gives a summation order independent of
-the thread count - the same reasoning as `apply_element_stiffness!` in `time_step.jl`.
+Serial: four scatter-adds per element is negligible next to the assembly; no per-chunk
+buffers, thread-count-independent summation order (same as `apply_element_stiffness!`
+in `time_step.jl`).
 """
 function impes_system_diagonal!(diag::Vector{Float64}, mesh, A_elements::Vector{Matrix{Float64}},
                                 M::Vector{Float64}, dt::Float64)
@@ -162,15 +152,15 @@ end
 """
     impes_matvec!(y, x, mesh, A_elements, M, dt) -> y
 
-Matrix-free product `y = (M/Δt) ⊙ x + Σ_e A_e x_e`, the operator of Eq. (IMPES-P).
+Compute the matrix-free product `y = (M/Δt) ⊙ x + Σ_e A_e x_e`, operator of Eq. (IMPES-P).
+Mutates `y`.
 
-`S` is symmetric positive definite: `M` is diagonal and strictly positive (checked at
-start-up) and each `A_e` is `Λ_p ≥ 0` times an outer product summed over Gauss points,
-hence positive semi-definite. That is what licenses conjugate gradients.
+`S` is SPD: `M` diagonal and strictly positive (checked at start-up), each `A_e` a sum
+of `Λ_p ≥ 0` times outer products (positive semi-definite). Hence conjugate gradients.
 
-Serial, for the reasons given on `impes_system_diagonal!`. It is also the faster choice
-here: threading would need per-chunk nodal buffers whose reduction costs `nchunks·Nnodes`
-adds per matvec, more than the `16·Nelements` flops of the product itself.
+Serial (see `impes_system_diagonal!`). Also faster: threading requires per-chunk nodal
+buffers with an `nchunks·Nnodes` reduction per matvec, more than the `16·Nelements` flops
+of the product.
 """
 function impes_matvec!(y::Vector{Float64}, x::Vector{Float64}, mesh,
                        A_elements::Vector{Matrix{Float64}}, M::Vector{Float64}, dt::Float64)
@@ -201,24 +191,21 @@ end
     impes_pcg!(x, b, mesh, A_elements, M, dt, diag, is_dirichlet, workspace;
                tol, maxiter) -> (iterations, relative_residual, converged)
 
-Jacobi-preconditioned conjugate gradient for `S x = b`, with Dirichlet nodes handled by
-projection rather than by modifying a matrix that is never formed.
+Solve `S x = b` with Jacobi-preconditioned conjugate gradients. Dirichlet nodes handled by
+projection (the matrix is never formed). Mutates `x` and the workspace vectors.
 
-`x` enters holding the full initial guess INCLUDING the prescribed values at Dirichlet
-nodes, and leaves holding the full solution. The split is the standard one: write
-`x = x_D + z` with `x_D` the prescribed field (zero off the Dirichlet set) and `z` the
-unknown, which vanishes on the Dirichlet set. Then
+Input `x`: full initial guess INCLUDING prescribed Dirichlet values. Output `x`: full
+solution. Split `x = x_D + z`, `x_D` the prescribed field (zero off the Dirichlet set),
+`z` the unknown (zero on the Dirichlet set):
 
     P S P z = P (b - S x_D)
 
-where `P` zeroes the Dirichlet entries. `P S P` is SPD on the free subspace, so CG
-applies unchanged, and no row or column of `S` had to be touched. This is symmetric
-elimination, expressed matrix-free.
+`P` zeroes the Dirichlet entries. `P S P` is SPD on the free subspace, CG applies
+unchanged, no row or column of `S` modified (matrix-free symmetric elimination).
 
-Convergence is on the relative residual over the free subspace. A run that hits `maxiter`
-returns `converged = false`; the caller must say so rather than accept the iterate,
-because a half-solved pressure field is a physically wrong velocity, not a slightly
-inaccurate one.
+Convergence on the relative residual over the free subspace. `maxiter` reached:
+`converged = false`. The caller must report it, since a partially solved pressure field
+gives a physically wrong velocity.
 """
 function impes_pcg!(x::Vector{Float64}, b::Vector{Float64}, mesh,
                     A_elements::Vector{Matrix{Float64}}, M::Vector{Float64}, dt::Float64,
@@ -238,8 +225,7 @@ function impes_pcg!(x::Vector{Float64}, b::Vector{Float64}, mesh,
     end
 
     b_norm = sqrt(sum(abs2, r))
-    # Nothing to solve: the free subspace is empty, or the prescribed field already
-    # satisfies every free equation exactly.
+    # Empty free subspace, or prescribed field already satisfies every free equation
     if b_norm == 0.0
         @inbounds for i in 1:N
             x[i] = x_dir[i]
@@ -247,9 +233,8 @@ function impes_pcg!(x::Vector{Float64}, b::Vector{Float64}, mesh,
         return 0, 0.0, true
     end
 
-    # Warm start. dx is the free correction relative to the incoming guess, so the
-    # iteration begins from the previous step's solution rather than from zero - the
-    # field moves little per step, which is what keeps the iteration count low.
+    # Warm start from the previous step solution. dx = free correction relative to the
+    # incoming guess. Small per-step change, low iteration count.
     @inbounds for i in 1:N
         dx[i] = is_dirichlet[i] ? 0.0 : (x[i] - x_dir[i])
     end
@@ -278,8 +263,7 @@ function impes_pcg!(x::Vector{Float64}, b::Vector{Float64}, mesh,
             is_dirichlet[i] && (Ap[i] = 0.0)
             pAp += p[i] * Ap[i]
         end
-        # A non-positive curvature on an SPD operator means the iteration has run into
-        # round-off, not a real direction. Stop and report what was reached.
+        # Non-positive curvature on an SPD operator: round-off limit reached. Stop
         pAp > 0.0 || break
 
         α = rz_old / pAp
@@ -318,17 +302,15 @@ end
 """
     impes_courant_limit(mesh, elem_props, h_elem, v_gp_cache, NDim) -> Float64
 
-Explicit Courant limit of the species step,
+Compute the explicit Courant limit of the species step.
 
     Δt <= min_e  θ_g,e · h_e / max_p |v_gp(e,p)|
 
-`θ_g` is in the numerator because the advective flux carries no `θ_g` while the lumped
-mass does: the operator whose spectrum matters is `M⁻¹ · (advection)`, and `M ∝ θ_g`.
-Equivalently, `v` is the Darcy flux per bulk area and `v/θ_g` is the pore velocity the
-front actually travels at.
+`θ_g` in the numerator: the lumped mass contains `θ_g` and the advective flux does not;
+the relevant spectrum is that of `M⁻¹ · (advection)`, `M ∝ θ_g`. Equivalently, `v` is the
+Darcy flux per bulk area and `v/θ_g` the pore velocity of the front.
 
-Returns `Inf` for a quiescent field, which the caller reads as "this term imposes no
-limit" - the correct answer on the first step of a run started from a uniform state.
+`Inf` for a quiescent field (no limit), e.g. the first step from a uniform state.
 """
 function impes_courant_limit(mesh, elem_props, h_elem::Vector{Float64},
                              v_gp_cache::Array{Float64,3}, NDim::Int)
@@ -361,13 +343,11 @@ end
 """
     mechanism_dt(report, name) -> Float64
 
-Pull one mechanism's stability limit out of the start-up `StabilityReport`.
+Return the stability limit of one mechanism from the start-up `StabilityReport`.
 
-The IMPES solver needs the diffusion, conduction and reaction limits separately so it can
-recombine them each step with a Courant limit that did not exist at start-up.
-`calculate_critical_time_step` already computed and reported all three; reading them back
-here avoids recomputing them, and guarantees the adaptive step is built from exactly the
-numbers `--report-timestep` printed.
+Diffusion, conduction and reaction limits are recombined each step with the current
+Courant limit. Reading them from `calculate_critical_time_step` avoids recomputation and
+keeps the adaptive step consistent with the `--report-timestep` output.
 """
 function mechanism_dt(report, name::AbstractString)
     report === nothing && return Inf
@@ -384,12 +364,11 @@ end
     impes_solver(mesh, materials, calc_params, time_data, project_name, log_print,
                  initial_state=nothing, current_stage=1)
 
-IMPES time integration of the ADSIM gas transport, reaction and energy equations.
+Integrate the ADSIM gas transport, reaction and energy equations with IMPES.
 
-Selected by `[solver] time_integration = "IMPES"`. Solves the same physics as
-`fully_explicit_diffusion_solver` with the advective term made implicit; see
-`src/IMPES_FORMULATION_NOTES.md` for the derivation and
-`FULLY_EXPLICIT_SOLVER_README.md` for everything the two share.
+Selected by `[solver] time_integration = "IMPES"`. Same physics as
+`fully_explicit_diffusion_solver` with implicit advection. Derivation in
+`src/IMPES_FORMULATION_NOTES.md`; shared components in `FULLY_EXPLICIT_SOLVER_README.md`.
 
 # Per step
 1. refresh time-dependent boundary conditions
@@ -399,7 +378,7 @@ Selected by `[solver] time_integration = "IMPES"`. Solves the same physics as
 4. advective flux and Darcy velocities from `∇C_t^{n+1}`
 5. Lagrange multipliers, species update, clamp
 6. reaction, energy equation, boundary re-imposition, output
-7. next Δt from the Courant limit of the velocity field just computed
+7. next Δt from the Courant limit of the current velocity field
 """
 function impes_solver(mesh, materials, calc_params, time_data, project_name, log_print,
                       initial_state=nothing, current_stage::Int=1)
@@ -451,9 +430,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
     pcg_tol = Float64(get(solver_settings, "impes_pcg_tolerance", 1.0e-10))
     pcg_maxiter = Int(get(solver_settings, "impes_pcg_maxiter", 500))
 
-    # An IMPES run with advection switched off has nothing to make implicit: the pressure
-    # system degenerates to M/Δt·C_t = M/Δt·C_t + b, which is the explicit update written
-    # the long way round. Say so rather than let the user think they got something.
+    # IMPES without advection: pressure system reduces to M/Δt·C_t = M/Δt·C_t + b,
+    # i.e. the explicit update at higher cost
     if !calculate_advection
         log_print("   ⚠ WARNING: time_integration = \"IMPES\" with advection = 0. There is no")
         log_print("              advective term to make implicit, so this run is equivalent to")
@@ -483,47 +461,40 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         end
     end
 
-    # Gravity vector, same convention as the explicit solver: the components are the
-    # physical acceleration, and g enters Darcy's law v = -(k/μ)(∇p - ρ_g g) with a plus.
+    # Gravity vector, same convention as the explicit solver: physical acceleration
+    # components, g enters v = -(k/μ)(∇p - ρ_g g) with a plus.
     gravity_params = calc_params["gravity"]
     g_vector = [gravity_params["x_component"], gravity_params["y_component"]] *
                gravity_params["magnitude"]
 
-    # Time stepping. dt is the STARTING step only: it is recomputed at the end of every
-    # step from the velocity field, because the Courant limit that binds an IMPES run
-    # does not exist until there is a velocity to measure.
+    # Time stepping. dt = STARTING step only, recomputed every step from the velocity field
+    # (the governing Courant limit requires a velocity field)
     dt = time_data.actual_dt
     total_time = time_data.total_time
     load_step_time = time_data.time_per_step
     courant_number = time_data.courant_number
     data_saving_interval = calc_params["data_saving_interval"]
 
-    # Per-mechanism limits that do NOT depend on the solution, read back from the
-    # start-up report so the adaptive step is built from exactly the numbers
-    # --report-timestep printed.
+    # Solution-independent mechanism limits, from the start-up report (same values as
+    # --report-timestep)
     dt_diffusion_fixed = mechanism_dt(time_data.stability, "Diffusive")
     dt_conduction_fixed = mechanism_dt(time_data.stability, "Thermal conduction")
     dt_reaction_fixed = mechanism_dt(time_data.stability, "Reactive")
 
-    # The step the EXPLICIT integrator would have taken. IMPES does not need it as a
-    # stability bound - that is the whole point - but it is the right step to START from.
+    # Starting step = explicit-integrator step. Not a stability bound for IMPES, but the
+    # correct starting value.
     #
-    # A run begins on an initial condition the implicit solve resolves in one step but the
-    # explicit species step cannot: advection_1d starts with a 40 mol/m³ jump across a
-    # single element, and taking the full diffusion-limited step across it drives the
-    # minority species negative, where the C_MIN clamp turns the overshoot into created
-    # mass. Under IMPES that created mass immediately raises the local pressure, which
-    # raises the velocity, which creates more - a runaway the explicit solver never sees
-    # because its step is three orders smaller.
+    # Initial conditions may be sharp for the explicit species step: advection_1d starts
+    # with a 40 mol/m³ jump across one element. The full diffusion-limited step makes the
+    # minority species negative and the C_MIN clamp creates mass. Under IMPES the created
+    # mass increases local pressure and velocity, creating more mass (runaway). The explicit
+    # solver avoids this with a step three orders smaller.
     #
-    # Starting here and letting the 1.2x growth limiter ramp costs a few dozen steps (the
-    # ramp is geometric) and resolves the startup transient at the resolution it needs.
-    # Maximum step growth per step. The run starts at the explicit-equivalent step and
-    # ramps geometrically, which is what resolves the startup transient; this factor sets
-    # how fast. 1.1 rather than something more aggressive because the species step is
-    # first order in time, so a step size that changes quickly carries its own consistency
-    # error - measured on advection_1d, 1.2 left 0.25% of avoidable error at the first
-    # output that 1.1 removes, for about twenty extra steps out of a hundred.
+    # Geometric ramp from this start: a few dozen steps to resolve the startup transient.
+    # dt_growth_max: maximum growth per step. 1.1 instead of a larger value: the species step
+    # is first order in time, and fast step changes add consistency error. On advection_1d,
+    # 1.2 gave 0.25% extra error at the first output compared to 1.1, which costs ~20 extra
+    # steps out of a hundred.
     dt_growth_max = 1.1
 
     dt_advective_start = mechanism_dt(time_data.stability, "Advective [implicit]")
@@ -549,9 +520,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
     elem_props = build_element_properties(mesh, materials, C_lime_residual)
     node_owner = build_node_owner_elements(mesh)
 
-    # Per-element characteristic length. Unlike the explicit solver, this is needed
-    # unconditionally: the SU parameter uses it when stabilization is on, and the Courant
-    # limit uses it always.
+    # Element characteristic length, always required: SU parameter (if enabled) and Courant limit
     h_elem = [calculate_element_characteristic_length(mesh, e) for e in 1:Nelements]
 
     co2_gas_idx = findfirst(name -> name == "CO2", materials.gas_dictionary)
@@ -585,17 +554,16 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                               dC_lime_dt, degree_of_carbonation, binder_content, v;
                               force=true)
 
-    # Flow vectors, function-local for type stability exactly as in the explicit solver.
-    # The globals of the same name are not used here.
+    # Flow vectors, function-local for type stability (as in the explicit solver).
+    # Globals of the same name unused.
     q_diffusion = zeros(Float64, Nnodes, NGases)
     q_advection = zeros(Float64, Nnodes, NGases)
     q_gravitational = zeros(Float64, Nnodes, NGases)
     q_thermal_press = zeros(Float64, Nnodes, NGases)
-    # SU stabilization is kept in its own array rather than folded into q_advection as the
-    # explicit solver does. It contracts ∇C_α, not ∇C_t, so it is a per-species EXPLICIT
-    # term that belongs in b^n; folding it into the advective flux, which is assembled
-    # after the pressure solve, would double count it. See IMPES_FORMULATION_NOTES.md §4.3
-    # condition 2.
+    # SU stabilization in a separate array (merged into q_advection in the explicit solver).
+    # Contracts ∇C_α instead of ∇C_t: per-species EXPLICIT term in b^n. Adding it to the
+    # advective flux (assembled after the pressure solve) double counts it.
+    # See IMPES_FORMULATION_NOTES.md §4.3 condition 2.
     q_stabilization = zeros(Float64, Nnodes, NGases)
     total_rate = zeros(Float64, Nnodes)
     q_source_sink = zeros(Float64, Nnodes)
@@ -648,14 +616,12 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
 
     # Nodes whose total concentration is fixed by a Dirichlet row of (IMPES-P).
     #
-    # A node carrying a concentration or partial-pressure BC has P_boundary zeroed for
-    # EVERY gas (both apply_*_bc! loop over all species), so "some species prescribed" -
-    # which would make the summed equation inconsistent - cannot occur through those two
-    # dictionaries. The mask is therefore exact, not an approximation.
+    # Concentration or partial-pressure BC nodes have P_boundary zeroed for EVERY gas (both
+    # apply_*_bc! loop over all species). Partially prescribed nodes (inconsistent summed
+    # equation) cannot occur through those dictionaries, therefore the mask is exact.
     #
-    # A pressure BC node is added below at solve time, since its value follows a curve.
-    # Where a node carries both, the pressure BC wins, matching the explicit solver's
-    # end-of-step ordering.
+    # Pressure BC nodes added at solve time (value may follow a curve). Nodes with both:
+    # pressure BC takes precedence (same end-of-step order as the explicit solver).
     fully_prescribed = [all(P_boundary[i, g] == 0 for g in 1:NGases) for i in 1:Nnodes]
     pressure_bc_nodes = collect(keys(mesh.absolute_pressure_bc))
     for i in 1:Nnodes
@@ -694,35 +660,29 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
     save_data = false
     negative_lime_warned = false
 
-    # Clamp accounting, split into the two populations the positivity limit of §5.1 already
-    # distinguishes but the counter never did.
+    # Clamp accounting, split into the two populations of the §5.1 positivity limit.
     #
-    #   :roundoff - the node held no more than C_floor before the update, so the negative
-    #               value is the same round-off the positivity bound deliberately skips
-    #               (see the C_floor guard below). A species fully displaced by a front
-    #               sits here for the rest of the run and contributes one count per step
-    #               per node, which is what made the old total look like an instability.
-    #   :material - the node held real gas and was still driven negative. THIS is the
-    #               population the "arresting an unstable mode" warning is about, and the
-    #               one whose created mass feeds the pressure feedback of §5.1.
+    #   :roundoff - node at or below C_floor before the update: round-off skipped by the
+    #               positivity bound (see C_floor guard). A species fully displaced by a
+    #               front stays here for the rest of the run, one count per step per node.
+    #   :material - node with real gas driven negative. Target of the "arresting an
+    #               unstable mode" warning; created mass feeds the §5.1 pressure feedback.
     #
-    # Both bins use the SAME C_floor as the positivity limit, so the two can never again
-    # disagree about what counts as round-off.
+    # Both bins use the SAME C_floor as the positivity limit.
     negative_conc_count = zeros(Int, NGases)          # material
     negative_conc_count_roundoff = zeros(Int, NGases)
-    # Moles created by resetting a negative concentration to zero, per gas. The count says
-    # how often; this says how much, which is what the volume-consistency drift measures.
+    # Moles created by resetting negative concentrations to zero, per gas (amount, measured
+    # by the volume-consistency drift)
     clamped_mass = zeros(Float64, NGases)
     clamped_mass_roundoff = zeros(Float64, NGases)
-    # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is resolved.
-    # Per-node, per-gas material-clamp counter, so the top offenders can be classified
-    # against the boundary-condition dictionaries.
+    # TEMPORARY DIAGNOSTIC: remove after the clamp-location investigation is resolved.
+    # Per-node, per-gas material-clamp count to classify top offenders against the BC
+    # dictionaries.
     negative_conc_node_count = zeros(Int, Nnodes, NGases)
     negative_conc_node_roundoff = zeros(Int, Nnodes, NGases)
-    # Reaction throttle, the OTHER documented way the volume-consistency identity of §4.3
-    # gets broken: the pressure RHS uses the unthrottled reaction rate because the throttle
-    # depends on an advective rate that is not known until after the solve. Indexed by gas
-    # so the threaded species loop has one writer per entry.
+    # Reaction throttle, second known source of §4.3 volume-consistency error: the pressure
+    # RHS uses the unthrottled rate, since the throttle depends on the post-solve advective
+    # rate. Indexed by gas, one writer per entry in the threaded species loop.
     throttle_count = zeros(Int, NGases)
     throttled_mass = zeros(Float64, NGases)
     last_output_step = 0
@@ -738,47 +698,40 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
     dt_limit_idx = DT_LIMIT_GROWTH
     dt_limit_count = zeros(Int, length(DT_LIMIT_NAMES))
 
-    # Reaction limit on the live field. dt_reaction_fixed, from the start-up report, is
-    # evaluated at the lowest temperature the mesh file states and at the lime inventory
-    # at t = 0; it sizes the first step and is then replaced every step by the value the
-    # node loop below measures.
+    # Reaction limit on the current field. dt_reaction_fixed (start-up report): lowest
+    # mesh-file temperature and t = 0 lime inventory. Sizes the first step, then replaced
+    # each step by the node-loop value.
     #
-    # Expect the two to agree for most of a typical run, and do not read that as the
-    # recomputation being pointless. λ is largest where the specimen is coldest and least
-    # reacted, so a global maximum over the mesh sits on whichever corner the front has
-    # not reached - which is the state the start-up figure already assumed. It moves once
-    # that corner has itself warmed or reacted, and it moves immediately on a problem
-    # whose coldest point is a convective boundary rather than the initial field, since
-    # the start-up reference reads the initial and prescribed temperatures only.
+    # Both values typically agree for most of a run. λ is largest where the specimen is
+    # coldest and least reacted, i.e. a region not yet reached by the front (start-up
+    # assumption). The value changes once that region warms or reacts, and immediately
+    # when the coldest point is a convective boundary (start-up uses initial and
+    # prescribed temperatures only).
     rxn_lambda = zeros(Float64, Nnodes)
     dt_reaction = dt_reaction_fixed
 
-    # Trial-step control. positivity_safety is the margin the positivity bound has always
-    # carried; it is now applied to the step being taken rather than only to the next one.
-    # The retry cap bounds the cost of a step whose rates move under it - see the
-    # accept/reject block for what exhaustion means.
+    # Trial-step control. positivity_safety: margin of the positivity bound, applied to the
+    # current step. Retry cap bounds the cost of a step with changing rates (exhaustion:
+    # see accept/reject block).
     positivity_safety = 0.5
     positivity_max_retries = 8
     step_rejected = 0       # trials thrown away since the last output
     step_exhausted = 0      # steps that ran out of retries and fell back to the throttle
 
-    # Assigned inside the trial loop and read after it, so they have to be locals of this
-    # scope rather than of the loop body.
+    # Assigned in the trial loop, read after it: scope-level locals
     t_next = current_time
     dt_positivity = Inf
     C_floor = 0.0
     dC_g_dt_rxn_store = zeros(Float64, Nnodes)
 
-    # Absolute time tolerance for the loop bound and the output snapping. Scaled to the
-    # run length so it means the same thing whether the stage is 1 s or 1e6 s.
+    # Absolute time tolerance for loop bound and output snapping, scaled with run length
     t_eps = 1.0e-12 * max(total_time, 1.0)
 
-    # End of THIS stage. total_simulation_time is a stage duration, not an absolute end
-    # time: the explicit solver expresses that as a step count (num_steps_per_load ×
-    # num_load_steps) taken from wherever the checkpoint left off, so a stage resumed at
-    # t = 2000 with total_simulation_time = 2000 runs on to t = 4000. An adaptive loop has
-    # no step count to inherit, so the same convention has to be written out. Bounding the
-    # loop by total_time alone would silently run a resumed stage for zero steps.
+    # End of THIS stage. total_simulation_time = stage duration. The explicit solver uses a
+    # step count (num_steps_per_load × num_load_steps) from the checkpoint time, e.g. resume
+    # at t = 2000 with total_simulation_time = 2000 ends at t = 4000. The adaptive loop has
+    # no step count, therefore the end time is explicit. Bounding by total_time would give
+    # zero steps for a resumed stage.
     stage_start_time = current_time
     stage_end_time = current_time + total_time
 
@@ -796,16 +749,13 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         #______________________________________________________
         # Trial step, §5.1.
         #
-        # The positivity bound cannot be known before the step is taken. It needs the
-        # species rates, which need the advective flux, which needs C_t^{n+1} from the
-        # implicit solve, which needs dt. So the step is taken on trial and re-taken at
-        # the bound it reports whenever it turns out to have been too long.
+        # Positivity bound unknown before the step: species rates -> advective flux ->
+        # C_t^{n+1} from the implicit solve -> dt. Trial step, repeated at the reported
+        # bound when too long.
         #
-        # The whole body has to be re-taken, not just the species update: dt enters the
-        # accumulation term of (IMPES-P), so C_t^{n+1} belongs to the step it was solved
-        # for. Advancing the species with a different dt against it would break the one
-        # identity the IMPES split rests on, Σ_α C_α^{n+1} = C_t^{n+1}, which is the very
-        # thing a rejected step is being rejected to protect.
+        # Whole body repeated, including the solve: dt enters the accumulation term of
+        # (IMPES-P), therefore C_t^{n+1} is tied to its dt. A different species dt breaks
+        # Σ_α C_α^{n+1} = C_t^{n+1}, the identity of the IMPES split.
         #______________________________________________________
         trial = 0
         while true
@@ -840,8 +790,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             q_source_sink .= 0.0
 
             #______________________________________________________
-            # Reaction kinetics, level n. Must run before the fluxes, which consume
-            # q_source_sink through b^n.
+            # Reaction kinetics, level n. Before the fluxes (q_source_sink enters b^n)
             #______________________________________________________
             if calculate_reaction && co2_gas_idx !== nothing
                 @threads for node_id in 1:Nnodes
@@ -850,8 +799,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     e == 0 && continue
                     props = elem_props[e]
 
-                    # The area factor is driven by the total gas pressure, so the whole
-                    # mixture is summed here; C_aq still uses the CO2 component alone.
+                    # Total gas concentration for the area factor; C_aq uses the CO2 component
                     C_g_tot = 0.0
                     for g in 1:NGases
                         C_g_tot += C_g[node_id, g]
@@ -870,27 +818,23 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                         q_source_sink[node_id] = 0.0
                     end
 
-                    # Eigenvalue the reaction contributes to this node's CO2 equation, on the
-                    # state the step is actually being taken from. It is cheap - two
-                    # exponentials on a loop that already runs over every node - and it has to
-                    # be done here because every factor in it moves: the lime is consumed, the
-                    # temperature rises, and under a convective boundary the face stays cold
-                    # while the interior does not.
+                    # Reaction eigenvalue of the nodal CO2 equation at the current state. Two
+                    # exponentials per node. Recomputed each step: lime consumption, heating,
+                    # and cold faces at convective boundaries change every factor.
                     rxn_lambda[node_id] =
                         reaction_decay_constant(C_g_tot, C_lime[node_id], props.residual_lime,
                                                 props.θ_w, props.θ_g, T[node_id],
                                                 k_o_reaction, E_reaction, β_area_reaction)
                 end
 
-                # Same factor of 1/2 the start-up bound carries: forward Euler on a decay of
-                # rate λ is stable to 2/λ and positive to 1/λ, and this sits below both.
+                # Factor 1/2 as in the start-up bound: forward Euler on decay rate λ is stable
+                # to 2/λ and positive to 1/λ
                 λ_rxn_max = maximum(rxn_lambda)
                 dt_reaction = λ_rxn_max > 0.0 ? 1.0 / (2.0 * λ_rxn_max) : Inf
             end
 
-            # The total mobility Λ is frozen at level n. That is plain IMPES and it is what
-            # makes the pressure equation linear; see IMPES_FORMULATION_NOTES.md §8 for why
-            # the lag is acceptable here and what relinearizing it would cost.
+            # Total mobility Λ frozen at level n (plain IMPES, linear pressure equation).
+            # Lag justification and relinearization cost: IMPES_FORMULATION_NOTES.md §8.
             pcg_it = 0
             pcg_res = 0.0
             pcg_ok = true
@@ -906,8 +850,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             #______________________________________________________
             # Level-n explicit fluxes: diffusion, thermal pressure, gravity, SU.
             #
-            # The advective flux is NOT assembled here - it needs C_t^{n+1}, which does not
-            # exist yet. Everything assembled in this loop lands in b^n.
+            # Advective flux NOT assembled here (requires C_t^{n+1}). All terms in this loop
+            # enter b^n.
             #______________________________________________________
             @threads for c in 1:nchunks
                 qd_c = qd_chunk[c]
@@ -961,17 +905,16 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                 dN_dx = ShapeFunctions.get_dN_dx(e, p)
 
                                 # Thermal contribution to the pressure gradient,
-                                # Eq. (thermal_pressure_flux). Driven by ∇T, which the energy
-                                # equation advances explicitly, so it stays explicit here.
+                                # Eq. (thermal_pressure_flux). Explicit, since ∇T is advanced
+                                # explicitly by the energy equation.
                                 qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .*
                                            (dN_dx * (dN_dx' * T_e))
 
-                                # Streamline-upwind stabilization. The velocities driving τ*
-                                # are evaluated at ∇C_t^n, not ∇C_t^{n+1}: this term has to be
-                                # in b^n, which is formed before the pressure solve. The lag
-                                # is in the stabilization PARAMETER only, and it is what keeps
-                                # the summed equation exactly consistent with the species
-                                # equations. See IMPES_FORMULATION_NOTES.md §8.
+                                # Streamline-upwind stabilization. τ* velocities at ∇C_t^n
+                                # (term in b^n, formed before the pressure solve). Lag in the
+                                # stabilization PARAMETER only; keeps the summed equation exactly
+                                # consistent with the species equations.
+                                # See IMPES_FORMULATION_NOTES.md §8.
                                 if calculate_stabilization
                                     v_gp = (-k_intrinsic * R * T_gp / μ_g) .* (dN_dx' * C_t)
                                     v_gpT = (-k_intrinsic * R * C_tot_gp / μ_g) .* (dN_dx' * T_e)
@@ -982,12 +925,10 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                     mul!(a_su, dN_dx, v_gp)
                                     qs_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
 
-                                    #The companion term stabilizes the SAME transported quantity - the species
-                                    #concentration - but along the streamline of the thermally driven velocity,
-                                    #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
-                                    #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
-                                    #cannot restore the discrete maximum principle, and it carries units of
-                                    #K m^3/s where a molar flux is required.
+                                    #Stabilizes the species concentration along the thermally driven
+                                    #streamline, therefore C_e contracted with v_gpT. Contracting T_e adds no
+                                    #diagonal weight to the C_g^i system (no discrete maximum principle) and
+                                    #has units of K m^3/s instead of a molar flux.
                                     mul!(aT_su, dN_dx, v_gpT)
                                     qs_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
                                 end
@@ -1050,8 +991,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
 
             # b^n = Σ_α [q^b - q^d - q^T - q^g - q^su]_α + q^r + M C_t^n/Δt
             #
-            # P_boundary gates each species exactly as it gates the explicit rate: a fully
-            # prescribed node contributes nothing, and it is a Dirichlet row anyway.
+            # P_boundary gates each species as in the explicit rate. Fully prescribed node:
+            # zero contribution (Dirichlet row)
             for i in 1:Nnodes
                 acc = 0.0
                 for g in 1:NGases
@@ -1059,18 +1000,16 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                             q_gravitational[i, g] - q_stabilization[i, g]) * P_boundary[i, g]
                 end
                 if calculate_reaction && co2_gas_idx !== nothing
-                    # Unthrottled: the throttle depends on the advective rate, which is not
-                    # known until after this solve. Where it later fires, the volume
-                    # consistency of §4.3 is broken by exactly the throttled amount - which is
-                    # what the consistency diagnostic below measures.
+                    # Unthrottled: the throttle depends on the post-solve advective rate. Where
+                    # the throttle acts, §4.3 volume consistency error = throttled amount
+                    # (measured by the consistency diagnostic below).
                     acc += q_source_sink[i] * P_boundary[i, co2_gas_idx]
                 end
                 rhs[i] = acc + M[i] * total_concentration[i] / dt
             end
 
-            # Dirichlet values. Composition-prescribed nodes hold the total they were given;
-            # a pressure BC node is evaluated at t_{n+1}, the same convention and the same
-            # target the Lagrange multipliers below aim at.
+            # Dirichlet values. Composition-prescribed nodes: given total. Pressure BC nodes:
+            # t_{n+1} value (same target as the Lagrange multipliers).
             for i in 1:Nnodes
                 C_t_new[i] = total_concentration[i]
             end
@@ -1104,9 +1043,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             #______________________________________________________
             # Advective flux from ∇C_t^{n+1}, and the Darcy velocities.
             #
-            # Both need the same element gradient, so they share one loop. The Gauss-point
-            # C_gp and T_gp here are the identical interpolations assemble_impes_operator!
-            # used to build Λ, which is what makes Σ_α C_α^{n+1} = C_t^{n+1} exact.
+            # One loop, same element gradient. C_gp and T_gp are the same interpolations used
+            # for Λ in assemble_impes_operator!, therefore Σ_α C_α^{n+1} = C_t^{n+1} exactly.
             #______________________________________________________
             for c in 1:nchunks
                 qa_chunk[c] .= 0.0
@@ -1115,9 +1053,9 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             q_advection .= 0.0
             v .= 0.0
 
-            # Nodal pressure at level n+1, so the velocity is built from ∇P^{n+1} in one
-            # gradient rather than from the product-rule split. Uses T^n: the energy equation
-            # has not run yet, and the difference is O(dt dT/dt), below the scheme's own error.
+            # Nodal pressure at level n+1: velocity from a single ∇P^{n+1} (no product-rule split).
+            # T^n used (energy equation not yet advanced); difference O(dt dT/dt), below the
+            # scheme error.
             for i in 1:Nnodes
                 P[i] = C_t_new[i] * R * T[i]
             end
@@ -1163,7 +1101,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     end
 
                     # Darcy velocities, Eq. (Darcy_law). Same convention as the explicit
-                    # solver, including the arithmetic composition-weighted viscosity.
+                    # solver (arithmetic composition-weighted viscosity)
                     for p in 1:4
                         N_p = ShapeFunctions.shape_funcs.N[p]
                         dV = ShapeFunctions.get_weight(e, p)
@@ -1232,11 +1170,9 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             #______________________________________________________
             # Species rates, Eq. (IMPES-S).
             #
-            # UNTHROTTLED. The positivity test below has to see the rate the physics asked
-            # for, not one already cut to fit the step: a throttled rate is by construction
-            # exactly -C/dt, so it reports back the very step it was cut to and tells the
-            # controller nothing. The reaction part is kept aside so the throttle can still be
-            # applied afterwards, on whichever step the trial loop settles on.
+            # UNTHROTTLED. The positivity test requires the physical rate: a throttled rate is
+            # exactly -C/dt and returns the current step, giving no information to the
+            # controller. Reaction part stored separately for the throttle on the accepted step.
             #______________________________________________________
             @threads for gas_idx in 1:NGases
                 is_co2 = calculate_reaction && gas_idx == co2_gas_idx
@@ -1256,26 +1192,21 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             end
 
             #______________________________________________________
-            # Positivity limit, §5.1, and the accept/reject test that closes the trial.
+            # Positivity limit, §5.1, and accept/reject test of the trial.
             #
             #     Δt <= min over (i,α) with dC_α/dt < 0 of  C_α / (-dC_α/dt)
             #
-            # This is not a linear stability bound and it is not redundant with the Courant
-            # one. Under IMPES the C_MIN clamp stops being harmless: a species driven below
-            # zero is reset to zero, which CREATES mass, and unlike the explicit solver the
-            # pressure equation now responds to that mass immediately - higher total, higher
-            # pressure, higher velocity, more overshoot. The clamp becomes a positive feedback
-            # rather than a cosmetic floor, so the step has to be chosen to keep it silent.
+            # Nonlinear bound, independent of the Courant limit. Under IMPES the C_MIN clamp
+            # creates mass when resetting a negative species to zero, and the pressure
+            # equation responds immediately: higher total, pressure, velocity, overshoot.
+            # Positive feedback, therefore the step must keep the clamp inactive.
             #
-            # Nodes already essentially empty are skipped: there a small negative rate is
-            # round-off, and dividing by it would collapse the step for no reason. The clamp
-            # remains in place for exactly those.
+            # Nearly empty nodes skipped: a small negative rate there is round-off and would
+            # collapse the step. Clamp still active for those nodes.
             #
-            # C_floor is hoisted out of the loop because the clamp below bins its events on the
-            # same threshold. The two used to disagree - the limit called a node round-off and
-            # skipped it while the counter scored it alongside a genuine overshoot - which is
-            # what made a run whose clamps are almost entirely displaced-species jitter report
-            # itself as an instability.
+            # C_floor outside the loop: same threshold for the clamp bins below. Previously
+            # the limit skipped a node as round-off while the counter scored it as overshoot,
+            # and runs with mostly displaced-species jitter were reported as unstable.
             #______________________________________________________
             C_floor = 1.0e-6 * max(maximum(C_g), 1.0)
             dt_positivity = Inf
@@ -1289,24 +1220,18 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                 end
             end
 
-            # Accept, or throw the trial away and take it again shorter.
+            # Accept, or reject the trial and repeat with a shorter step.
             #
-            # Carrying this bound into the NEXT step, which is what it used to do, cannot stop
-            # the violation it has just measured: that step has already been applied by the
-            # time the bound exists, and the clamp has already created the mass. Rejecting
-            # here costs one extra pressure solve and keeps the species non-negative by
-            # construction.
+            # Applying the bound to the NEXT step cannot prevent the measured violation (step
+            # already applied, mass already created). Rejection costs one extra pressure solve
+            # and keeps species non-negative by construction.
             #
-            # The replacement step is the bound itself rather than a blind halving, so a trial
-            # that overshot by a factor of two and one that overshot by fifty both land in a
-            # single retry. positivity_safety is the same 0.5 the bound always carried: a
-            # margin against the rate changing over the step, not a fraction of a stability
-            # limit.
+            # Replacement step = the bound itself instead of halving: overshoot by 2x or 50x
+            # both resolved in one retry. positivity_safety = 0.5: margin for rate changes
+            # over the step.
             #
-            # A trial that keeps failing is one whose rates move under it, the bound being
-            # read from a state the shorter step then changes. The count is capped rather than
-            # iterated to convergence; on exhaustion the step is taken with the throttle and
-            # the clamp behind it, as it was before, and counted so the log can say so.
+            # Repeated failure: rates change with the shorter step. Retry count capped; on
+            # exhaustion the step proceeds with throttle and clamp, and is counted for the log.
             if isfinite(dt_positivity) && dt > positivity_safety * dt_positivity
                 if trial <= positivity_max_retries
                     dt = positivity_safety * dt_positivity
@@ -1319,13 +1244,11 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         end  # trial step
 
         #______________________________________________________
-        # Reaction throttle - the backstop, §5.1.
+        # Reaction throttle, backstop of §5.1.
         #
-        # With the trial loop above this should be silent, and its count in the output
-        # block is the measure of whether it is. What it withholds is exactly the amount
-        # by which Σ_α C_α^{n+1} will miss C_t^{n+1}, because the pressure RHS used the
-        # unthrottled rate, so the volume-consistency warning has a measured number to
-        # point at instead of a list of suspects.
+        # Expected inactive with the trial loop; the output-block count verifies it. The
+        # withheld amount equals the mismatch between Σ_α C_α^{n+1} and C_t^{n+1} (pressure
+        # RHS uses the unthrottled rate), giving the volume-consistency warning a measured value.
         #______________________________________________________
         if calculate_reaction && co2_gas_idx !== nothing
             for i in 1:Nnodes
@@ -1353,13 +1276,11 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         #______________________________________________________
         # Lagrangian multipliers at the pressure boundary, Eq. (§4.5).
         #
-        # Retained verbatim from the explicit solver, and for the same reason it exists
-        # there: at a pressure BC node the total row of (IMPES-P) was REPLACED by the
-        # Dirichlet value, so the exact-consistency argument does not reach it and the
-        # species must be redistributed to match the pinned total. The residual it
-        # computes, M(C_t^n + dt·total_rate - target)/dt, is precisely that mismatch, and
-        # the composition-weighted split is what stops a minority species being drained
-        # negative at the outlet.
+        # Same as the explicit solver. At a pressure BC node the (IMPES-P) row is REPLACED by
+        # the Dirichlet value, therefore exact consistency does not apply and the species are
+        # redistributed to match the prescribed total. Residual M(C_t^n + dt·total_rate - target)/dt
+        # = that mismatch. Composition-weighted split prevents negative minority species at
+        # the outlet.
         #______________________________________________________
         @threads for j in pressure_bc_nodes
             if haskey(boundary_node_influences, j)
@@ -1402,8 +1323,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     lagrangian_correction = (λ_bc[i] / M[i]) * weight * P_boundary[i, gas_idx]
                 end
 
-                # Held before the update, so a clamp can be attributed to a node that had
-                # gas to lose or to one that was already empty.
+                # Pre-update value, to classify a clamp as material or round-off
                 C_before = C_g[i, gas_idx]
 
                 C_g[i, gas_idx] += dt * (dC_g_dt[i, gas_idx] - lagrangian_correction)
@@ -1411,12 +1331,12 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                 C_MIN = 1e-12
                 if C_g[i, gas_idx] < C_MIN
                     if C_g[i, gas_idx] < 0.0
-                        # Moles conjured by the reset. M[i] is the lumped nodal mass, so
-                        # this is directly comparable to the domain inventory below.
+                        # Moles created by the reset. M[i] = lumped nodal mass, comparable to
+                        # the domain inventory below.
                         created = -C_g[i, gas_idx] * M[i]
 
                         if C_before > C_floor
-                            # Real gas driven negative: the population §5.1 is about.
+                            # Real gas driven negative (§5.1 population)
                             negative_conc_count[gas_idx] += 1
                             clamped_mass[gas_idx] += created
                             negative_conc_node_count[i, gas_idx] += 1
@@ -1425,8 +1345,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                 negative_conc_warned[gas_idx] = true
                             end
                         else
-                            # Node was already empty to within the positivity limit's own
-                            # tolerance, which skips it for exactly this reason.
+                            # Node already empty within the positivity-limit tolerance
                             negative_conc_count_roundoff[gas_idx] += 1
                             clamped_mass_roundoff[gas_idx] += created
                             negative_conc_node_roundoff[i, gas_idx] += 1
@@ -1446,12 +1365,9 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         #______________________________________________________
         # Volume-consistency diagnostic, Eq. (§4.3).
         #
-        # Summing the species updates must reproduce the implicit total exactly at every
-        # node whose row was not replaced. A nonzero value here is a real defect - Step 1
-        # and Step 2 disagreeing on a Gauss-point coefficient - EXCEPT where the reaction
-        # throttle or the C_MIN clamp fired, both of which break the identity by design.
-        # Measured relative to the local total so the number means the same thing
-        # everywhere in the mesh.
+        # Sum of species updates must equal the implicit total at every non-Dirichlet node.
+        # Nonzero value = defect (Step 1 and Step 2 Gauss-point coefficients differ), EXCEPT
+        # where the reaction throttle or the C_MIN clamp acted. Relative to the local total.
         #______________________________________________________
         for i in 1:Nnodes
             is_dirichlet[i] && continue
@@ -1486,9 +1402,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         #
         #     M^L_T · dT/dt = q̃_ext - q̃_d - q̃_a + q̃_r
         #
-        # Unchanged from the explicit solver. It consumes v_gp_cache, which under IMPES
-        # holds the level-(n+1) velocity rather than the level-n one - the correct choice,
-        # since that is the velocity the species were actually transported with.
+        # Same as the explicit solver. v_gp_cache contains the level-(n+1) velocity under
+        # IMPES, i.e. the velocity used to transport the species.
         #______________________________________________________
         if calculate_heat
             ρ_w = materials.liquid.density
@@ -1562,11 +1477,9 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                             end
                         end
 
-                        # Advective flux, Eq. (thermal_advective_flux), in the
-                        # NON-CONSERVATIVE form (ρc)_g v·∇T. Identical to the explicit
-                        # solver, which carries the argument for why the divergence form
-                        # ∇·((ρc)_g v T) is the wrong partner for this left-hand side and
-                        # what it did to a boundary gas flows through.
+                        # Advective flux, Eq. (thermal_advective_flux), NON-CONSERVATIVE form
+                        # (ρc)_g v·∇T. Same as the explicit solver (see there for why the
+                        # divergence form ∇·((ρc)_g v T) is inconsistent with this left-hand side).
                         if calculate_heat_advection
                             ρc_gp = ρc_g_gp
                             dN_dx_a = ShapeFunctions.get_dN_dx(e, p)
@@ -1682,9 +1595,8 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
 
         total_concentration = vec(sum(C_g, dims=2))
 
-        # Re-impose the total at pressure BC nodes against the updated temperature, so the
-        # reported pressure is exactly the boundary value rather than the value the
-        # pressure solve reached with T^n.
+        # Re-impose the total at pressure BC nodes with the updated temperature: reported
+        # pressure = boundary value (instead of the T^n solve value)
         for node_id in pressure_bc_nodes
             tf_id = get(mesh.absolute_pressure_tf, node_id, 0)
             P_bc = bc_value(time_functions, tf_id, mesh.absolute_pressure_bc[node_id], t_next)
@@ -1702,13 +1614,12 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         #______________________________________________________
         # Next time step, Eq. (§5).
         #
-        # The Courant limit is the one that binds an IMPES run and it is only knowable
-        # from the velocity field just computed. The diffusion, conduction and reaction
-        # limits are solution independent and come from the start-up report.
+        # Courant limit governs IMPES runs, from the current velocity field. Diffusion,
+        # conduction and reaction limits: solution independent, from the start-up report.
         #
-        # SU stabilization contributes a second term of the same size as the Courant one
-        # (τ*|v|² ≤ h|v|/2 makes its diffusive limit θ_g h/|v| as well), so it is counted
-        # separately in the harmonic sum - the same treatment the explicit path gives it.
+        # SU stabilization adds a term of the same size as the Courant one (τ*|v|² ≤ h|v|/2
+        # gives a diffusive limit θ_g h/|v|), counted separately in the harmonic sum (same
+        # as the explicit path).
         #______________________________________________________
         dt_courant = calculate_advection ?
             impes_courant_limit(mesh, elem_props, h_elem, v_gp_cache, NDim) : Inf
@@ -1719,22 +1630,16 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             isfinite(dtx) && dtx > 0.0 && (inv_sum += 1.0 / dtx)
         end
         dt_explicit = inv_sum > 0.0 ? 1.0 / inv_sum : Inf
-        # 0.5 rather than the Courant number: this bound says "do not consume more than
-        # half of what is there", which is a margin against the rate changing over the
-        # step, not a fraction of a linear stability limit.
+        # 0.5 instead of the Courant number: consume at most half the available amount
+        # (margin for rate changes over the step)
         dt_target = min(courant_number * min(dt_explicit, dt_reaction),
                         0.5 * dt_positivity)
 
-        # Which term set the step. Each candidate carries the factor it entered with, so
-        # the winner here is the one that produced dt_target, not whichever raw limit
-        # happens to be smallest.
+        # Term that set the step. Candidates include their factors, therefore the minimum
+        # is the term that produced dt_target.
         #
-        # Recorded per step and reported as a share of the output interval rather than as
-        # a single name. The previous version kept one name and overwrote it whenever the
-        # growth cap was below the physics limit, which is true on every step that follows
-        # a reduction, so a run whose step was being repeatedly halved and ramped back
-        # reported "startup ramp" from beginning to end and the term doing the halving
-        # never appeared at all.
+        # Recorded per step, reported as a share of the output interval. A single overwritten
+        # name reports "growth cap" after every reduction and hides the term causing it.
         dt_limit_idx = DT_LIMIT_COURANT
         let cands = (courant_number * dt_courant,
                      courant_number * dt_diffusion_fixed,
@@ -1748,27 +1653,23 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     dt_limit_idx = k
                 end
             end
-            # The harmonic sum can bind below every individual term.
+            # Harmonic sum may be below every individual term
             if courant_number * dt_explicit < 0.95 * best
                 best = courant_number * dt_explicit
                 dt_limit_idx = DT_LIMIT_COMBINED
             end
-            # The growth cap binds whenever the step is climbing back towards what the
-            # physics allows, whether that is the opening ramp or a recovery from a
-            # reduction. Either way it is the cap that set this step, and the share it
-            # takes over an interval is the measure of how much of the run is spent
-            # recovering rather than running at the limit.
+            # Growth cap active during the opening ramp and after any reduction. Its share per
+            # interval = fraction of the run spent recovering instead of at the limit.
             if dt_growth_max * dt < 0.95 * best
                 dt_limit_idx = DT_LIMIT_GROWTH
             end
         end
 
-        # Nothing bounds the step at all - a pure Darcy run at rest. Fall back to the
-        # output cadence, which is the coarsest step the run could ever want.
+        # No bound (e.g. pure Darcy run at rest): fall back to the output interval
         isfinite(dt_target) || (dt_target = Float64(load_step_time))
 
-        # Growth limiter. Without it the step chases a transient velocity spike down and
-        # straight back up, which costs accuracy at the front for no saving.
+        # Growth limiter: prevents step oscillation after transient velocity spikes (accuracy
+        # loss at the front)
         dt_target = min(dt_target, dt_growth_max * dt)
 
         dt_min_seen = min(dt_min_seen, dt)
@@ -1776,10 +1677,9 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
 
         # Per-step trace of the startup transient, enabled with ADSIM_IMPES_DEBUG=1.
         #
-        # Restricted to the first IMPES_DEBUG_STEPS steps because that is where every
-        # failure found so far began: the step is still ramping, the initial condition is
-        # still discontinuous, and a run that is going to diverge has already started by
-        # step four. The output block below covers the rest of the run.
+        # First IMPES_DEBUG_STEPS steps only: every failure observed so far started there
+        # (ramping step, discontinuous initial condition; divergence visible by step four).
+        # Output block covers the rest of the run.
         if impes_debug && step <= IMPES_DEBUG_STEPS
             vmax = 0.0
             for e in 1:Nelements, p in 1:4
@@ -1807,9 +1707,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                               calc_params["units"]["time_unit"]))
 
             steps_since = max(1, step - last_output_step)
-            # Rejected trials are named only when there are some. They are real work - one
-            # pressure solve each - so they belong next to the step count rather than in a
-            # line of their own, and a run that never rejects should not have to say so.
+            # Rejected trials (one pressure solve each) shown next to the step count, only if any
             retry_note = step_rejected > 0 ?
                 @sprintf(" (+%d rejected%s)", step_rejected,
                          step_exhausted > 0 ? @sprintf(", %d unresolved", step_exhausted) : "") : ""
@@ -1817,9 +1715,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                steps_since, retry_note, dt_min_seen, dt_max_seen,
                                calc_params["units"]["time_unit"]))
 
-            # Census of what set the step over the interval. Terms below 1% are dropped;
-            # the line is there to show which bound is doing the work, not to account for
-            # every step.
+            # Share of each step-setting term over the interval, terms below 1% dropped
             let tot = sum(dt_limit_count)
                 if tot > 0
                     parts = String[]
@@ -1839,13 +1735,12 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                                    pcg_iters_total / pcg_solves, pcg_iters_max, pcg_res_max))
             end
             log_print(@sprintf("        Volume consistency |ΣC_α − C_t|/C_t: %.2e max", consistency_max))
-            # The floor is the pressure solve, not round-off: a relative residual of
-            # pcg_tol leaves a solution error of order pcg_tol times the condition number,
-            # so 1e-8 on a stiff mesh is the tolerance talking. Warn only well above that,
-            # and say which explanation to check first.
-            # Above the floor, name the two by-design causes with their measured size. If
-            # both are ~0 and the PCG residual is at tolerance, the operator and the species
-            # flux disagree on a Gauss-point coefficient - a solver defect, not a run.
+            # Floor set by the pressure solve: relative residual pcg_tol gives a solution error
+            # ~pcg_tol times the condition number (1e-8 on a stiff mesh is expected). Warning
+            # only well above that floor.
+            # Above the floor, report both known causes with their measured size. Both ~0 with
+            # PCG at tolerance: operator and species flux Gauss-point coefficients differ
+            # (solver defect).
             if consistency_max > 1.0e-6
                 log_print(@sprintf("        ⚠ above PCG floor: throttle %d (%.2e mol), clamp %.2e mol",
                                    sum(throttle_count), sum(throttled_mass),
@@ -1854,16 +1749,14 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             pcg_iters_total = 0; pcg_iters_max = 0; pcg_res_max = 0.0; pcg_solves = 0
             dt_min_seen = Inf; dt_max_seen = 0.0; consistency_max = 0.0
 
-            # Clamp report. "real" = the node held gas and was still driven negative, the
-            # only bin that can mean an unstable mode. "empty" = below the positivity floor
-            # C_floor, which the step limit skips as round-off; a species a front has fully
-            # displaced lives there for the rest of the run and would otherwise dominate.
+            # Clamp report. "real": node with gas driven negative, the only bin indicating an
+            # unstable mode. "empty": below C_floor (round-off, skipped by the step limit);
+            # fully displaced species remain there for the rest of the run.
             total_material = sum(negative_conc_count)
             total_roundoff = sum(negative_conc_count_roundoff)
             if total_material + total_roundoff > 0
                 rate = total_material / (steps_since * Nnodes * NGases)
-                # Only worth naming the gases when more than one is involved; otherwise the
-                # split just repeats the total.
+                # Per-gas split only with more than one active gas
                 active = [g for g in 1:NGases
                           if negative_conc_count[g] + negative_conc_count_roundoff[g] > 0]
                 gas_split = length(active) > 1 ?
@@ -1881,11 +1774,10 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
                     log_print("          Lower the Courant number and check advection_stabilization.")
                 end
 
-                # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is
-                # resolved. Hits on pressure/composition-BC nodes would point at the
-                # Lagrangian boundary correction; hits scattered along the front do not.
-                # Ranked on the real bin, falling back to the empty one so the front is
-                # still locatable on a run with no real clamps at all.
+                # TEMPORARY DIAGNOSTIC: remove after the clamp-location investigation is
+                # resolved. Hits on pressure/composition-BC nodes indicate the Lagrangian
+                # boundary correction; hits along the front do not.
+                # Ranked on the real bin; empty bin as fallback to locate the front.
                 node_material = vec(sum(negative_conc_node_count, dims = 2))
                 node_roundoff = vec(sum(negative_conc_node_roundoff, dims = 2))
                 rank_by = total_material > 0 ? node_material : node_roundoff
@@ -1924,23 +1816,19 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
             negative_lime_warned = false
         end
 
-        # The stage is done. Leave before sizing a step that will never be taken - with
-        # the stage end capped below, that step is exactly zero long and would trip the
-        # collapse guard on the way out.
+        # Stage done. Exit before sizing a zero-length step (would trigger the collapse guard)
         current_time >= stage_end_time - t_eps && break
 
-        # Land exactly on the next output time, or on the end of the stage, rather than
-        # stepping over either. Capping at the stage end is what the explicit solver gets
-        # for free from running a fixed number of steps.
+        # Snap to the next output time or stage end. Stage-end cap replaces the fixed step
+        # count of the explicit solver.
         t_snap = min(next_output_time, stage_end_time)
         if current_time + dt_target > t_snap - t_eps
             dt = t_snap - current_time
-            # The stage end writes its own output through the loop condition above, so
-            # only an output boundary arms save_data.
+            # Stage end writes output through the loop condition, therefore only an output
+            # boundary sets save_data.
             save_data = t_snap == next_output_time
-            # The snap overrides whatever the physics asked for, and the step it leaves
-            # behind is the one the growth cap then ramps away from. Counting it on its
-            # own keeps a short remainder from being read as a stability event.
+            # Snap overrides the physics limit; counted separately such that a short
+            # remainder is not reported as a stability event.
             dt_limit_idx = DT_LIMIT_SNAP
         else
             dt = dt_target
@@ -1948,8 +1836,7 @@ function impes_solver(mesh, materials, calc_params, time_data, project_name, log
         end
         dt_limit_count[dt_limit_idx] += 1
 
-        # A step that has collapsed to zero or below cannot advance the run. Fail loudly
-        # rather than spin.
+        # Collapsed step: error instead of an infinite loop
         if dt <= 0.0 || !isfinite(dt)
             error("IMPES time step collapsed to $(dt) at step $step, t = $(current_time). " *
                   "This usually means the velocity field diverged; check the PCG " *

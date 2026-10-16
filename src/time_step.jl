@@ -1,23 +1,22 @@
 #------------------------------------------------------------------------------
 # ADSIM Time Step Module
-# This module contains functions to calculate the critical time step and
-# manage time stepping for ADSIM FEM calculations
+# Critical time step calculation and time stepping for ADSIM FEM calculations
 #------------------------------------------------------------------------------
 
 """
 MechanismStability
 
-Per-mechanism stability diagnostics, one entry per spatial operator the solver assembles.
+Per-mechanism stability diagnostics, one entry per assembled spatial operator.
 
 # Fields
-- `name::String`: Mechanism name as it appears in the log ("Diffusive", "Advective", ...)
-- `active::Bool`: Whether the solver is assembling this term at all
-- `λ_measured::Float64`: Largest eigenvalue of M̂⁻¹K measured by power iteration [1/s]
+- `name::String`: Mechanism name in the log ("Diffusive", "Advective", ...)
+- `active::Bool`: Whether the solver assembles this term
+- `λ_measured::Float64`: Largest eigenvalue of M̂⁻¹K from power iteration [1/s]
 - `λ_analytic::Float64`: Largest eigenvalue from the closed form, `4·coef/h_min²` [1/s]
-- `dt::Float64`: Stability limit of this mechanism acting alone, `2/λ` [s]
+- `dt::Float64`: Stability limit of this mechanism only, `2/λ` [s]
 
-`λ_measured` and `λ_analytic` are `NaN` for a mechanism with no spatial operator (the
-reaction, which is a nodal ODE) and for any inactive mechanism.
+`λ_measured` and `λ_analytic` are `NaN` for mechanisms without a spatial operator (reaction,
+a nodal ODE) and for inactive mechanisms.
 """
 struct MechanismStability
     name::String
@@ -31,12 +30,12 @@ end
 """
 StabilityReport
 
-Everything behind the chosen critical time step, kept so `--report-timestep` and the
-run log can show how the number was arrived at rather than just asserting it.
+Diagnostics of the critical time step calculation, reported by `--report-timestep` and
+the run log.
 
-`measured` records whether the power iteration supplied the step. It is false only when
-the shape function cache is not initialized, in which case the closed forms are used and
-the axisymmetric correction is NOT applied - see `measure_operator_eigenvalues`.
+`measured`: whether power iteration supplied the step. False only with an uninitialized
+shape function cache: closed forms used, axisymmetric correction NOT applied (see
+`measure_operator_eigenvalues`).
 """
 struct StabilityReport
     mechanisms::Vector{MechanismStability}
@@ -52,7 +51,7 @@ end
 """
 TimeStepData
 
-Structure to store time stepping information for the simulation.
+Time stepping information of the simulation.
 
 # Fields
 - `critical_dt::Float64`: Critical time step calculated from stability criteria [s]
@@ -87,18 +86,10 @@ end
 """
     calculate_element_characteristic_length(mesh::MeshData, elem_id::Int) -> Float64
 
-Calculate the characteristic length of a quadrilateral element.
-Uses the minimum distance between opposite sides of the element.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `elem_id::Int`: Element ID (1-based)
-
-# Returns
-- `Float64`: Characteristic length h [m]
+Compute the characteristic length h [m] of a quadrilateral element (1-based `elem_id`).
 
 # Formula
-For a quadrilateral element, h is computed as the minimum of:
+Minimum of:
 - Distance between midpoints of sides 1-2 and 3-4
 - Distance between midpoints of sides 2-3 and 4-1
 """
@@ -141,13 +132,7 @@ end
 """
     find_minimum_characteristic_length(mesh::MeshData) -> Float64
 
-Find the minimum characteristic length across all elements in the mesh.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-
-# Returns
-- `Float64`: Minimum characteristic length h_min [m]
+Return the minimum element characteristic length h_min [m] of the mesh.
 """
 function find_minimum_characteristic_length(mesh)
     h_min = Inf
@@ -164,13 +149,7 @@ end
 """
     get_maximum_diffusion_coefficient(materials) -> Float64
 
-Get the maximum diffusion coefficient among all gases.
-
-# Arguments
-- `materials`: Material data structure
-
-# Returns
-- `Float64`: Maximum diffusion coefficient D_max [m²/s]
+Return the maximum gas diffusion coefficient D_max [m²/s].
 """
 function get_maximum_diffusion_coefficient(materials)
     D_max = 0.0
@@ -187,13 +166,7 @@ end
 """
     get_minimum_gas_viscosity(materials) -> Float64
 
-Get the minimum dynamic viscosity among all gases.
-
-# Arguments
-- `materials`: Material data structure
-
-# Returns
-- `Float64`: Minimum gas dynamic viscosity μ_g [Pa·s]
+Return the minimum gas dynamic viscosity μ_g [Pa·s].
 """
 function get_minimum_gas_viscosity(materials)
     μ_min = Inf
@@ -210,25 +183,16 @@ end
 """
     get_maximum_total_concentration(mesh::MeshData, NGases::Int) -> Float64
 
-Largest TOTAL gas concentration anywhere in the problem, over both the initial
-condition and the prescribed concentration boundaries.
+Return the largest TOTAL gas concentration [mol/m^3] over the initial condition and the
+prescribed boundaries.
 
-The advective flux of Eq. (advective_flux) contracts against the total concentration,
-so it is the total that scales the operator, not the largest single species. With one
-gas the two coincide, which is why the distinction went unnoticed; with two they do
-not, and using the per-species maximum makes the advective bound too permissive by the
-ratio of total to largest species.
+The advective flux, Eq. (advective_flux), contracts against the total concentration,
+therefore the total scales the operator. Identical to the per-species maximum for one
+gas; for more gases the per-species maximum makes the advective bound too permissive by
+the ratio of total to largest species.
 
-Boundary values are included because a prescribed inlet can hold a species well above
-anything in the initial field - an inlet at 40 mol/m^3 against an interior maximum of
-33 is not unusual - and the bound has to hold there too.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `NGases::Int`: Number of gas species
-
-# Returns
-- `Float64`: Largest total concentration [mol/m^3]
+Boundary values included: a prescribed inlet can exceed the initial field (e.g. inlet at
+40 mol/m^3, interior maximum 33).
 """
 function get_maximum_total_concentration(mesh, NGases::Int;
                                          time_functions = nothing, t_end::Float64 = 0.0)
@@ -250,16 +214,12 @@ function get_maximum_total_concentration(mesh, NGases::Int;
         C_max = max(C_max, total)
     end
 
-    # Pressure-specified boundaries. These prescribe a concentration just as surely as a
-    # concentration boundary does - the solver converts them with the ideal gas law at
-    # apply_partial_pressure_bc! and at the end-of-step re-imposition - but they were not
-    # being counted here. On the carbonation benchmark that mattered: the interior starts
-    # at 41 mol/m^3 of air while the injection face holds CO2 at 113 kPa, which is
-    # 46.4 mol/m^3, so the advective bound came out 13% too permissive exactly where the
-    # gradients are steepest.
+    # Pressure-specified boundaries also prescribe a concentration (ideal gas law in
+    # apply_partial_pressure_bc! and at end-of-step re-imposition). Carbonation benchmark:
+    # interior 41 mol/m^3 of air, injection face CO2 at 113 kPa = 46.4 mol/m^3. Without
+    # them the advective bound is 13% too permissive where the gradients are steepest.
     #
-    # The conversion uses the LOWEST temperature in the problem, since C = P/(R T) is
-    # largest there and this is a bound.
+    # LOWEST temperature in the problem: C = P/(R T) is largest there (upper bound).
     R = 8.314
     T_conv = get_minimum_reference_temperature(mesh)
     if T_conv > 0.0
@@ -272,10 +232,9 @@ function get_maximum_total_concentration(mesh, NGases::Int;
         end
 
         for (node_id, pressure) in mesh.absolute_pressure_bc
-            # A time-driven pressure boundary has to be bounded over the whole stage, not
-            # sampled at t = 0: a ramp from atmospheric to injection pressure would
-            # otherwise report the atmospheric value and set a step that is stable only
-            # for the first instant of the run.
+            # Time-driven pressure: bounded over the whole stage instead of sampled at t = 0.
+            # A ramp from atmospheric to injection pressure would otherwise give a step
+            # stable only at the start of the run.
             p_max = pressure
             if time_functions !== nothing && t_end > 0.0
                 tf_id = get(mesh.absolute_pressure_tf, node_id, 0)
@@ -294,11 +253,11 @@ end
 """
     get_minimum_reference_temperature(mesh) -> Float64
 
-Lowest temperature stated anywhere in the mesh file, over the initial field and the
-prescribed temperature boundaries. Returns 293.15 K when the mesh states none.
+Return the lowest mesh-file temperature over the initial field and prescribed temperature
+boundaries; 293.15 K if none.
 
-Used to convert a prescribed pressure into a concentration for a stability bound, where
-the lowest temperature gives the largest concentration and so the tightest step.
+Converts prescribed pressures to concentrations for stability bounds: lowest temperature
+gives the largest concentration and the smallest step.
 """
 function get_minimum_reference_temperature(mesh)
     T_min = Inf
@@ -317,13 +276,11 @@ end
 """
     maximum_over_stage(time_functions, tf_id, base_value, t_end; nsamples) -> Float64
 
-Largest value a time function takes over `[0, t_end]`, by dense sampling.
+Return the largest value of a time function over `[0, t_end]` by dense sampling.
 
-Sampling rather than inspecting the curve type keeps this working for every kind a
-`TimeFunction` can be - ramp, table, CSV - without duplicating `evaluate`'s dispatch. A
-spike narrower than the sample spacing could be missed; at the default resolution that
-would have to be narrower than a thousandth of the stage, and `warn_if_aliased` already
-flags tables sampled more finely than the solver steps.
+Sampling works for every `TimeFunction` kind (ramp, table, CSV) without duplicating the
+`evaluate` dispatch. Spikes narrower than the sample spacing (a thousandth of the stage by
+default) may be missed; `warn_if_aliased` flags tables sampled finer than the solver step.
 """
 function maximum_over_stage(time_functions, tf_id::Int, base_value::Float64,
                             t_end::Float64; nsamples::Int = 1001)
@@ -340,14 +297,7 @@ end
 """
     get_maximum_initial_concentration(mesh::MeshData, NGases::Int) -> Float64
 
-Get the maximum initial gas concentration across all elements and gases.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `NGases::Int`: Number of gas species
-
-# Returns
-- `Float64`: Maximum initial concentration C_g^i [mol/m³]
+Return the maximum initial gas concentration C_g^i [mol/m³] over all elements and gases.
 """
 function get_maximum_initial_concentration(mesh, NGases::Int)
     C_max = 0.0
@@ -365,15 +315,8 @@ end
 """
     get_maximum_co2_concentration(mesh::MeshData, materials) -> Float64
 
-Get the maximum CO2 concentration from initial conditions.
-Assumes CO2 is one of the gases in the gas dictionary.
-
-# Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure
-
-# Returns
-- `Float64`: Maximum CO2 concentration C_CO2_max [mol/m³]
+Return the maximum initial CO2 concentration C_CO2_max [mol/m³]; 0 if CO2 is not in the
+gas dictionary.
 """
 function get_maximum_co2_concentration(mesh, materials)
     # Find CO2 index in gas dictionary
@@ -403,19 +346,12 @@ end
 """
     get_minimum_permeability_ratio(mesh::MeshData, materials, T_ref::Float64) -> Float64
 
-Get the minimum value of (μ_g / (C_g^i × K × T × R)) across all elements.
-This is needed for the advective time scale calculation.
+Return the minimum of μ_g / (C_g^i × K × T × R) over all elements [s/m²], for the advective
+time scale. R = 8.314 J/(mol·K).
 
 # Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure
-- `T_ref::Float64`: Reference temperature [K]
-
-# Returns
-- `Float64`: Minimum permeability ratio [s/m²]
-
-# Note
-Uses universal gas constant R = 8.314 J/(mol·K)
+- `T_ref`: Reference temperature [K]
+- `C_max`: Largest total concentration; computed if not given
 """
 function get_minimum_permeability_ratio(mesh, materials, T_ref::Float64,
                                         C_max::Float64 = NaN)
@@ -425,9 +361,8 @@ function get_minimum_permeability_ratio(mesh, materials, T_ref::Float64,
     # Get minimum gas viscosity
     μ_min = get_minimum_gas_viscosity(materials)
 
-    # Largest total concentration in the problem. Passed in by the caller so the closed
-    # form and the measured operator are scaled by the same number and their ratio means
-    # what the cross-check assumes it means; recomputed here when called standalone.
+    # Largest total concentration. Passed by the caller such that closed form and measured
+    # operator use the same scale (valid cross-check); recomputed for standalone calls.
     if !isfinite(C_max)
         C_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary))
     end
@@ -447,18 +382,15 @@ function get_minimum_permeability_ratio(mesh, materials, T_ref::Float64,
             K = soil.intrinsic_permeability
             
             if K > 0.0 && C_max > 0.0
-                # theta_g belongs in the numerator here. Unlike gas diffusion, the
-                # advective flux of Eq. (advective_flux) carries no theta_g of its own,
-                # so the theta_g of the lumped mass survives:
+                # theta_g in the numerator: the advective flux, Eq. (advective_flux), has
+                # no theta_g (unlike gas diffusion), therefore the lumped-mass theta_g remains:
                 #     dC/dt = -(R K T C /(mu theta_g)) M_hat^-1 K_e C_tot
-                # and dt <= 2/lambda_max with lambda_max = 4 R K T C/(mu theta_g h^2).
-                # The previous form omitted theta_g and used 4 in place of 2, making it
-                # 1/(2 theta_g) times the true limit - 1.55x too permissive at
-                # theta_g = 0.308, so only C_N <= 0.65 was actually stable.
-                # Measured against 2/lambda_max of the assembled operator, this form
-                # comes out at 0.95 of the true limit: slightly conservative, because
-                # the operator is nonlinear and this uses the largest concentration in
-                # each element rather than the Gauss-point values.
+                # dt <= 2/lambda_max, lambda_max = 4 R K T C/(mu theta_g h^2).
+                # Previous form (no theta_g, 4 instead of 2): 1/(2 theta_g) times the true
+                # limit, 1.55x too permissive at theta_g = 0.308 (stable only for C_N <= 0.65).
+                # Against 2/lambda_max of the assembled operator: 0.95 of the true limit.
+                # Slightly conservative (nonlinear operator, element-maximum concentration
+                # instead of Gauss-point values).
                 θ_g_e = soil.porosity * (1.0 - soil.saturation)
                 ratio = μ_min * θ_g_e / (2 * C_max * K * T_ref * R)
                 ratio_min = min(ratio_min, ratio)
@@ -473,45 +405,34 @@ end
 """
     get_maximum_reaction_parameters(mesh::MeshData, materials, C_co2_max::Float64) -> Float64
 
-Get the decay constant of the CO2 gas concentration under the reaction term,
-maximised over the mesh, for use in the reactive time scale.
+Return the maximum over the mesh of the CO2 reaction decay constant [1/s], for the
+reactive time scale.
 
     (θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r)
 
-evaluated with the lime inventory at t = 0 and the area factor a at the largest
-initial gas concentration in the mesh.
+Lime inventory at t = 0, area factor a at the largest total gas concentration.
 
 # Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure
-- `T_ref::Float64`: Reference temperature [K]
-
-# Returns
-- `Float64`: Maximum reaction parameter [1/s]
+- `T_ref`: Reference temperature [K]
 """
 function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
     param_max = 0.0
     M_lime = 74.093                 # Molar mass of Ca(OH)2 [g/mol]
 
-    # The kinetics belong to the reaction, so the same set applies to every material
+    # Reaction kinetics, same for every material
     k_o = materials.reactants.arrhenius_factor
     E_a = materials.reactants.activation_energy
     β_area = materials.reactants.interfacial_area_beta
 
-    # The area factor multiplies the rate, so it multiplies the decay constant too
-    # and must enter the time step. It grows with the TOTAL gas pressure, so the
-    # largest total concentration in the problem gives the shortest step. The species
-    # are summed rather than maximised over, because that is the quantity the factor
-    # is a function of; the same helper the advective bound uses serves here, so
-    # prescribed inlets are counted too - an injection face above anything in the
-    # initial field would otherwise be missed, and the step would come out too long.
+    # Area factor scales the rate and the decay constant, therefore enters the time step.
+    # Increases with TOTAL gas pressure: largest total concentration gives the shortest step.
+    # Species summed (argument of the factor). Same helper as the advective bound, including
+    # prescribed inlets (an injection face above the initial field would give a step too long).
     #
-    # T_ref is used for the pressure conversion because this bound is formed before
-    # the run starts, from initial data alone. A specimen that self-heats at constant
-    # volume raises its own pressure and so its own a, and it changes T and consumes
-    # its lime besides. The IMPES solver recomputes this bound from the live field on
-    # every step; what is returned here is the starting estimate and the figure the
-    # start-up report prints.
+    # T_ref for the pressure conversion: bound formed before the run from initial data. A
+    # self-heating specimen at constant volume increases its pressure (and a), changes T and
+    # consumes lime. The IMPES solver recomputes this bound each step; the returned value is
+    # the starting estimate printed in the start-up report.
     C_g_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary))
 
     # Loop through all elements
@@ -520,7 +441,7 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
         material_idx = get_element_material(mesh, elem_id)
 
         if material_idx !== nothing
-            # Get soil properties and the reaction inputs of the same material
+            # Soil properties and reaction inputs of the same material
             soil_name = materials.soil_dictionary[material_idx]
             soil = materials.soils[soil_name]
             reaction = materials.reactions[soil_name]
@@ -530,25 +451,21 @@ function get_maximum_reaction_parameters(mesh, materials, T_ref::Float64)
             θ_g = n * (1.0 - soil.saturation)  # Volumetric gas content [-]
 
             if θ_w > 0.0 && θ_g > 0.0
-                # Lime above the residual at t = 0, per unit total volume. The rate
-                # law consumes this monotonically, so t = 0 is the worst case and the
-                # time step obtained here bounds the whole run.
+                # Lime above the residual at t = 0, per unit total volume. Monotonically
+                # consumed, therefore t = 0 is the worst case for the whole run.
                 C_lime_0 = (reaction.lime_content * soil.specific_gravity *
                             (1.0 - n) * 1e6) / M_lime          # [mol/m³ total]
                 A_react = C_lime_0 * (1.0 - reaction.residual_lime)
 
-                # The decay constant of that first-order equation, from the same helper
-                # the solver's adaptive step calls on the live field, so the start-up
-                # figure and the running one cannot drift apart.
+                # Decay constant of the first-order equation. Same helper as the solver
+                # adaptive step, consistent start-up and running values.
                 #
-                # The solubility cap was removed from the rate law, so A_react is now
-                # the full lime inventory above the residual rather than A_aq,sat.
-                # For typical mixtures that is larger by two orders of magnitude, and
-                # the reactive time scale is correspondingly shorter.
+                # No solubility cap: A_react = full lime above the residual instead of
+                # A_aq,sat. Two orders of magnitude larger for typical mixtures, reactive
+                # time scale correspondingly shorter.
                 #
-                # C_g_max is passed through the area factor's own argument rather than
-                # a pre-multiplied a_max, which is the same number: the factor is
-                # evaluated at the same total concentration and the same T_ref.
+                # C_g_max passed as the area-factor argument (equivalent to a pre-multiplied
+                # a_max at the same total concentration and T_ref).
                 param = reaction_decay_constant(C_g_max, C_lime_0, C_lime_0 - A_react,
                                                 θ_w, θ_g, T_ref, k_o, E_a, β_area)
                 param_max = max(param_max, param)
@@ -563,13 +480,7 @@ end
 """
     get_minimum_gas_volume_fraction(materials) -> Float64
 
-Get the minimum gas volume fraction θ_g = n - θ_w across all soils.
-
-# Arguments
-- `materials`: Material data structure
-
-# Returns
-- `Float64`: Minimum gas volume fraction θ_g [-]
+Return the minimum gas volume fraction θ_g = n - θ_w [-] over all soils.
 """
 function get_minimum_gas_volume_fraction(materials)
     θ_g_min = Inf
@@ -590,43 +501,37 @@ end
 #------------------------------------------------------------------------------
 # Measured operator spectrum
 #
-# The stability limit of forward Euler is Δt <= 2/λ_max, where λ_max is the largest
-# eigenvalue of the semi-discrete operator M̂⁻¹K the solver actually assembles. The
-# closed forms further down evaluate that eigenvalue analytically as 4·coef/h_min², a
-# result which holds for a uniform PLANE quad mesh and nowhere else.
+# Forward Euler stability limit: Δt <= 2/λ_max, λ_max = largest eigenvalue of the
+# assembled semi-discrete operator M̂⁻¹K. The closed forms below use 4·coef/h_min²,
+# valid only for a uniform PLANE quad mesh.
 #
-# Under the axisymmetric formulation it is wrong at the axis. Both M̂ and K carry the
-# measure r_gp |det J| (`ShapeFunctions.get_weight`), and away from the axis the radius
-# cancels between them, recovering the plane value. In the single element touching r = 0
-# it does not cancel, because r varies from 0 to h across that element. For 1D radial
-# linear elements the exact integrals give
+# Axisymmetric formulation: incorrect at the axis. M̂ and K both include r_gp |det J|
+# (`ShapeFunctions.get_weight`); away from the axis the radius cancels (plane value).
+# In the element touching r = 0, r varies from 0 to h and does not cancel. Exact
+# integrals for 1D radial linear elements:
 #
 #     interior node r_j:   M_j = h·r_j     K_jj = 2r_j/h    λ = 2K/M = 4/h²
 #     axis node r = 0:     M_0 = h²/6      K_00 = 1/2       λ = 2K/M = 6/h²
 #
-# so λ_max at the axis is 1.5x the plane value and the closed form returns a step 1.5x
-# too large there. At the shipped Courant number of 0.9 that is an effective Courant of
-# 1.35: unstable, and localized to the column of nodes on the axis, where the clamp in
-# the solver bounds it into a standing sawtooth rather than a visible divergence.
+# λ_max at the axis = 1.5x the plane value, closed-form step 1.5x too large. At the
+# default Courant number 0.9: effective Courant 1.35, unstable on the axis nodes, bounded
+# by the solver clamp into a standing sawtooth instead of visible divergence.
 #
-# Rather than patch the closed form with an axisymmetric special case - which would then
-# need another special case for graded meshes, distorted elements, and any future
-# element type - measure λ_max directly from the assembled operator. The assembly
-# routines already carry the measure correctly; only this estimate did not.
+# λ_max measured directly from the assembled operator instead of special cases for
+# axisymmetry, graded meshes, distorted elements or new element types. The assembly
+# routines already include the correct measure.
 #------------------------------------------------------------------------------
 
 """
     apply_element_stiffness!(y, x, mesh, K_elements, coef) -> y
 
-Matrix-free product `y = Σ_e coef[e] · K_e · x_e`, scattered back to nodes.
+Compute the matrix-free product `y = Σ_e coef[e] · K_e · x_e`, scattered to nodes. Mutates `y`.
 
-`K_elements` holds the geometric element stiffness matrices of
-`assemble_element_stiffness_matrices`, whose quadrature measure already carries `r_gp`
-on an axisymmetric run, so this product is correct in both formulations.
+`K_elements`: geometric stiffness matrices of `assemble_element_stiffness_matrices`
+(measure includes `r_gp` for axisymmetry), valid for both formulations.
 
-Deliberately serial. It runs a few hundred times at startup on a few thousand elements,
-which is milliseconds, and a serial scatter-add needs no per-chunk buffers and gives a
-summation order that does not depend on the thread count.
+Serial on purpose: a few hundred calls at startup (milliseconds). No per-chunk buffers,
+thread-count-independent summation order.
 """
 function apply_element_stiffness!(y::Vector{Float64}, x::Vector{Float64}, mesh,
                                   K_elements::Vector{Matrix{Float64}}, coef::Vector{Float64})
@@ -654,33 +559,25 @@ end
 """
     measure_max_eigenvalue(mesh, M, K_elements, coef; tol, maxiter) -> Float64
 
-Largest eigenvalue of `M̂⁻¹ Σ_e coef[e] K_e` by power iteration, i.e. the largest `λ`
-of the generalised symmetric problem `K u = λ M u`.
+Compute the largest eigenvalue of `M̂⁻¹ Σ_e coef[e] K_e` by power iteration, i.e. the
+largest `λ` of the generalised symmetric problem `K u = λ M u`.
 
-`K` is positive semi-definite and `M` is positive and diagonal, so every eigenvalue is
-real and non-negative and the iteration converges to `λ_max` with no shift. The estimate
-is the Rayleigh quotient `(xᵀKx)/(xᵀMx)`.
+`K` positive semi-definite, `M` positive diagonal: real non-negative eigenvalues,
+convergence to `λ_max` without shift. Estimate: Rayleigh quotient `(xᵀKx)/(xᵀMx)`.
 
-The Rayleigh quotient approaches `λ_max` strictly FROM BELOW, so an under-converged
-iteration reports a step that is too LONG - the unsafe direction, and the exact failure
-this routine exists to prevent. That matters more here than it usually would, because the
-top of a Laplacian-like spectrum is densely clustered and the quotient plateaus long
-before it has converged: on the 2 mm carbonation mesh, 50 iterations sit 1.2% low and
-200 still sit 0.12% low. Measured against a dense eigensolve, 2000 iterations reach
-within 0.006%, at a cost of about 50 ms once at startup. That is the default, and it is
-cheap enough that there is no reason to economise.
+The Rayleigh quotient approaches `λ_max` FROM BELOW, therefore under-convergence gives a
+step too LONG (unsafe). The top of a Laplacian-like spectrum is densely clustered and the
+quotient plateaus early: on the 2 mm carbonation mesh, 50 iterations are 1.2% low and 200
+are 0.12% low. 2000 iterations: within 0.006% of a dense eigensolve, ~50 ms once at
+startup (default).
 
-The caller additionally never lets the measurement lengthen the step relative to the
-closed form - see `calculate_critical_time_step` - so residual under-convergence cannot
-make a run less stable than it is today.
+The caller never lets the measurement lengthen the step relative to the closed form (see
+`calculate_critical_time_step`).
 
-The starting vector is deterministic, so the reported step is reproducible run to run.
-It mixes a smooth component with a checkerboard one because the top eigenvector of a
-Laplacian-like operator is the highest-frequency mode the mesh supports, and a purely
-smooth start would need many more iterations to develop it.
+Deterministic starting vector, reproducible step. Smooth plus checkerboard components:
+the top eigenvector is the highest-frequency mesh mode, slow to develop from a smooth start.
 
-Returns 0.0 when the operator is empty (every coefficient zero, or a degenerate mass),
-which the caller reads as "this mechanism imposes no limit".
+Returns 0.0 for an empty operator (all coefficients zero, or degenerate mass): no limit.
 """
 function measure_max_eigenvalue(mesh, M::Vector{Float64}, K_elements::Vector{Matrix{Float64}},
                                 coef::Vector{Float64}; tol::Float64 = 1e-6, maxiter::Int = 2000)
@@ -691,9 +588,8 @@ function measure_max_eigenvalue(mesh, M::Vector{Float64}, K_elements::Vector{Mat
     x = Vector{Float64}(undef, Nnodes)
     y = Vector{Float64}(undef, Nnodes)
 
-    # Deterministic seed. The multiplier is the golden angle in radians, which avoids
-    # resonating with any regular node numbering; the alternating term seeds the
-    # high-frequency content the top eigenvector is built from.
+    # Deterministic seed. Golden angle in radians: no resonance with regular node
+    # numbering. Alternating term: high-frequency content of the top eigenvector.
     @inbounds for i in 1:Nnodes
         x[i] = sin(2.399963229728653 * i) + (isodd(i) ? 0.5 : -0.5)
     end
@@ -715,7 +611,7 @@ function measure_max_eigenvalue(mesh, M::Vector{Float64}, K_elements::Vector{Mat
         den > 0.0 || return 0.0
         λ_new = num / den
 
-        # x <- M⁻¹Kx, renormalised. A node with no mass cannot carry the mode.
+        # x <- M⁻¹Kx, renormalised. Massless nodes set to zero
         @inbounds for i in 1:Nnodes
             x[i] = M[i] > 0.0 ? y[i] / M[i] : 0.0
         end
@@ -736,31 +632,26 @@ end
 """
     build_element_coefficients(mesh, materials, mechanism, D_max, C_max, T_ref) -> Vector{Float64}
 
-Per-element scalar multiplying the geometric stiffness for one mechanism, chosen so that
-`M̂⁻¹ Σ_e coef[e] K_e` reproduces the operator the solver applies in
-`fully_explicit_diffusion_solver`.
+Return the per-element scalar of the geometric stiffness for one mechanism, such that
+`M̂⁻¹ Σ_e coef[e] K_e` reproduces the operator of `fully_explicit_diffusion_solver`.
 
-- `:diffusion`  `θ_g · D_max · τ`, matching the `θ_g * D_g * τ` scaling of the diffusive
-  flux. `M` carries `θ_g`, so it cancels as the closed form asserts.
-- `:advection`  `R · K · C_max · T_ref / μ_min`, matching the advective flux
-  `R k C_g T / μ_g`. Evaluated with the largest total concentration and smallest
-  viscosity in the problem, which is the tightest bound the frozen-coefficient
-  linearisation admits.
-- `:conduction` `λ_e`, the effective conductivity, to be paired with the lumped thermal
-  capacity rather than with `M`.
-- `:su_stabilization` `R · K · C_max · T_ref / μ_min` — identical to `:advection`. Not a
-  coincidence: for any nodal vector `x`, Cauchy-Schwarz gives
-  `xᵀK^SU_e x = Σ_gp τ*[v·∇C_h]² w ≤ (max τ*|v|²) xᵀK_e x`, so the SU operator's
-  Rayleigh quotient is bounded by treating it as an extra isotropic coefficient on the
-  SAME geometric `K_e` every other mechanism uses. Bounding `τ*|v|²`: `τ* ≤ h_e/(2|v|)`
-  unconditionally (Brooks & Hughes, independent of Pe), so `τ*|v|² ≤ h_e|v|/2`; with
-  `v = -(k/μ_g)RT∇C_tot` and the standard conservative gradient estimate
-  `|∇C_tot| ≤ C_max/h_e`, the `h_e` cancels exactly, giving
-  `coef ≤ Rk C_max T_ref/(2μ_min) = coef_advection/2`. The companion thermal-pressure
-  term (`q_thermal_press`) gives the identical bound by the symmetric argument (`T_ref`
-  playing the role `C_max` played), so BOTH SU terms combined are bounded by exactly
-  `coef_advection` — this mechanism's coefficient. See
-  `src/ADVECTION_STABILIZATION_NOTES.md` for the full derivation.
+- `:diffusion`  `θ_g · D_max · τ`, same scaling as the diffusive flux `θ_g * D_g * τ`.
+  `θ_g` cancels with `M`, as in the closed form.
+- `:advection`  `R · K · C_max · T_ref / μ_min`, same as the advective flux
+  `R k C_g T / μ_g`. Largest total concentration and smallest viscosity: tightest bound
+  of the frozen-coefficient linearisation.
+- `:conduction` `λ_e` (effective conductivity), paired with the lumped thermal capacity
+  instead of `M`.
+- `:su_stabilization` `R · K · C_max · T_ref / μ_min`, identical to `:advection`. For any
+  nodal vector `x`, Cauchy-Schwarz gives
+  `xᵀK^SU_e x = Σ_gp τ*[v·∇C_h]² w ≤ (max τ*|v|²) xᵀK_e x`, therefore the SU Rayleigh
+  quotient is bounded by an extra isotropic coefficient on the SAME geometric `K_e`.
+  `τ* ≤ h_e/(2|v|)` unconditionally (Brooks & Hughes, independent of Pe), so
+  `τ*|v|² ≤ h_e|v|/2`. With `v = -(k/μ_g)RT∇C_tot` and `|∇C_tot| ≤ C_max/h_e`, `h_e`
+  cancels: `coef ≤ Rk C_max T_ref/(2μ_min) = coef_advection/2`. The thermal-pressure
+  companion (`q_thermal_press`) gives the same bound (`T_ref` in place of `C_max`),
+  therefore both SU terms together are bounded by `coef_advection`. Full derivation in
+  `src/ADVECTION_STABILIZATION_NOTES.md`.
 """
 function build_element_coefficients(mesh, materials, mechanism::Symbol,
                                     D_max::Float64, C_max::Float64, T_ref::Float64)
@@ -770,8 +661,8 @@ function build_element_coefficients(mesh, materials, mechanism::Symbol,
 
     μ_min = get_minimum_gas_viscosity(materials)
 
-    # Gas contribution to the effective conductivity, needed only for :conduction and
-    # formed the same way as in get_minimum_conduction_time_scale.
+    # Gas contribution to the effective conductivity, :conduction only (same as
+    # get_minimum_conduction_time_scale)
     λ_g = 0.0
     NGases = length(materials.gas_dictionary)
     if mechanism === :conduction && NGases > 0
@@ -793,8 +684,7 @@ function build_element_coefficients(mesh, materials, mechanism::Symbol,
         if mechanism === :diffusion
             coef[e] = θ_g * D_max * soil.granular_tortuosity
         elseif mechanism === :advection || mechanism === :su_stabilization
-            # su_stabilization reuses this formula exactly - see the docstring above for
-            # the Cauchy-Schwarz argument establishing coef_su <= coef_advection.
+            # su_stabilization: same formula (coef_su <= coef_advection, see docstring)
             K = soil.intrinsic_permeability
             coef[e] = (K > 0.0 && μ_min > 0.0) ? R * K * C_max * T_ref / μ_min : 0.0
         elseif mechanism === :conduction
@@ -812,11 +702,11 @@ end
 """
     assemble_thermal_capacity_vector!(C_T, mesh, materials) -> C_T
 
-Lumped volumetric heat capacity per node, `C_a = Σ_gp C_mix N_a w_gp W_gp`.
+Assemble the lumped volumetric heat capacity per node, `C_a = Σ_gp C_mix N_a w_gp W_gp`.
+Mutates `C_T`.
 
-The energy equation's counterpart to `assemble_lumped_mass_vector!`: the conduction
-operator is `C_T⁻¹ Σ_e λ_e K_e`, so measuring its spectrum needs this rather than the
-gas lumped mass. `C_mix` is formed exactly as in `get_minimum_conduction_time_scale`.
+Energy-equation counterpart of `assemble_lumped_mass_vector!`: conduction operator
+`C_T⁻¹ Σ_e λ_e K_e`. `C_mix` formed as in `get_minimum_conduction_time_scale`.
 """
 function assemble_thermal_capacity_vector!(C_T::Vector{Float64}, mesh, materials)
     fill!(C_T, 0.0)
@@ -859,13 +749,13 @@ end
 """
     measure_operator_eigenvalues(mesh, materials, D_max, C_max, T_ref, active) -> Dict{Symbol,Float64}
 
-Measured `λ_max` for each active mechanism, or an empty `Dict` when the measurement
-cannot be made.
+Return the measured `λ_max` per active mechanism; empty `Dict` if the measurement is not
+possible.
 
-The one case it cannot is an uninitialized shape function cache: `calculate_critical_time_step`
-is reachable from tests and tooling that never call `initialize_shape_functions!`. The
-caller then falls back to the closed forms, WITHOUT the axisymmetric correction - which
-is why `kernel.jl` initializes the cache at step [6/8], before the time step at [7/8].
+Not possible only with an uninitialized shape function cache (tests and tooling without
+`initialize_shape_functions!`). The caller then uses the closed forms WITHOUT the
+axisymmetric correction; therefore `kernel.jl` initializes the cache at step [6/8],
+before the time step at [7/8].
 """
 function measure_operator_eigenvalues(mesh, materials, D_max::Float64, C_max::Float64,
                                       T_ref::Float64, active::Dict{Symbol,Bool})
@@ -897,20 +787,13 @@ end
 """
     calculate_critical_time_step(mesh::MeshData, materials, T_ref::Float64) -> Float64
 
-Calculate the critical time step based on three stability criteria:
+Compute the critical time step Δt_crit [s] from the stability criteria:
 1. Diffusive time scale: h_min² / (D_max × τ)
 2. Advective time scale: h_min² × (μ_g / (C_g^i × K × T × R))_min
 3. Reactive time scale: 1 / ((θ_w/θ_g) × k_T × a × K_H × R × T × (A_s - A_r))
 
-The critical time step is the minimum of these three values.
-
 # Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure
-- `T_ref::Float64`: Reference temperature [K]
-
-# Returns
-- `Float64`: Critical time step Δt_crit [s]
+- `T_ref`: Reference temperature [K]
 
 # Formula
 ```
@@ -924,47 +807,40 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     # Find minimum characteristic length
     h_min = find_minimum_characteristic_length(mesh)
 
-    # Which mechanisms are actually active. A criterion for a term the solver is not
-    # assembling must not bound the step: a diffusion-only run was previously reporting
-    # "Advective" as its limiting scale, because every criterion was evaluated whether
-    # or not its term was switched on. Defaults to all-on when no settings are supplied.
+    # Active mechanisms only. Inactive terms must not bound the step (previously a
+    # diffusion-only run reported "Advective" as limiting). All on without settings.
     on(key) = solver_settings === nothing || get(solver_settings, key, 1) == 1
     use_diffusion   = on("diffusion")
     use_advection   = on("advection")
     use_reaction    = on("reaction_kinetics")
     use_conduction  = on("heat_conduction")
-    # SU stabilization adds a second, equal-sized diffusion-like operator on top of the
-    # advective one (see build_element_coefficients' :su_stabilization docstring), so it
-    # must contribute its own term to the harmonic sum below - without this, dt is chosen
-    # for the unstabilized advective operator and is roughly 2x too long for the actual
-    # (stabilized) one, which is exactly what let the clamp keep firing after
-    # advection_stabilization was turned on.
+    # SU stabilization adds a second diffusion-like operator of the same size as the
+    # advective one (see build_element_coefficients, :su_stabilization), with its own term
+    # in the harmonic sum. Without it dt is ~2x too long for the stabilized operator, and
+    # the clamp remains active with advection_stabilization on.
     use_su_stabilization = use_advection && on("advection_stabilization")
 
-    # Under IMPES the advective term is solved implicitly (see IMPES_FORMULATION_NOTES.md),
-    # so neither it nor its SU companion bounds the explicit step any more. They are still
-    # MEASURED and still reported - they are the numbers that justify the scheme - but they
-    # are withheld from the harmonic sum below. What replaces them is a Courant limit
-    # θ_g h / |v|, which depends on a velocity field that does not exist until the solver
-    # runs; the IMPES solver therefore recomputes the step every step, and the value
-    # returned here is only the starting one.
+    # IMPES: implicit advective term (see IMPES_FORMULATION_NOTES.md), therefore neither
+    # advection nor SU bounds the explicit step. Both still MEASURED and reported
+    # (justification of the scheme), excluded from the harmonic sum. Replaced by the
+    # Courant limit θ_g h / |v|, which requires the velocity field; the IMPES solver
+    # recomputes the step each step, and this value is the starting one.
     use_impes = solver_settings !== nothing && get(solver_settings, "impes", false)
 
     # Get maximum diffusion coefficient
     D_max = get_maximum_diffusion_coefficient(materials)
 
-    # Maximum tortuosity across all soils. D_eff = θ_g τ D (Eq. effective_diffusion of
-    # the manuscript) is a multiplier, not a divisor, so the largest effective
-    # diffusivity — and hence the tightest stability bound — occurs at the largest τ.
+    # Maximum tortuosity over all soils. D_eff = θ_g τ D, Eq. (effective_diffusion): τ is
+    # a multiplier, therefore the largest τ gives the tightest bound.
     τ_max = 0.0
     for soil_name in materials.soil_dictionary
         soil = materials.soils[soil_name]
         τ_max = max(τ_max, soil.granular_tortuosity)
     end
 
-    # Largest total gas concentration anywhere, initial field and every prescribed
-    # boundary alike. It scales the advective operator, so it is needed both by the
-    # closed form (through get_minimum_permeability_ratio) and by the measured one.
+    # Largest total gas concentration (initial field and prescribed boundaries). Scales
+    # the advective operator, used by the closed form (get_minimum_permeability_ratio)
+    # and the measured one.
     C_max = get_maximum_total_concentration(mesh, length(materials.gas_dictionary);
                                             time_functions = time_functions, t_end = t_end)
 
@@ -972,17 +848,14 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     #
     #     Δt <= h_min^2 / (2 D_max τ)
     #
-    # theta_g does NOT appear. The discrete equation is
+    # No theta_g. Discrete equation:
     #     theta_g M_hat dC/dt = -(theta_g D tau) K C
-    # so theta_g cancels and the operator is (D tau) M_hat^-1 K, whose largest
-    # eigenvalue on a uniform quad mesh is 4(D tau)/h^2. Forward Euler needs
-    # dt <= 2/lambda_max, giving the expression above.
+    # theta_g cancels; operator (D tau) M_hat^-1 K, largest eigenvalue 4(D tau)/h^2 on a
+    # uniform quad mesh. Forward Euler: dt <= 2/lambda_max.
     #
-    # The earlier form h^2 tau/(4 theta_g D) carried a spurious 1/theta_g, a 4 in
-    # place of a 2, and tau in the numerator from when D_eff = theta_g D / tau. It was
-    # verified against the true 2/lambda_max of the assembled operator; that same
-    # eigenvalue argument, with D_eff now multiplying by tau instead of dividing,
-    # gives the expression above.
+    # Earlier form h^2 tau/(4 theta_g D) had a spurious 1/theta_g, 4 instead of 2, and tau
+    # in the numerator (from D_eff = theta_g D / tau). Same eigenvalue argument with D_eff
+    # multiplied by tau gives the expression above.
     dt_diffusion = Inf
     if use_diffusion && D_max > 0.0
         dt_diffusion = h_min^2 / (2 * D_max * τ_max)
@@ -997,16 +870,15 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
         end
     end
 
-    # Retained for the cross-check against the measured spectrum below. These are the
-    # closed forms and they assume a uniform plane quad mesh; where the measurement
-    # disagrees with them by more than a few percent, the mesh or the formulation is
-    # outside what they describe and the measurement is the one to trust.
+    # Closed forms (uniform plane quad mesh) kept for the cross-check with the measured
+    # spectrum. Disagreement above a few percent: mesh or formulation outside their
+    # validity, measurement preferred.
     dt_diffusion_analytic = dt_diffusion
     dt_advection_analytic = dt_advection
 
-    # SU stabilization, closed form. coef_su == coef_advection exactly (see
-    # build_element_coefficients), so the closed-form step is identical to the
-    # advective one before the measured spectrum is applied to each independently below.
+    # SU stabilization, closed form. coef_su == coef_advection (see
+    # build_element_coefficients), same closed-form step as advection before the
+    # independent measured spectra below.
     dt_su = use_su_stabilization ? dt_advection : Inf
     dt_su_analytic = dt_su
 
@@ -1020,8 +892,7 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     end
 
     # Thermal conduction. Same operator structure as gas diffusion with
-    # (theta_g D / tau) -> lambda_e and theta_g -> C_mix, so it carries the same
-    # factor of 2 rather than 4.
+    # (theta_g D / tau) -> lambda_e and theta_g -> C_mix, therefore factor 2 instead of 4.
     dt_conduction = Inf
     if use_conduction
         dt_conduction = get_minimum_conduction_time_scale(mesh, materials, h_min)
@@ -1029,29 +900,22 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
     dt_conduction_analytic = dt_conduction
 
     #--------------------------------------------------------------------------
-    # Measured spectrum. Replaces each closed form above with 2/λ_max of the operator
-    # the solver actually assembles, which is the only version that is correct under the
-    # axisymmetric formulation - see the block comment above `apply_element_stiffness!`.
+    # Measured spectrum. Each closed form replaced by 2/λ_max of the assembled operator,
+    # the only correct version under axisymmetry (see block comment above
+    # `apply_element_stiffness!`).
     #
-    # A mechanism whose measured λ_max is zero has no operator on this mesh and imposes
-    # no limit, which is Inf rather than a fallback to the closed form. A measurement
-    # that could not be made at all (uninitialized shape functions) leaves every closed
-    # form in place.
+    # Measured λ_max = 0: no operator on this mesh, no limit (Inf, no closed-form
+    # fallback). Measurement not possible (uninitialized shape functions): closed forms kept.
     #
-    # The measurement is only ever allowed to SHORTEN the step: `dt = min(measured,
-    # analytic)`. Two reasons, and both matter.
+    # The measurement can only SHORTEN the step: `dt = min(measured, analytic)`.
     #
-    # First, the power iteration approaches λ_max from below, so a residual under-
-    # convergence would lengthen the step - the unsafe direction. Taking the minimum
-    # makes that impossible by construction.
+    # 1. Power iteration approaches λ_max from below; under-convergence would lengthen
+    #    the step (unsafe). The minimum prevents it by construction.
     #
-    # Second, the closed forms are not merely approximate: on a uniform plane quad mesh
-    # they are EXACT. Measured against a dense eigensolve on the 2 mm mesh the plane
-    # closed form reproduces λ_max to all printed digits. Letting a 2000-iteration
-    # estimate override an exact result would be a regression on every plane run in the
-    # verification suite, for no gain. Where the two disagree, it is because the mesh or
-    # the formulation is outside what the closed form describes, and there the
-    # measurement is larger - which is exactly when the minimum picks it.
+    # 2. Closed forms are EXACT on a uniform plane quad mesh (2 mm mesh: same λ_max as a
+    #    dense eigensolve to all printed digits). Where they disagree, the mesh or
+    #    formulation is outside their validity and the measurement is larger, i.e. the
+    #    minimum selects it.
     #--------------------------------------------------------------------------
     active = Dict(:diffusion  => use_diffusion && D_max > 0.0,
                   :advection  => use_advection,
@@ -1076,17 +940,13 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
         dt_su = min(dt_su, dt_from(λ_measured[:su_stabilization]))
     end
 
-    # Diffusion-like operators acting on the same node do not combine by taking a
-    # minimum: each limit above is derived as if its term acted alone, but the
-    # eigenvalues add. Combining them as a harmonic sum,
+    # Diffusion-like operators on the same node: eigenvalues add, therefore the combined
+    # limit is a harmonic sum instead of a minimum,
     #     1/dt_combined = 1/dt_a + 1/dt_b + ...
-    # is the bound for the summed operator and reduces to the single-term limit when
-    # only one is active. Demonstrated on advection_1d, where the molecular and
-    # advective Fourier numbers were 0.315 and 0.439 individually — both stable — but
-    # 0.754 together, and the run produced NaN.
+    # (single-term limit when only one is active). advection_1d: molecular and advective
+    # Fourier numbers 0.315 and 0.439 (each stable), 0.754 combined, NaN.
     #
-    # Under IMPES the advective and SU operators are not integrated explicitly, so they
-    # are excluded here. Everything else about the combination is unchanged.
+    # IMPES: advective and SU operators excluded (not integrated explicitly).
     explicit_dts = use_impes ? (dt_diffusion, dt_conduction) :
                                (dt_diffusion, dt_advection, dt_conduction, dt_su)
     inv_sum = 0.0
@@ -1097,16 +957,14 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
 
     dt_min = min(dt_diffusive_like, dt_reaction)
 
-    # Name the single mechanism that contributes most, so the log points at the term
-    # actually setting the step. su_stabilization is never named on its own: by
-    # construction dt_su == dt_advection whenever it is active (same coefficient, same
-    # measured spectrum), so it can only tie dt_advection, never beat it, and the
-    # "Advective" branch below already wins that tie.
+    # Name of the largest single contributor, for the log. su_stabilization never named:
+    # dt_su == dt_advection when active (same coefficient and spectrum), and the
+    # "Advective" branch wins the tie.
     limiting_scale = "Unknown"
     if dt_min == dt_reaction
         limiting_scale = "Reactive"
     elseif use_impes
-        # dt_advection and dt_su are implicit here and cannot name the limit.
+        # dt_advection and dt_su implicit, excluded from the name
         smallest = min(dt_diffusion, dt_conduction)
         limiting_scale = smallest == dt_diffusion ? "Diffusive" : "Thermal conduction"
         if inv_sum > 0.0 && dt_diffusive_like < 0.95 * smallest
@@ -1121,17 +979,14 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
         end
     end
 
-    # Nothing is left to bound the starting step: an IMPES run with no diffusion, no
-    # conduction and no reaction (axisym_darcy_radial is exactly this) has only the
-    # Courant limit, which needs a velocity field. Start from the output cadence and let
-    # the solver's adaptive control take over on the first step.
+    # No bound on the starting step: IMPES without diffusion, conduction and reaction
+    # (e.g. axisym_darcy_radial) has only the Courant limit, which requires a velocity
+    # field. Start from the output interval; adaptive control from the first step.
     if use_impes && !isfinite(dt_min)
         limiting_scale = "Courant (IMPES, set at runtime)"
     end
 
-    # Diagnostics behind the number, so the log and --report-timestep can show how it was
-    # arrived at. λ_analytic is recovered from the closed-form step as 2/Δt, the same
-    # relation the closed forms were derived from.
+    # Diagnostics for the log and --report-timestep. λ_analytic = 2/Δt of the closed-form step
     λ_of(dt) = (isfinite(dt) && dt > 0.0) ? 2.0 / dt : NaN
 
     mechanisms = [
@@ -1139,9 +994,8 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
                            get(λ_measured, :diffusion, NaN),
                            use_diffusion ? λ_of(dt_diffusion_analytic) : NaN,
                            dt_diffusion),
-        # The IMPES suffix marks a row that was measured but withheld from the step. It is
-        # kept visible on purpose: the advective dt is the number the whole scheme exists
-        # to remove, and hiding it would make the report unable to show the gain.
+        # IMPES suffix: measured but excluded from the step. Visible on purpose to show the
+        # gain over the explicit advective dt.
         MechanismStability(use_impes ? "Advective [implicit]" : "Advective", use_advection,
                            get(λ_measured, :advection, NaN),
                            use_advection ? λ_of(dt_advection_analytic) : NaN,
@@ -1155,18 +1009,15 @@ function calculate_critical_time_step(mesh, materials, T_ref::Float64, solver_se
                            get(λ_measured, :su_stabilization, NaN),
                            use_su_stabilization ? λ_of(dt_su_analytic) : NaN,
                            dt_su),
-        # Placeholder for the limit that actually binds an IMPES run. It has no closed
-        # form and no eigenvalue: θ_g h / |v| needs a velocity field, which the solver
-        # produces on its first step.
+        # Placeholder for the governing IMPES limit. No closed form or eigenvalue:
+        # θ_g h / |v| requires the velocity field of the first step.
         MechanismStability("Courant (IMPES)", use_impes, NaN, NaN, Inf),
-        # The reaction is a nodal ODE with no spatial operator, so it has no eigenvalue
-        # to measure and no mesh dependence: its limit is unchanged by any of this.
+        # Reaction: nodal ODE, no spatial operator, no eigenvalue, no mesh dependence
         MechanismStability("Reactive", use_reaction, NaN, NaN, dt_reaction),
     ]
 
-    # is_axisymmetric() throws on an uninitialized cache, which is exactly the case where
-    # `measured` is false, so report the formulation as plane rather than propagating an
-    # error out of a diagnostics field.
+    # is_axisymmetric() throws on an uninitialized cache (`measured` false): report plane
+    # instead of an error in a diagnostics field
     axisym = ShapeFunctions.shape_funcs !== nothing && ShapeFunctions.is_axisymmetric()
 
     report = StabilityReport(mechanisms, measured, axisym,
@@ -1179,25 +1030,18 @@ end
 """
     get_minimum_conduction_time_scale(mesh, materials, h_min) -> Float64
 
-Smallest explicit stability limit of the heat conduction operator across the mesh,
+Return the smallest explicit stability limit [s] of the heat conduction operator,
+fourth entry of Eq. (time_step).
 
     Δt <= h_min^2 C_mix / (2 λ_e)
 
-the fourth entry of Eq. (time_step). Returns `Inf` where no material conducts, so a
-run without conduction is unaffected.
+`Inf` if λ_e is zero everywhere.
 
-Note this bounds conduction acting alone. Where gas diffusion, gas advection and
-conduction are all active they are diffusion-like operators on the same node and
-their stability limits do not simply combine by taking a minimum; that is a known
-gap, recorded against Phase 7.
+Bound for conduction only. Combination with diffusion and advection handled by the
+harmonic sum in `calculate_critical_time_step`.
 
 # Arguments
-- `mesh`: Mesh data structure
-- `materials`: Material data structure
-- `h_min::Float64`: Smallest characteristic element size [m]
-
-# Returns
-- `Float64`: Limiting conduction time step [s], or `Inf` if λ_e is zero everywhere
+- `h_min`: Smallest characteristic element size [m]
 """
 function get_minimum_conduction_time_scale(mesh, materials, h_min::Float64)
     dt_min = Inf
@@ -1239,15 +1083,10 @@ end
 """
     calculate_time_step_info(mesh::MeshData, materials, calc_params::Dict) -> TimeStepData
 
-Calculate all time stepping information for the simulation.
+Compute all time stepping information of the simulation.
 
 # Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure
-- `calc_params::Dict`: Calculation parameters including Courant number and total time
-
-# Returns
-- `TimeStepData`: Structure containing all time step information
+- `calc_params`: Calculation parameters, including Courant number and total time
 
 # Example
 ```julia
@@ -1272,8 +1111,8 @@ function calculate_time_step_info(mesh, materials, calc_params::Dict)
     end
 
     
-    # Calculate critical time step. The time functions and the stage length go in so a
-    # ramped pressure boundary is bounded over the whole stage rather than at t = 0.
+    # Critical time step. Time functions and stage length: ramped pressure boundaries
+    # bounded over the whole stage instead of at t = 0
     time_data.critical_dt, limiting_scale, stability =
         calculate_critical_time_step(mesh, materials, T_ref,
                                      get(calc_params, "solver_settings", nothing);
@@ -1287,13 +1126,10 @@ function calculate_time_step_info(mesh, materials, calc_params::Dict)
     # Get time per load step (when data is saved)
     time_data.time_per_step = calc_params["time_stepping"]["time_per_step"]
 
-    # An IMPES run whose only remaining limit is the Courant condition has no finite
-    # starting step: every explicit mechanism is either off or implicit, and the velocity
-    # field that would bound it does not exist yet (axisym_darcy_radial is exactly this
-    # case - advection only, diffusion off). Seed from the output cadence, which is the
-    # coarsest step the run could ever want, and let the solver's adaptive control shorten
-    # it on the first step. Never reached under the explicit integrator, where a run with
-    # no finite limit at all would be a run with no active mechanism.
+    # IMPES with only the Courant limit: no finite starting step (explicit mechanisms off
+    # or implicit, no velocity field yet; e.g. axisym_darcy_radial, advection only).
+    # Starting step = output interval, shortened by adaptive control on the first step.
+    # Not reached by the explicit integrator (would require no active mechanism).
     if !isfinite(time_data.critical_dt)
         time_data.critical_dt = Float64(time_data.time_per_step)
     end
@@ -1325,11 +1161,9 @@ end
 
 Print the per-mechanism stability table behind the chosen critical time step.
 
-Shows the measured `λ_max` beside the closed-form estimate and their ratio, so a mesh or
-a formulation the closed forms do not describe is visible rather than silent. A ratio
-materially above 1 means the closed form would have set a step that large a factor too
-long - which is what the axisymmetric formulation did at the axis before the spectrum
-was measured.
+Measured `λ_max`, closed-form estimate and their ratio, to expose meshes or formulations
+outside the closed-form validity. Ratio above 1: closed-form step too long by that factor
+(e.g. axisymmetric formulation at the axis).
 """
 function log_stability_report(report::StabilityReport, log_print)
     log_print("   Formulation: $(report.axisymmetric ? "axisymmetric" : "plane")")
@@ -1359,9 +1193,8 @@ function log_stability_report(report::StabilityReport, log_print)
     log_print(@sprintf("   Largest total concentration used for the advective bound: %.4g mol/m³",
                        report.C_max))
 
-    # Under IMPES the table above is not the whole story: two of its rows were measured
-    # and then deliberately withheld from the step, and the step itself is only a starting
-    # value. Say both things here rather than letting the reader assume the usual reading.
+    # IMPES note: two rows measured but excluded from the step, and the step is only the
+    # starting value
     if any(m -> m.name == "Courant (IMPES)" && m.active, report.mechanisms)
         log_print("   IMPES: rows marked [implicit] were measured but do NOT bound the step -")
         log_print("          the advective term is solved implicitly and is unconditionally stable.")
@@ -1370,9 +1203,8 @@ function log_stability_report(report::StabilityReport, log_print)
         log_print("          solver recomputes it every step and logs it at each output.")
     end
 
-    # Flag any mechanism where the closed form and the measurement disagree materially.
-    # 10% is well outside the power iteration's own tolerance (1e-3 on the Rayleigh
-    # quotient), so a warning here is a real disagreement, not iteration noise.
+    # Flag closed-form vs. measurement disagreement above 10%, well outside the power
+    # iteration tolerance (1e-3 on the Rayleigh quotient)
     for m in report.mechanisms
         (m.active && isfinite(m.λ_measured) && isfinite(m.λ_analytic) && m.λ_analytic > 0.0) || continue
         r = m.λ_measured / m.λ_analytic

@@ -1,5 +1,4 @@
-# Test for shape functions module
-# This test verifies that the sum of all Jacobian determinants equals the domain area
+# Shape functions test: sum of Jacobian determinants equals the domain area
 
 using Printf
 
@@ -12,10 +11,10 @@ using .ShapeFunctions
 """
 Test that the sum of all Jacobian determinants equals the domain area.
 
-For 2x2 Gaussian quadrature, the area integral is:
+2x2 Gaussian quadrature:
 Area = Σ_{elements} Σ_{gauss points} det(J) * weight
 
-Since all Gauss weights = 1.0 for 2x2 quadrature, this simplifies to:
+All weights = 1.0, therefore:
 Area = Σ_{elements} Σ_{gauss points} det(J)
 """
 function test_determinant_sum()

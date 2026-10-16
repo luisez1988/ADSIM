@@ -1,7 +1,6 @@
 #------------------------------------------------------------------------------
 # ADSIM Flow Initialization Module
-# This module contains functions to initialize flow vectors for ADSIM
-# FEM calculations following the lumped mass explicit formulation
+# Flow vector initialization for ADSIM FEM calculations (lumped mass explicit formulation)
 #------------------------------------------------------------------------------
 
 using Base.Threads
@@ -11,22 +10,21 @@ using LinearAlgebra
 # Global flow variables - shared across all modules
 #------------------------------------------------------------------------------
 
-# Flow vectors for each gas species (Nnodes × NGases)
-# Each flow type contributes to the total concentration change
+# Flow vectors per gas species (Nnodes × NGases)
 global q_advection::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_gravitational::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_diffusion::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_boundary::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global q_source_sink::Vector{Float64} = Float64[]  # Only for CO2
 
-# Boundary edge geometry - precomputed during initialization
-# Each tuple contains: (element_id, node_i, node_j, edge_length, outward_normal)
+# Boundary edge geometry, precomputed at initialization
+# Tuple: (element_id, node_i, node_j, edge_length, outward_normal)
 global boundary_edges::Vector{Tuple{Int, Int, Int, Float64, Vector{Float64}}} = []
 
-# Tributary edge length of each uniform flow BC node, computed once during
-# initialization. Cached because a time-driven flow boundary refills q_boundary
-# on every step, and calculate_boundary_influence_lengths walks the element
-# connectivity of every boundary node - far too expensive to repeat in the loop.
+# Tributary edge length per uniform flow BC node, computed once at initialization.
+# Cached: time-driven flow boundaries refill q_boundary every step, and
+# calculate_boundary_influence_lengths loops over the element connectivity of every
+# boundary node (too expensive per step).
 global flow_node_influences::Dict{Int, Float64} = Dict{Int, Float64}()
 
 #------------------------------------------------------------------------------
@@ -35,18 +33,10 @@ global flow_node_influences::Dict{Int, Float64} = Dict{Int, Float64}()
 """
     zero_flow_vectors!(Nnodes::Int, NGases::Int)
 
-Initialize all flow vectors to zero based on mesh dimensions and number of gases.
-This function should be called after mesh and material data are loaded.
+Allocate all flow vectors as zeros. Call after mesh and material data are loaded.
 
-# Arguments
-- `Nnodes::Int`: Total number of nodes in the mesh
-- `NGases::Int`: Total number of gas species
-
-# Note
-- Modifies global flow vectors: `q_advection`, `q_gravitational`, `q_diffusion`, 
-  `q_boundary`, `q_source_sink`
-- All flow vectors are initialized to zero
-- q_source_sink is only a vector (not matrix) as it only applies to CO2
+Mutates the globals `q_advection`, `q_gravitational`, `q_diffusion`, `q_boundary`
+(Nnodes × NGases) and `q_source_sink` (Nnodes, CO2 only).
 """
 function zero_flow_vectors!(Nnodes::Int, NGases::Int)
     global q_advection, q_gravitational, q_diffusion, q_boundary, q_source_sink
@@ -68,27 +58,19 @@ end
 """
     apply_boundary_flows!(mesh::MeshData, materials)
 
-Apply uniform flow boundary conditions from mesh data to the global q_boundary array.
-The GID interface permits assignment of uniform steady normal flows at nodes.
-These values must consider the length of influence associated with each node.
+Apply the mesh uniform flow BCs at time `t`, weighted by nodal influence length.
+Mutates the global `q_boundary`.
 
-For 1D boundaries:
-- Internal boundary nodes: influence length = h (full element length)
-- Corner/end nodes: influence length = h/2 (half element length)
+GID assigns uniform normal flows at nodes. Influence length on 1D boundaries:
+- Internal boundary nodes: h (full element length)
+- Corner/end nodes: h/2
 
-# Arguments
-- `mesh::MeshData`: Mesh data structure containing uniform flow BC data
-
-# Note
-- Modifies global variable `q_boundary`
-- Flow values need to be weighted by nodal influence length
-- Flow is positive when entering the domain, negative when leaving
+Sign: positive into the domain, negative out.
 """
 function apply_boundary_flows!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global q_boundary, NGases, flow_node_influences
 
-    # Influence lengths are computed once in initialize_all_flows!; fall back to
-    # computing them here if this is called on its own.
+    # Influence lengths from initialize_all_flows!; computed here for standalone calls
     if isempty(flow_node_influences) && !isempty(mesh.uniform_flow_bc)
         flow_node_influences = calculate_boundary_influence_lengths(mesh)
     end
@@ -109,16 +91,15 @@ end
 """
 calculate_boundary_influence_lengths(mesh::MeshData; axisymmetric = false)
 
-Calculate the influence length for each boundary node based on connected boundary elements.
+Compute the influence length of each uniform flow BC node from connected boundary elements.
 
 # Arguments
-- `mesh`: Mesh data structure
-- `axisymmetric::Bool`: When true, weight each edge by the radius at its midpoint, returning
-  the ring measure `l_e * r̄_e` instead of the edge length. Same substitution as
-  `get_boundary_node_influences` in `read_mesh.jl`, for the same reason.
+- `axisymmetric`: Weight each edge by its midpoint radius, giving the ring measure
+  `l_e * r̄_e` instead of the edge length (same as `get_boundary_node_influences` in
+  `read_mesh.jl`).
 
 # Returns
-- Dictionary mapping node_id to influence length [m] (plane) or ring measure [m²] (axisymmetric)
+- node_id => influence length [m] (plane) or ring measure [m²] (axisymmetric)
 """
 function calculate_boundary_influence_lengths(mesh; axisymmetric::Bool = false)
     influence_lengths = Dict{Int, Float64}()
@@ -137,7 +118,7 @@ function calculate_boundary_influence_lengths(mesh; axisymmetric::Bool = false)
                     x_1 = mesh.coordinates[node_id, :]
                     x_2 = mesh.coordinates[xnode_id, :]
                     length = norm(x_2 - x_1)
-                    # Ring measure rather than arclength; r is the first coordinate
+                    # Ring measure instead of arclength; r = first coordinate
                     if axisymmetric
                         length *= 0.5 * (x_1[1] + x_2[1])
                     end
@@ -157,23 +138,16 @@ end
 """
     initialize_all_flows!(mesh::MeshData, materials, Nnodes::Int, NGases::Int)
 
-Complete flow initialization procedure. This function performs all necessary
-steps to initialize flow vectors and lumped mass matrix.
+Initialize all flow vectors and boundary geometry. Call once after mesh and materials
+are loaded. Mutates the flow globals, `boundary_edges` and `flow_node_influences`.
 
-Call sequence:
+Sequence:
 1. Zero all flow vectors
-2. Identify and store boundary edges with geometry
+2. Identify boundary edges and their geometry (length, outward normal)
 3. Apply boundary flow conditions
 
 # Arguments
-- `mesh::MeshData`: Mesh data structure
-- `materials`: Material data structure (currently unused, reserved for future use)
-- `Nnodes::Int`: Total number of nodes in the mesh
-- `NGases::Int`: Total number of gas species
-
-# Note
-- Should be called once during initialization after mesh and materials are loaded
-- Precomputes boundary edge geometry (length and outward normals) for efficiency
+- `materials`: Currently unused
 """
 function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int,
                               time_functions = Dict{Int, TimeFunction}(), t = 0.0;
@@ -182,13 +156,11 @@ function initialize_all_flows!(mesh, materials, Nnodes::Int, NGases::Int,
 
     zero_flow_vectors!(Nnodes, NGases)
 
-    # Precompute boundary edge geometry for pressure BC nodes
-    # This is done once during initialization to avoid repeated calculation
+    # Boundary edge geometry of pressure BC nodes, computed once
     boundary_edges = identify_boundary_edges(mesh)
 
-    # Same reasoning for the flow boundary: a time-driven flux rebuilds
-    # q_boundary every step and must not pay for this walk again.
-    # Axisymmetric runs get the ring measure l_e * r̄_e (Eq. ax_external_flux).
+    # Flow boundary influence lengths, computed once (time-driven fluxes rebuild
+    # q_boundary every step). Axisymmetric: ring measure l_e * r̄_e (Eq. ax_external_flux).
     flow_node_influences = calculate_boundary_influence_lengths(mesh; axisymmetric = axisymmetric)
 
     apply_boundary_flows!(mesh, time_functions, t)

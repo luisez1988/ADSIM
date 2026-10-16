@@ -1,10 +1,9 @@
 #______________________________________________________
 # analytical.jl
 #
-# Closed-form reference solutions used to verify ADSIM.
-# These mirror the formulas in the verification notebooks
-# (Cleary & Adrian, 1973). erfc is implemented here so the
-# suite has no external package dependency.
+# Closed-form reference solutions for ADSIM verification.
+# Same formulas as the verification notebooks (Cleary & Adrian, 1973).
+# erfc implemented here: no external package dependency.
 #______________________________________________________
 
 module Analytical
@@ -14,7 +13,7 @@ export bessel_j0, bessel_j1, besselj0_zeros, conduction_disk
 
 # ---- erf / erfc -----------------------------------------------------------
 # Abramowitz & Stegun 7.1.26 rational approximation (|error| < 1.5e-7),
-# extended to negative x by symmetry. Plenty accurate for a 2% L2 gate.
+# extended to negative x by symmetry. Sufficient for a 2% L2 gate.
 function _erf(x::Float64)
     s = sign(x)
     x = abs(x)
@@ -24,16 +23,15 @@ function _erf(x::Float64)
     return s * y
 end
 
-"""erfc(x) — complementary error function."""
+"""erfc(x): complementary error function."""
 erfc(x::Real) = 1.0 - _erf(Float64(x))
 
 # ---- Pure diffusion (Fourier / consolidation series) ----------------------
 """
     diffusion_series(x, t; C0, Ci, D, R=1.0, L=1.0, terms=500)
 
-1D diffusion into a semi-infinite/finite column with a fixed-value boundary,
-written as the classic sine series (matches `A_1D` in the diffusion notebook).
-`x` is distance from the driving boundary.
+Evaluate 1D diffusion into a column with a fixed-value boundary, sine series form
+(same as `A_1D` in the diffusion notebook). `x`: distance from the driving boundary.
 """
 function diffusion_series(x::Float64, t::Float64; C0, Ci, D, R=1.0, L=1.0, terms::Int=500)
     t <= 0 && return Ci
@@ -49,9 +47,8 @@ end
 """
     advection_diffusion(x, t; C0, Ci, D, v, R=1.0, L=1.0)
 
-1D advection-diffusion with a first-type inlet boundary and a finite column
-of length `L`. Mirrors `A_1D(x,t,v,D,R,L)` in the advection notebook.
-`x` is distance from the inlet boundary.
+Evaluate 1D advection-diffusion in a finite column of length `L` with a first-type inlet
+boundary (same as `A_1D(x,t,v,D,R,L)` in the advection notebook). `x`: distance from the inlet.
 """
 function advection_diffusion(x::Float64, t::Float64; C0, Ci, D, v, R=1.0, L=1.0)
     t <= 0 && return Ci
@@ -70,10 +67,8 @@ end
 """
     darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314)
 
-Steady Darcy flux driven by a fixed concentration difference across a column.
-The gas is ideal (P = C R T), so a difference `dC` over length `L` sets a
-pressure gradient `R T dC / L`, and Darcy's law gives `v = (K/mu) R T dC / L`.
-Independent of position and time (returns the uniform magnitude).
+Return the uniform steady Darcy flux magnitude for a concentration difference `dC` over
+length `L`. Ideal gas (P = C R T): pressure gradient `R T dC / L`, `v = (K/mu) R T dC / L`.
 """
 darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314) = (K / mu) * R * T * abs(dC) / L
 
@@ -81,17 +76,15 @@ darcy_velocity(; K, mu, dC, L, T=298.0, R=8.314) = (K / mu) * R * T * abs(dC) / 
 """
     darcy_radial(r; K, mu, C_w, C_e, r_w, r_e, T=298.0, R=8.314)
 
-Magnitude of the steady radial Darcy velocity in an annulus `r_w <= r <= r_e` whose two
-cylindrical surfaces are held at total concentrations `C_w` and `C_e`.
+Return the steady radial Darcy velocity magnitude in an annulus `r_w <= r <= r_e` with
+total concentrations `C_w` and `C_e` on the two cylindrical surfaces.
 
-Unlike the plane `darcy_velocity` this varies with position, and that is the point: it is
-the only reference in the suite that fails outright if the axisymmetric radius factor is
-missing from the advective kernels. In a column aligned with the axis the radius cancels
-between mass and stiffness; here it does not, so a missing `r_gp` changes the answer instead
-of dividing out.
+Position-dependent, unlike `darcy_velocity`. Only reference in the suite sensitive to a
+missing axisymmetric radius factor in the advective kernels: in an axis-aligned column the
+radius cancels between mass and stiffness, here it does not.
 
-Steady state with an ideal gas (`p = C R T`) requires the same flux through every cylinder,
-so with the cylindrical divergence of Eq. (ax_divergence),
+Steady state, ideal gas (`p = C R T`): same flux through every cylinder. With the
+cylindrical divergence of Eq. (ax_divergence),
 
     d/dr ( r C dC/dr ) = 0    =>    r C dC/dr = A    (constant)
 
@@ -99,13 +92,12 @@ Integrating gives `C²` linear in `ln r`,
 
     C(r) = sqrt( C_w² + 2 A ln(r/r_w) ),   A = (C_e² - C_w²) / (2 ln(r_e/r_w))
 
-and Darcy's law then gives a velocity falling off essentially as `1/r`:
+Darcy's law then gives a velocity decreasing approximately as `1/r`:
 
     |v_r| = (K/mu) R T |A| / ( C(r) r )
 
-The departure from an exact `1/r` law is the factor `C(r)`, which varies by
-`|C_e - C_w| / C` across the annulus - a fraction of a percent for the concentrations used
-here, but carried exactly rather than linearised.
+Deviation from `1/r`: factor `C(r)`, varying by `|C_e - C_w| / C` across the annulus (a
+fraction of a percent here). Kept exact, not linearised.
 
 # Arguments (keyword)
 - `K`: intrinsic permeability [m²]
@@ -120,8 +112,8 @@ here, but carried exactly rather than linearised.
 """
 function darcy_radial(r::Float64; K, mu, C_w, C_e, r_w, r_e, T=298.0, R=8.314)
     A = (C_e^2 - C_w^2) / (2 * log(r_e / r_w))
-    # Clamp to the meshed annulus: nodes sit exactly on the two radii, so round-off in a
-    # coordinate must not push the logarithm outside the range the profile is defined on.
+    # Clamp to the meshed annulus: nodes on the two radii, round-off must not move the
+    # logarithm argument outside the profile range
     rc = clamp(r, r_w, r_e)
     C = sqrt(C_w^2 + 2 * A * log(rc / r_w))
     return (K / mu) * R * T * abs(A) / (C * rc)
@@ -130,20 +122,18 @@ end
 """
     radial_log_profile(r; C_w, C_e, r_w, r_e)
 
-Steady total concentration between two cylinders held at `C_w` and `C_e`, for a single ideal
-gas driven by its own pressure gradient with no molecular diffusion:
+Return the steady total concentration between two cylinders at `C_w` and `C_e`, single
+ideal gas driven by its own pressure gradient, no molecular diffusion:
 
     C(r) = sqrt( C_w² + 2 A ln(r/r_w) ),   A = (C_e² - C_w²) / (2 ln(r_e/r_w))
 
-This is the integrated form of `r C dC/dr = constant`, the statement that the same molar flux
-crosses every cylinder. It is scored in preference to the velocity of `darcy_radial` because
-`C` is a primary nodal unknown, whereas the nodal velocity is projected from the Gauss points
-and is therefore one-sided at the two end nodes - where `v` varies steeply, that projection
-carries an error of its own that has nothing to do with the axisymmetric weighting.
+Integrated form of `r C dC/dr = constant` (same molar flux through every cylinder).
+Preferred over the `darcy_radial` velocity: `C` is a primary nodal unknown, while the
+nodal velocity is projected from the Gauss points and one-sided at the end nodes, with an
+error unrelated to the axisymmetric weighting where `v` varies steeply.
 
-The corresponding plane-strain profile has `C²` linear in `r` rather than in `ln r`, which is
-a large difference in shape over a decade of radius, so this discriminates sharply between the
-two formulations rather than merely tolerating both.
+Plane-strain profile: `C²` linear in `r` instead of `ln r`. Large shape difference over a
+decade of radius, therefore a sharp discrimination between the two formulations.
 """
 function radial_log_profile(r::Float64; C_w, C_e, r_w, r_e)
     A = (C_e^2 - C_w^2) / (2 * log(r_e / r_w))
@@ -155,25 +145,21 @@ end
 """
     conduction_cosine(x, t; T0, A, alpha, L=1.0)
 
-Temperature in a 1-D bar insulated at both ends, starting from a single cosine
-mode. cos(pi x / L) is the fundamental eigenfunction of the Laplacian under
-zero-flux boundaries, so it decays without changing shape:
+Evaluate the temperature [K] of a 1-D bar insulated at both ends, initial single cosine
+mode. cos(pi x / L) is the fundamental Laplacian eigenfunction under zero-flux
+boundaries, therefore it decays without changing shape:
 
     T(x,t) = T0 + A cos(pi x / L) exp(-alpha pi^2 t / L^2)
 
-with `alpha = lambda_e / C_mix` the thermal diffusivity of the mixture. Zero flux
-is the natural boundary condition of the weak form, so an unset thermal boundary
-is exactly an insulated end — no boundary condition machinery is required, which
-is what lets this case run before thermal boundary conditions exist.
+`alpha = lambda_e / C_mix`: mixture thermal diffusivity. Zero flux is the natural
+condition of the weak form, therefore unset thermal boundaries are insulated ends (no
+thermal BCs required).
 
 # Arguments (keyword)
 - `T0`: mean temperature the bar relaxes to [K]
 - `A`: initial amplitude of the mode [K]
 - `alpha`: thermal diffusivity lambda_e / C_mix [m²/s]
 - `L`: bar length [m]
-
-# Returns
-- Temperature at position `x` and time `t` [K]
 """
 function conduction_cosine(x::Float64, t::Float64; T0, A, alpha, L=1.0)
     return T0 + A * cos(pi * x / L) * exp(-alpha * pi^2 * t / L^2)
@@ -183,31 +169,27 @@ end
 """
     linear_profile(x; v0, vL, L=1.0)
 
-Straight line from `v0` at x = 0 to `vL` at x = L, independent of time.
+Return the straight line from `v0` at x = 0 to `vL` at x = L, time independent.
 
-This is the steady state of pure conduction between two prescribed temperatures with
-no source: the second derivative vanishes, so the profile is exactly linear. Being
-exact rather than a truncated series, it is a strict check — the discrete operator
-has to return zero residual on a linear field, so any error in the conductivity, the
-gradient operator or the Dirichlet gate is visible immediately.
+Steady pure conduction between two prescribed temperatures without source (zero second
+derivative). Exact instead of a truncated series: the discrete operator must give zero
+residual on a linear field, exposing errors in conductivity, gradient operator or
+Dirichlet gate.
 """
 linear_profile(x::Float64; v0, vL, L=1.0) = v0 + (vL - v0) * x / L
 
 # ---- Isothermal carbonation (0-D, constant CO2) ---------------------------
 #
-# Two references for the same rate law, sharing the coefficient helpers below so
-# the law is written once:
-#   carbonation_isothermal - closed form, exact whenever the coefficient is constant
-#   carbonation_fdm        - explicit finite-difference integration of the ODE
-# The FDM is the general one: it does not need a constant coefficient, so it stays
-# valid for cases the closed form cannot cover. On a constant-coefficient case the
-# two agree to round-off, which is itself a check that the law is coded the same
-# way twice.
+# Two references for the same rate law, sharing the coefficient helpers below:
+#   carbonation_isothermal: closed form, exact for a constant coefficient
+#   carbonation_fdm:        explicit finite-difference integration of the ODE
+# FDM is the general one (no constant-coefficient requirement). With a constant
+# coefficient both agree to round-off, a consistency check of the two codings.
 
 """
     _henry_solubility(T)
 
-Henry solubility, van 't Hoff form. Mirrors `henry_solubility` in the solver.
+Henry solubility, van 't Hoff form. Same as `henry_solubility` in the solver.
 """
 function _henry_solubility(T)
     K_H_ref = 3.3e-4
@@ -218,18 +200,17 @@ end
 """
     _area_factor(C_total, T, beta; R=8.3145)
 
-Interfacial-area factor, pressure-ratio form. Mirrors `interfacial_area_factor`
-in the solver, floor included:
+Interfacial-area factor, pressure-ratio form. Same as `interfacial_area_factor` in the
+solver, floor included:
 
     a = exp[b (max{p/P_atm - 1, 0})],   p = C_total R T
 
-The driver is the TOTAL gas pressure, summed over species, not the CO2 partial
-pressure: the whole mixture presses on the menisci, and the chamber pressure the
-factor was calibrated against is a total. In a single-gas CO2 case the two
-coincide, which is why `carbonation_fdm` defaults `C_total` to `C_co2`.
+Driver: TOTAL gas pressure over all species (pressure on the menisci; the calibration
+chamber pressure is a total). Equal to the CO2 partial pressure for single-gas CO2,
+hence the `C_total = C_co2` default of `carbonation_fdm`.
 
-`beta` is DIMENSIONLESS here. The earlier dissolved-concentration form carried
-units of m3/mol and is not interchangeable; see the solver docstring.
+`beta` DIMENSIONLESS. The earlier dissolved-concentration form had units of m3/mol and is
+not interchangeable (see solver docstring).
 """
 function _area_factor(C_total, T, beta; R=8.3145)
     beta == 0.0 && return 1.0
@@ -241,17 +222,15 @@ end
 """
     _carbonation_lambda(; k_o, E, beta, T, theta_w, C_co2, C_total, R=8.3145)
 
-Decay constant of the lime ODE, assembled exactly as the solver assembles it so
-the two are the same number rather than two expressions that happen to agree:
+Decay constant of the lime ODE, assembled in the same way as the solver:
 
     lambda = k_T * a(C_total) * theta_w * K_H(T) * R * T * C_co2
 
-The solver computes `r = k_T a C_aq (A_s - A_r)` with `C_aq = K_H R T C_g,CO2`
-per m3 of water, then `dA_s/dt = -theta_w r` per m3 of total volume.
+Solver: `r = k_T a C_aq (A_s - A_r)`, `C_aq = K_H R T C_g,CO2` per m3 of water, then
+`dA_s/dt = -theta_w r` per m3 of total volume.
 
-Note which concentration enters where, and that they are different: `C_aq` is
-dissolved CO2 and follows the CO2 partial pressure, while `a` is the gas-liquid
-interface and follows the total gas pressure.
+`C_aq` (dissolved CO2) follows the CO2 partial pressure; `a` (gas-liquid interface)
+follows the total gas pressure.
 """
 function _carbonation_lambda(; k_o, E, beta, T, theta_w, C_co2, C_total, R=8.3145)
     k_T = k_o * exp(-E / (R * T))
@@ -262,19 +241,16 @@ end
 """
     carbonation_isothermal(t; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145)
 
-Degree of carbonation of a specimen held at constant temperature and constant
-CO2 concentration. This is Eq. (5.4) of
-`calibration_reactionrate/integrator_mathematics.md`:
+Return the degree of carbonation at constant temperature and CO2 concentration,
+Eq. (5.4) of `calibration_reactionrate/integrator_mathematics.md`:
 
     DoC(t) = (1 - p_r) (1 - exp(-lambda t))
 
-Whenever lambda is constant the rate law integrates in closed form, and the
-result is exact - the reference document records it as "exact to round-off at
-any step count". lambda is constant here because the CO2 field is pinned by a
-Dirichlet boundary on every node and the temperature does not move (the case
-sets the reaction enthalpy to zero, so the reaction releases no heat).
+Exact closed form for constant lambda ("exact to round-off at any step count" in the
+reference document). lambda constant here: CO2 prescribed by a Dirichlet boundary on
+every node, constant temperature (zero reaction enthalpy, no heat released).
 
-# Arguments (keyword, all mirroring the material file)
+# Arguments (keyword, same as the material file)
 - `k_o`: Arrhenius factor [m3 mol^-1 s^-1]
 - `E`: activation energy [J/mol]
 - `beta`: interfacial-area coefficient [-], dimensionless; 0 disables the factor
@@ -282,11 +258,11 @@ sets the reaction enthalpy to zero, so the reaction releases no heat).
 - `theta_w`: volumetric water content, porosity x saturation [-]
 - `C_co2`: prescribed CO2 gas concentration [mol per m3 of gas]; drives C_aq
 - `C_total`: prescribed TOTAL gas concentration [mol per m3 of gas]; drives the
-  interfacial-area factor. Defaults to `C_co2`, correct for a single-gas case
+  interfacial-area factor. Defaults to `C_co2` (single-gas case)
 - `p_r`: residual lime as a fraction of the initial lime [-]
 
 # Returns
-- Degree of carbonation [-], approaching `1 - p_r` rather than 1
+- Degree of carbonation [-], approaching `1 - p_r` instead of 1
 """
 function carbonation_isothermal(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r,
                                 C_total=nothing, R=8.3145)
@@ -300,42 +276,37 @@ end
 """
     carbonation_fdm(t; k_o, E, beta, T, theta_w, C_co2, p_r, R=8.3145, substeps=20000)
 
-Degree of carbonation by explicit finite-difference integration of the same rate
-law, rather than by its closed-form solution.
+Integrate the degree of carbonation of the same rate law numerically instead of the
+closed form.
 
-Integrates the lime ODE in normalised form, u = A_s / A_s0 with u(0) = 1,
+Normalised lime ODE, u = A_s / A_s0, u(0) = 1:
 
     du/dt = -lambda(u, t) (u - p_r),      DoC = 1 - u
 
-with classical RK4 over `substeps` uniform steps from 0 to `t`. lambda is rebuilt
-inside the step from `_carbonation_lambda`, so the law lives in one place and the
-scheme does not assume lambda is constant - that is the point of having this
-alongside `carbonation_isothermal`. On the constant-coefficient cases in the
-suite the two agree to round-off; where a future case lets the CO2 field or the
-temperature move, this one remains the valid reference.
+Classical RK4, `substeps` uniform steps from 0 to `t`. lambda rebuilt each stage from
+`_carbonation_lambda` (single definition of the law, no constant-lambda assumption).
+Agrees to round-off with `carbonation_isothermal` on constant-coefficient cases; remains
+valid when the CO2 field or temperature changes.
 
-RK4 rather than forward Euler so that the reference is not itself a first-order
-approximation: the case tolerance has to measure ADSIM's forward-Euler lime
-update, and a reference carrying a comparable error would mask it. At the
-default `substeps` the integration error is far below the 0.5 % gate.
+RK4 instead of forward Euler: a first-order reference error would mask the ADSIM
+forward-Euler lime update error. Integration error at the default `substeps` far below the
+0.5 % gate.
 
 # Arguments
-Identical to [`carbonation_isothermal`](@ref), including the `C_total` default,
-plus:
-- `substeps`: RK4 steps used to reach `t` [-]
+Same as [`carbonation_isothermal`](@ref), including the `C_total` default, plus:
+- `substeps`: RK4 steps to reach `t` [-]
 
 # Returns
-- Degree of carbonation [-], approaching `1 - p_r` rather than 1
+- Degree of carbonation [-], approaching `1 - p_r` instead of 1
 """
 function carbonation_fdm(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r,
                          C_total=nothing, R=8.3145, substeps::Int=20000)
     t <= 0 && return 0.0
 
-    # Single-gas cases pin the total to the CO2 value; a mixed-gas case must say so.
+    # Single-gas default: total = CO2. Mixed-gas cases must pass C_total
     C_tot = C_total === nothing ? C_co2 : C_total
 
-    # du/dt as a closure so the coefficient is rebuilt at every stage rather than
-    # hoisted - the scheme must not bake in the constant-coefficient assumption.
+    # Closure: coefficient rebuilt at every stage, no constant-coefficient assumption
     du = (u, tau) -> -_carbonation_lambda(; k_o=k_o, E=E, beta=beta, T=T,
                                             theta_w=theta_w, C_co2=C_co2,
                                             C_total=C_tot, R=R) * (u - p_r)
@@ -356,12 +327,11 @@ function carbonation_fdm(t::Float64; k_o, E, beta, T, theta_w, C_co2, p_r,
 end
 
 # ---- Bessel functions J0, J1 and the zeros of J0 --------------------------
-# Abramowitz & Stegun 9.4.1-9.4.6 polynomial/rational approximations, kept here
-# for the same reason as erfc above: the suite must not need an external package.
-# |error| < 5e-8 for J0 and < 1.3e-8 for J1, orders of magnitude below the
-# discretisation error any case gates on.
+# Abramowitz & Stegun 9.4.1-9.4.6 polynomial/rational approximations (no external
+# package, as for erfc). |error| < 5e-8 for J0 and < 1.3e-8 for J1, orders of
+# magnitude below the gated discretisation errors.
 
-"""bessel_j0(x) — Bessel function of the first kind, order 0."""
+"""bessel_j0(x): Bessel function of the first kind, order 0."""
 function bessel_j0(x::Float64)
     ax = abs(x)
     if ax < 3.0
@@ -377,7 +347,7 @@ function bessel_j0(x::Float64)
     return f * cos(θ) / sqrt(ax)
 end
 
-"""bessel_j1(x) — Bessel function of the first kind, order 1."""
+"""bessel_j1(x): Bessel function of the first kind, order 1."""
 function bessel_j1(x::Float64)
     ax = abs(x)
     if ax < 3.0
@@ -398,10 +368,9 @@ end
 """
     besselj0_zeros(n) -> Vector{Float64}
 
-First `n` positive zeros of J0. Started from McMahon's asymptotic expansion
-(A&S 9.5.12) and polished with Newton's method on J0' = -J1, which converges in
-two or three iterations and lands each root to about 1e-8 — the accuracy floor
-of the J0 approximation itself.
+Return the first `n` positive zeros of J0. McMahon asymptotic expansion (A&S 9.5.12)
+as the initial guess, refined by Newton's method with J0' = -J1 (two or three
+iterations, ~1e-8 accuracy, the floor of the J0 approximation).
 """
 function besselj0_zeros(n::Int)
     j = zeros(Float64, n)
@@ -422,19 +391,18 @@ end
 """
     conduction_disk(r, t; T0, Ts, alpha, R=1.0, terms=200)
 
-Temperature in a solid disk (or infinite cylinder) of radius `R`, initially
-uniform at `T0`, with its whole rim held at `Ts` from t = 0 on. Separation of
-variables in polar coordinates gives the Fourier-Bessel series
+Evaluate the temperature [K] of a solid disk (or infinite cylinder) of radius `R`,
+initially uniform at `T0`, rim at `Ts` from t = 0. Separation of variables in polar
+coordinates gives the Fourier-Bessel series
 
     (T - Ts)/(T0 - Ts) = sum_n  2/(j_n J_1(j_n))  J_0(j_n r/R)  exp(-alpha j_n^2 t/R^2)
 
-with `j_n` the n-th positive zero of J0 (Carslaw & Jaeger, §7.6). The fundamental
-mode decays with time constant `R^2/(alpha j_1^2)`.
+`j_n`: n-th positive zero of J0 (Carslaw & Jaeger, §7.6). Fundamental mode time
+constant: `R^2/(alpha j_1^2)`.
 
-This is the suite's only genuinely two-dimensional reference. Every other case
-runs on an axis-aligned strip, where the isoparametric Jacobian is diagonal and
-a whole class of mapping errors cancels; here the elements are skewed general
-quads, and the solution has to stay axisymmetric on a mesh that is not.
+Only two-dimensional reference of the suite. Other cases use axis-aligned strips
+(diagonal isoparametric Jacobian, mapping errors cancel); here the elements are skewed
+general quads and the solution must remain axisymmetric on a non-axisymmetric mesh.
 
 # Arguments (keyword)
 - `T0`: uniform initial temperature [K]
@@ -442,10 +410,7 @@ quads, and the solution has to stay axisymmetric on a mesh that is not.
 - `alpha`: thermal diffusivity lambda_e / C_mix [m²/s]
 - `R`: disk radius [m]
 - `terms`: number of series terms; the n-th decays as exp(-j_n^2 alpha t/R^2),
-  so the default is far more than the earliest compared snapshot needs
-
-# Returns
-- Temperature at radius `r` and time `t` [K]
+  default well above the requirement of the earliest compared snapshot
 """
 function conduction_disk(r::Float64, t::Float64; T0, Ts, alpha, R=1.0, terms::Int=200)
     t <= 0 && return T0
@@ -453,9 +418,8 @@ function conduction_disk(r::Float64, t::Float64; T0, Ts, alpha, R=1.0, terms::In
     s = 0.0
     @inbounds for n in 1:terms
         jn = j[n]
-        # Coefficients fall off only as jn^-1/2, so it is the exponential that
-        # converges the series: past the point where jn^2 alpha t/R^2 is large the
-        # remaining terms cannot matter, and the loop can stop.
+        # Coefficients decay only as jn^-1/2; convergence from the exponential.
+        # Stop once jn^2 alpha t/R^2 is large.
         e = exp(-alpha * jn^2 * t / R^2)
         e < 1e-16 && break
         s += 2.0 * bessel_j0(jn * r / R) / (jn * bessel_j1(jn)) * e
@@ -466,9 +430,8 @@ end
 """
     evaluate(spec::Dict, x, t) -> Float64
 
-Dispatch on `spec["type"]` (a value read from a case `.toml`) and evaluate the
-matching analytical solution at position `x` and time `t`. Add a branch here to
-register a new analytical model for a new verification case.
+Evaluate the analytical solution selected by `spec["type"]` (case `.toml`) at position
+`x` and time `t`. New analytical models: add a branch here.
 """
 function evaluate(spec::AbstractDict, x::Float64, t::Float64)
     g(k, d=nothing) = get(spec, k, d)
@@ -506,7 +469,7 @@ function evaluate(spec::AbstractDict, x::Float64, t::Float64)
                                       C_co2=g("C_co2"), C_total=g("C_total", g("C_co2")),
                                       p_r=g("p_r", 0.0), R=g("R", 8.3145))
     elseif typ == "carbonation_fdm"
-        # Same law as carbonation_isothermal, integrated rather than solved.
+        # Same law as carbonation_isothermal, numerically integrated
         return carbonation_fdm(t; k_o=g("k_o"), E=g("E", 0.0), beta=g("beta", 0.0),
                                T=g("T", 298.15), theta_w=g("theta_w"),
                                C_co2=g("C_co2"), C_total=g("C_total", g("C_co2")),

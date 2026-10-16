@@ -1,5 +1,4 @@
-# Benchmark test for shape functions module with threading
-# This test compares performance and verifies threading is working
+# Threaded shape function benchmark: timing and threading check
 
 using Printf
 
@@ -10,7 +9,7 @@ include("../shape_functions.jl")
 using .ShapeFunctions
 
 """
-Benchmark the shape function initialization with timing
+Benchmark the shape function initialization.
 """
 function benchmark_shape_functions()
     println("="^70)

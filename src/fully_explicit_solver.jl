@@ -15,13 +15,7 @@ using Statistics
 """
     heaviside(x)
 
-Heaviside step function: returns 0 for x < 0, and 1 for x >= 0.
-
-# Arguments
-- `x`: Input value
-
-# Returns
-- 0 if x < 0, 1 if x >= 0
+Return 0 for x < 0 and 1 for x >= 0.
 """
 function heaviside(x)
     return x >= 0 ? 1.0 : 0.0
@@ -30,32 +24,25 @@ end
 """
     stab_tau(v, h_e, D_eff; V_TOL)
 
-Streamline-upwind stabilization parameter τ*, the practical Brooks & Hughes (1982)
-approximation to the classical "optimal" upwind value (Christie, Griffiths, Mitchell &
-Zienkiewicz 1976):
+Compute the streamline-upwind stabilization parameter τ* [s], using the Brooks & Hughes (1982)
+approximation of the optimal upwind value (Christie, Griffiths, Mitchell & Zienkiewicz 1976).
 
     τ* ≈ (h_e / 2|v|) · min(Pe/3, 1),   Pe = |v| h_e / D_eff
 
-τ* → h_e/(2|v|) in the advection-dominated limit (Pe → ∞), and τ* → 0 in the
-diffusion-dominated limit (Pe → 0), matching the two limits of the exact coth-based
-formula without evaluating coth every Gauss point. See
-`src/ADVECTION_STABILIZATION_NOTES.md` for the derivation.
+Limits: τ* → h_e/(2|v|) for Pe → ∞ and τ* → 0 for Pe → 0, same as the coth-based
+formula, without evaluating coth at every Gauss point. Derivation in
+`src/ADVECTION_STABILIZATION_NOTES.md`.
 
-Guarded against the two cases that make a naive `Pe = |v| h_e / D_eff` computation
-divide by zero or propagate NaN, both of which occur in the shipped verification suite:
-- `|v| ≈ 0` (no local flow): nothing to stabilize, returns 0.
-- `D_eff <= 0` (diffusion switched off, e.g. `axisym_darcy_radial`, which sets
-  `diffusion = 0` by construction): the advection-dominated limit `Pe → ∞` applies
-  directly, `τ* = h_e/(2|v|)`, without forming the (division-by-zero) Péclet number.
+Guards (both cases occur in the verification suite):
+- `|v| ≈ 0`: returns 0.
+- `D_eff <= 0` (e.g. `axisym_darcy_radial`, `diffusion = 0`): returns the Pe → ∞ limit
+  `h_e/(2|v|)` without forming Pe.
 
 # Arguments
-- `v::AbstractVector`: Local (Gauss-point) velocity driving this flux term [m/s]
-- `h_e::Float64`: Element characteristic length [m]
-- `D_eff::Float64`: Effective diffusivity of the SAME operator being stabilized [m²/s]
-- `V_TOL::Float64`: Velocity magnitude below which the flow is treated as zero [m/s]
-
-# Returns
-- `τ*`, in units of time [s]
+- `v`: Gauss-point velocity of the flux term [m/s]
+- `h_e`: Element characteristic length [m]
+- `D_eff`: Effective diffusivity of the same operator being stabilized [m²/s]
+- `V_TOL`: Velocity magnitude treated as zero [m/s]
 """
 function stab_tau(v::AbstractVector, h_e::Float64, D_eff::Float64; V_TOL::Float64 = 1.0e-15)
     vnorm = sqrt(v[1]^2 + v[2]^2)
@@ -67,8 +54,7 @@ end
 """
     henry_solubility(T)
 
-Henry solubility of CO2 in water, K_H(T), following the van 't Hoff form of
-Eq. (henry_vantHoff) of the manuscript.
+Compute the Henry solubility of CO2 in water, K_H(T), Eq. (henry_vantHoff).
 
     K_H(T) = K_H° exp[2400 (1/T - 1/T°)],   K_H° = 3.3e-4 mol m⁻³ Pa⁻¹, T° = 298.15 K
 
@@ -87,18 +73,15 @@ end
 """
     lime_solubility(T, ρ_w)
 
-Solubility limit of portlandite in water, A_aq,sat, from the IUPAC correlation
-restated on a volumetric basis in Eq. (solubility) of the manuscript.
+Compute the portlandite solubility limit A_aq,sat (IUPAC correlation, volumetric basis,
+Eq. (solubility)).
 
     ln(A_aq,sat) = 86.1534 - 3492.14/T - 13.7494 ln(T) + ln(ρ_w)
 
-The correlation is retrograde: solubility falls as temperature rises. It returns
-2.0e1 mol m⁻³ at 298.15 K.
+Retrograde: solubility decreases with temperature. 2.0e1 mol m⁻³ at 298.15 K.
 
-Retained as a diagnostic only. The rate law of `extent_of_reaction_rate` no
-longer caps the dissolved lime at this limit, so this function is not called
-during a run; it remains available for reporting how far above saturation the
-uncapped law operates.
+Diagnostic only. Not called during a run, since `extent_of_reaction_rate` does not cap
+the dissolved lime.
 
 # Arguments
 - `T`: Absolute temperature [K]
@@ -114,7 +97,7 @@ end
 """
     arrhenius_coefficient(k_o, E, T)
 
-Arrhenius rate coefficient k_T of Eq. (arrhenius) of the manuscript.
+Compute the Arrhenius rate coefficient k_T, Eq. (arrhenius).
 
     k_T = k_o exp(-E / R T)
 
@@ -134,75 +117,50 @@ end
 """
     interfacial_area_factor(C_g_total, T, β_area)
 
-Interfacial-area factor a of the rate law, normalised at atmospheric pressure.
+Compute the interfacial-area factor a of the rate law, normalised at atmospheric pressure.
 
     a = exp[β (p / P_atm - 1)]
 
-a stands for the specific gas-liquid interfacial area available to the reaction.
-Pressurising the pore network increases the area of meniscus in contact with the
-gas, so the rate rises faster with pressure than the linear C_aq term alone
-accounts for. β = 0 disables the factor and recovers the plain second-order law.
+a represents the specific gas-liquid interfacial area available to the reaction. Pore
+pressurisation increases the meniscus area in contact with the gas, therefore the rate
+increases faster with pressure than the linear C_aq term predicts. β = 0 disables the
+factor (plain second-order law).
 
-# The driver is the TOTAL gas pressure
-p is the pressure of the gas phase as a whole, recovered from the ideal gas law
-over every species,
-
+# Driver: TOTAL gas pressure
     p = C_g,total R T,    C_g,total = Σ_α C_g,α
 
-not the CO2 partial pressure. What opens the interface is the gas phase pressing
-on the menisci, and every species in the mixture contributes to that. It is also
-what the calibration measured: the elemental tests report a chamber pressure of
-101.3 kPa + gauge, a total, and the fit regressed the rate against it.
+Every species in the mixture contributes to the pressure on the menisci. The calibration
+tests also report a total chamber pressure (101.3 kPa + gauge). Using p_CO2 instead
+gives a ≈ 1 wherever the pore gas is mostly air, which covers most of an injection run.
 
-Using p_CO2 here instead would make the factor collapse to 1 wherever the pore
-gas is still mostly air, which is most of an injection run, and would leave the
-fitted β describing a quantity the tests never varied independently.
+# Exponent form
+Relative overpressure, dimensionless, therefore β is dimensionless. An earlier revision
+used a = exp[β K_H(T_ref) (p_CO2 - x_CO2 P_atm)], with β in m³/mol. Both forms are
+exponential in a pressure and differ in scale by K_H(T_ref) P_atm = 33.44 mol/m³
+(β = 0.47 in the old form is 15.7 in this one). Old β values must be refitted or rescaled.
 
-# What the exponent is NOT
-The exponent is a relative overpressure, a pure number. β is therefore
-dimensionless. An earlier revision wrote it in dissolved CO2,
-a = exp[β K_H(T_ref) (p_CO2 - x_CO2 P_atm)], with β in m³/mol. The two agree in
-shape - both exponential in a pressure - and differ in scale by
-K_H(T_ref) P_atm = 33.44 mol/m³, so a β of 0.47 in the old form is 15.7 in this
-one. Values fitted against the old form DO NOT carry over; they must be refitted
-or rescaled, or the pressure sensitivity is lost by that factor.
-
-The reason for the change is that the old exponent was an absolute dissolved
-concentration. Fed a total gas concentration it grew without bound - an interior
-of ordinary air came out at a ~ 9e6 - which is not a statement about interface
-but about the concentration scale of the mixture. A pressure RATIO is bounded by
-the overpressure actually applied, which is what the tests varied and what the
-specimen responds to.
+The old exponent was an absolute dissolved concentration. With a total gas concentration
+as input it grew without bound (ordinary air gave a ~ 9e6). A pressure ratio is bounded by
+the applied overpressure.
 
 # Reference state
-a = 1 at p = P_atm, so a specimen sitting at ambient pressure reacts at the plain
-second-order rate and a > 1 measures the extra interface that pressurising buys.
-Moving that reference multiplies a by a constant and divides k_o by the same
-constant, so β, the residuals and the fit quality are unchanged by the choice;
-only the meaning of k_o changes.
+a = 1 at p = P_atm, giving the plain second-order rate at ambient pressure. Moving the
+reference scales a by a constant and k_o by its inverse. β, residuals and fit quality are
+unchanged; only the meaning of k_o changes.
 
-# Behaviour below atmospheric
-The exponent is floored at zero, so a >= 1. Below ambient pressure the factor
-would otherwise drop under 1 and suppress an already slow reaction, and that
-branch is extrapolation: the calibration covers 5 to 20 kPa of GAUGE pressure
-and says nothing about interface below ambient. The floor keeps the plain
-second-order rate as the lower bound of the law, which is what k_o means at the
-reference state.
+# Below atmospheric
+Exponent floored at zero, so a >= 1. The calibration covers 5 to 20 kPa GAUGE pressure,
+therefore values below ambient would be extrapolation. The floor keeps the plain
+second-order rate as the lower bound.
 
 # Pairing with k_o
-β and k_o are fitted together and are not independent. Because a is large at
-injection pressures, k_o is correspondingly small; changing one without refitting
-the other rescales the rate by exp(β Δp/P_atm).
+β and k_o are fitted together. Large a at injection pressures implies small k_o. Changing
+one without refitting the other rescales the rate by exp(β Δp/P_atm).
 
 # Arguments
-- `C_g_total`: TOTAL gas concentration, summed over species [mol per m³ of gas].
-  Not the CO2 component - see above
-- `T`: Current absolute temperature [K], used to recover p = C_g,total R T
-- `β_area`: Interfacial-area coefficient β [-], dimensionless in this form;
-  0 disables the factor
-
-# Returns
-- `a`: Dimensionless area factor, a >= 1
+- `C_g_total`: TOTAL gas concentration summed over species [mol per m³ of gas], not the CO2 component
+- `T`: Absolute temperature [K], for p = C_g,total R T
+- `β_area`: Interfacial-area coefficient β [-]; 0 disables the factor
 """
 function interfacial_area_factor(C_g_total, T, β_area)
     if β_area == 0.0
@@ -212,12 +170,10 @@ function interfacial_area_factor(C_g_total, T, β_area)
     R_gas = 8.3145        # J mol⁻¹ K⁻¹
     P_atm = 101325.0      # Pa
 
-    # Total gas pressure, ideal gas law over the whole mixture. The current
-    # temperature is what makes the argument a pressure rather than a concentration.
+    # Total gas pressure, ideal gas law over the whole mixture
     p = C_g_total * R_gas * T
 
-    # Relative overpressure, floored at zero so a >= 1 - see the docstring. The
-    # calibration covers overpressure only; below ambient the form is extrapolation.
+    # Relative overpressure floored at zero (a >= 1). Calibration covers overpressure only
     overpressure = max(p / P_atm - 1.0, 0.0)
 
     return exp(β_area * overpressure)
@@ -226,60 +182,45 @@ end
 """
     extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, E, β_area)
 
-Non-negative extent-of-reaction rate r of Eq. (reaction_rate) of the manuscript,
-per unit volume of pore water.
+Compute the non-negative extent-of-reaction rate r per unit volume of pore water,
+Eq. (reaction_rate).
 
     r = k_T a C_aq (A_s - A_r) H(A_s - A_r)
 
-with C_aq from Henry's law, k_T from Arrhenius, and a the interfacial-area factor
-of [`interfacial_area_factor`](@ref). The law is second order: first order in
-dissolved CO2 and first order in the lime remaining above the residual. The
-Heaviside holds the rate at zero once A_s reaches A_r.
+C_aq from Henry's law, k_T from Arrhenius, a from [`interfacial_area_factor`](@ref).
+Second order: first order in dissolved CO2 and in lime above the residual. The Heaviside
+sets r = 0 once A_s reaches A_r.
 
-The area factor supplies pressure sensitivity that the linear C_aq term cannot:
-across the calibration pressures C_aq spans only 1.14x while the fitted rate
-spans an order of magnitude. Setting β_area = 0 removes it.
+The area factor provides the pressure sensitivity: across the calibration pressures C_aq
+varies only 1.14x, while the fitted rate varies an order of magnitude. β_area = 0 removes it.
 
-# Which gas concentration enters where
-The two terms are driven by different quantities and it matters which is which:
+# Gas concentration per term
+  - `C_aq` (dissolved CO2): CO2 partial concentration. Henry's law dissolves each species
+    according to its own partial pressure.
+  - `a` (gas-liquid interface): TOTAL gas pressure, consistent with the calibration chamber
+    pressure.
 
-  - `C_aq` is DISSOLVED CO2, so it comes from the CO2 partial concentration.
-    Henry's law dissolves each species according to its own partial pressure.
-  - `a` is the gas-liquid INTERFACE, so it comes from the TOTAL gas pressure.
-    The whole mixture presses on the menisci, and the calibration chamber
-    pressure the factor was fitted against is a total.
-
-Keeping C_aq on the CO2 component is also what keeps the CO2 sink first order in
-CO2. Driving it off the total instead makes the sink independent of how much CO2
-is actually present, and the positivity limiter in the IMPES step controller then
-drives the step to zero at the advancing front, where CO2 is scarce but the total
-is not.
+C_aq on the CO2 component keeps the CO2 sink first order in CO2. Using the total instead
+decouples the sink from the local CO2 amount, and the IMPES positivity limiter then drives
+the step to zero at the advancing front (low CO2, high total).
 
 # Difference from the solubility-capped form
-Earlier versions capped the dissolved lime at the portlandite solubility limit,
-r = k_T C_aq min{A_aq,sat, A*_s}. For these mixtures A*_s exceeds A_aq,sat by
-two to three orders of magnitude, so the min returned the constant A_aq,sat for
-all but the last fraction of a percent of conversion and the law was effectively
-zero order in lime: a constant rate followed by an abrupt arrest. Without the cap
-the aqueous lime concentration tracks the remaining solid in proportion, the rate
-decays as lime is consumed, and at fixed temperature the solution is an
-exponential approach to A_r.
+Earlier versions used r = k_T C_aq min{A_aq,sat, A*_s}. For these mixtures A*_s exceeds
+A_aq,sat by two to three orders of magnitude, therefore the min returned A_aq,sat for
+nearly all of the conversion and the law was effectively zero order in lime (constant rate,
+then abrupt arrest). Without the cap the rate decays with the remaining lime; at fixed
+temperature the solution is an exponential approach to A_r.
 
-The two forms are different chemistry, not two numerical treatments of the same
-assumption. The capped form assumes the pore water is saturated with portlandite
-and the solid acts as a buffered reservoir; the form used here assumes
-dissolution is fast relative to the reaction and never limits it.
+Different chemistry: the capped form assumes portlandite-saturated pore water with the
+solid as a buffered reservoir; this form assumes dissolution is fast relative to reaction.
 
-`k_o` is not transferable between the two forms. In the capped law it multiplied
-A_aq,sat, of order 2e1 mol per m³ of water; here it multiplies (A_s - A_r), of
-order 1e3 mol per m³ of total volume. A value calibrated against the capped form
-must be refitted. The calibration in `calibration_reactionrate/` fits this form.
+`k_o` is not transferable between forms. Capped: k_o multiplied A_aq,sat (~2e1 mol per m³
+of water). Here: k_o multiplies (A_s - A_r) (~1e3 mol per m³ of total volume). The
+calibration in `calibration_reactionrate/` fits this form.
 
-# Basis note
-`C_lime` and `C_r` are stored per unit total volume and enter on that basis,
-while C_aq is per unit volume of water. Their product is the rate per unit volume
-of water, so the caller still recovers the total-volume rate as θ_w r and the
-downstream conversions are unchanged. `lime_solubility` no longer enters the rate.
+# Basis
+`C_lime` and `C_r` per unit total volume, C_aq per unit volume of water. The product is a
+rate per unit volume of water; the caller obtains the total-volume rate as θ_w r.
 
 # Arguments
 - `C_g_co2`: CO2 concentration in the gas phase [mol per m³ of gas]; drives C_aq
@@ -291,10 +232,10 @@ downstream conversions are unchanged. `lime_solubility` no longer enters the rat
 - `T`: Absolute temperature [K]
 - `k_o`: Arrhenius factor [m³ mol⁻¹ s⁻¹]
 - `E`: Activation energy [J/mol]
-- `β_area`: Interfacial-area coefficient β [-], dimensionless, 0 disables the factor
+- `β_area`: Interfacial-area coefficient β [-]; 0 disables the factor
 
 # Returns
-- `r`: Extent-of-reaction rate [mol per m³ of water per s], r >= 0
+- `r` [mol per m³ of water per s], r >= 0
 """
 function extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, E, β_area)
     if θ_w <= 0.0 || C_g_co2 <= 0.0
@@ -303,9 +244,8 @@ function extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, 
 
     R_gas = 8.3145  # J mol⁻¹ K⁻¹
 
-    # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water]. Henry's
-    # law dissolves CO2 according to ITS OWN partial pressure, so this is the CO2
-    # component - see "Which gas concentration enters where" above.
+    # Aqueous CO2 at the gas-liquid interface, Eq. (henry) [mol/m³ of water].
+    # CO2 partial concentration (Henry's law per species)
     C_aq = henry_solubility(T) * R_gas * T * C_g_co2
 
     # Lime remaining above the shielded residual, per unit total volume
@@ -314,8 +254,7 @@ function extent_of_reaction_rate(C_g_co2, C_g_total, C_lime, C_r, θ_w, T, k_o, 
 
     k_T = arrhenius_coefficient(k_o, E, T)
 
-    # The interface responds to the TOTAL gas pressure, so the area factor takes the
-    # total concentration rather than the CO2 component.
+    # Area factor driven by TOTAL gas concentration
     a = interfacial_area_factor(C_g_total, T, β_area)
 
     return k_T * a * C_aq * A_react
@@ -325,22 +264,19 @@ end
 """
     reaction_decay_constant(C_g_total, C_lime, C_r, θ_w, θ_g, T, k_o, E, β_area)
 
-Rate at which the reaction drains CO2 from the gas phase, per unit of CO2 already there.
+Compute the reaction decay constant λ: CO2 consumption rate per unit gas-phase CO2.
 
-Holding the lime and the area factor fixed, the reactive part of the CO2 species equation
-is first order in its own concentration,
+With lime and area factor fixed, the reactive term of the CO2 equation is first order:
 
     dC_g,CO2/dt|rxn = -(θ_w/θ_g) k_T a K_H R T (A_s - A_r) C_g,CO2 = -λ C_g,CO2
 
-and λ is the bracket. It is the eigenvalue the reaction contributes to that node's
-equation, so it is what the explicit stability limit is built from, and `1/λ` is the time
-in which the reaction would empty a node of CO2 if nothing resupplied it.
+λ is the reaction eigenvalue of the nodal equation and enters the explicit stability limit.
+`1/λ` is the time to deplete a node of CO2 without resupply.
 
-Every factor here moves during a run. λ falls as the lime is consumed, and it falls as the
-specimen heats: the Arrhenius exponent is -E/RT while the Henry exponent is +2400/T, so
-for E = 7.5 kJ/mol the product goes as T exp(1498/T) and the retrograde solubility wins.
-A carbonation run is therefore fastest where it is coldest - which is the face of a
-specimen held at a convective boundary, not its interior.
+λ decreases as lime is consumed and as temperature increases: Arrhenius exponent -E/RT,
+Henry exponent +2400/T. For E = 7.5 kJ/mol the product scales as T exp(1498/T), and the
+retrograde solubility dominates. The reaction is therefore fastest at the coldest region,
+typically the face of a specimen at a convective boundary.
 
 # Arguments
 - `C_g_total`: total gas concentration [mol/m³ of gas], for the area factor
@@ -352,7 +288,7 @@ specimen held at a convective boundary, not its interior.
 - `β_area`: interfacial-area exponent [-]
 
 # Returns
-- Decay constant λ [1/s]; zero where there is no water, no gas or no lime left to react
+- λ [1/s]; zero without water, gas or reactive lime
 """
 function reaction_decay_constant(C_g_total, C_lime, C_r, θ_w, θ_g, T, k_o, E, β_area)
     (θ_w > 0.0 && θ_g > 0.0 && T > 0.0) || return 0.0
@@ -371,13 +307,13 @@ end
 IMPLEMENTATION NOTES:
 =====================
 
-This module implements a fully explicit finite element solver for transient 
-gas diffusion in porous media.
+Fully explicit FE solver for transient gas transport in porous media.
 
-The solver can simulate a combination of diffusion, advection, gravitational flow,
-and reaction kinetics (e.g., lime carbonation) using a forward Euler time integration scheme.
+Diffusion, advection, gravitational flow and reaction kinetics (e.g., lime carbonation),
+forward Euler time integration.
 
-Temperature effects from exothermic reactions are also included, but assumed adiabatic, i.e., no heat loss to surroundings including the soil matrix.
+Heat from exothermic reactions included, assumed adiabatic (no heat loss to surroundings
+or soil matrix).
 =#
 
 using Base.Threads
@@ -387,12 +323,8 @@ using LinearAlgebra
 """
     ElementProperties
 
-Static, time-invariant properties of one element, resolved once before the time loop.
-
-The solver previously re-derived all of these inside the time loop by calling
-`get_element_material` and indexing `materials.soil_dictionary` / `materials.soils`,
-once per element per gas per step, and again in each of the velocity and temperature
-sweeps. None of it changes in time, so it is resolved once here instead.
+Time-invariant element properties, resolved once before the time loop to avoid
+per-step `get_element_material` lookups.
 
 # Fields
 - `material_idx::Int`: Index of the soil material assigned to the element
@@ -406,9 +338,7 @@ sweeps. None of it changes in time, so it is resolved once here instead.
 - `specific_gravity::Float64`: Specific gravity of solids G_s [-]
 - `specific_heat_solids::Float64`: Specific heat of solids c_s [J/(kg·K)]
 
-The Arrhenius pair is deliberately absent: the kinetics belong to the reaction,
-not to a material, so k_o and E are read once from the reactant properties rather
-than carried per element.
+k_o and E are reaction properties, read once from the reactant properties instead of per element.
 """
 struct ElementProperties
     material_idx::Int
@@ -427,20 +357,16 @@ end
 """
     effective_conductivity(soil, materials, n, S_r) -> Float64
 
-Effective thermal conductivity of the mixture, Eq. (fourier) of the manuscript:
+Compute the effective thermal conductivity of the mixture, Eq. (fourier).
 
     λ_e = (1-n) λ_s + θ_w λ_w + θ_g λ_g
 
-a volume-weighted average of the phase conductivities, assembled the same way as
-the volumetric heat capacity C_mix. This is a parallel average and so an upper
-bound for a granular assembly, since heat must in reality cross grain contacts;
-the manuscript flags λ_e as the natural quantity to calibrate if a simulated
-thermal front comes out over-diffused.
+Volume-weighted (parallel) average, assembled like C_mix. Upper bound for a granular
+assembly, since heat crosses grain contacts. λ_e is the calibration parameter if a
+simulated thermal front is over-diffused.
 
-The gas conductivity is averaged over the declared species rather than weighted by
-concentration: λ_g varies little between the gases involved, and the gas term is a
-small fraction of λ_e, so a concentration weighting would add a per-node
-dependency for no accuracy.
+λ_g is the plain average over declared species, without concentration weighting: λ_g
+varies little between the gases and the gas term is a small fraction of λ_e.
 
 # Arguments
 - `soil`: Soil properties of the material
@@ -516,17 +442,14 @@ end
 """
     build_node_owner_elements(mesh) -> Vector{Int}
 
-For each node, the highest-index element containing it.
+Return, for each node, the highest-index element containing it.
 
-The reaction and temperature terms are evaluated per node but depend on element-level
-properties (θ_w, θ_g, the Arrhenius pair). Written as element loops that *assign* rather
-than accumulate, they leave each shared node holding the value written by whichever
-element came last, i.e. the highest element index. Resolving that ownership once lets
-those terms be evaluated in a node loop, which is both order-independent and trivially
-parallel, while reproducing the element-loop result exactly.
+Reaction and temperature terms are evaluated per node but use element-level properties
+(θ_w, θ_g, Arrhenius pair). An element loop that assigns (instead of accumulating) leaves
+each shared node with the value of the highest element index. Resolving ownership once
+allows an order-independent, parallel node loop with the same result.
 
-Where a node sits on a boundary between two materials the choice is arbitrary, but it is
-arbitrary in exactly the same way it already was.
+Nodes on a material interface get an arbitrary owner, consistent with the element-loop result.
 
 # Arguments
 - `mesh`: Mesh data structure
@@ -552,37 +475,27 @@ end
 """
 assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
 
-Assemble the lumped mass vector for all nodes.
-Mass lumping sums element contributions to nodes.
-
-# Arguments
-- `M::Vector{Float64}`: Lumped mass vector to be filled [Nnodes]
-- `mesh`: Mesh data structure
-- `materials`: Material data structure
+Assemble the row-sum lumped mass vector. Mutates `M` [Nnodes].
 
 # Formula
 Eq. (lumped_mass_matrix): M_a = Σ_gp θ_g N_a(gp) w_gp W_gp, with `w_gp` the quadrature measure
-of `ShapeFunctions.get_weight` — `|det J|` under plane strain, `r_gp |det J|` under the
-axisymmetric formulation of Eq. (ax_lumped_mass_matrix).
+of `ShapeFunctions.get_weight`: `|det J|` for plane strain, `r_gp |det J|` for axisymmetry,
+Eq. (ax_lumped_mass_matrix).
 
-This is a row-sum lumping and is evaluated as written. It previously computed the element area
-and split it equally, `M_node = θ_g A_e / 4`, which is the same number only when ∫N_a dΩ = A_e/4,
-i.e. for a parallelogram. On a general quad the two differ, and under the axisymmetric
-formulation they differ always, because `r_gp` varies within the element and the node nearer the
-axis must receive less mass than the node further from it.
+The equal split `M_node = θ_g A_e / 4` matches only for a parallelogram (∫N_a dΩ = A_e/4).
+Under axisymmetry `r_gp` varies within the element, therefore the node nearer the axis
+receives less mass.
 """
 function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
     fill!(M, 0.0)
 
     Nelements = mesh.num_elements
 
-    # A node is shared by several elements, so scatter-adding into M straight from a threaded
-    # element loop is a read-modify-write race. The element range is split into fixed chunks
-    # and each chunk accumulates into its own buffer, which are summed in order after the join.
+    # Shared nodes: scatter-add from a threaded element loop is a read-modify-write race.
+    # Fixed element chunks, one buffer per chunk, summed in order after the join.
     #
-    # Chunks are indexed explicitly rather than by Threads.threadid(): tasks may migrate
-    # between threads, so a threadid-indexed buffer can be shared by two tasks, and
-    # threadid() may also exceed Threads.nthreads() when interactive threads are present.
+    # Chunks indexed explicitly instead of Threads.threadid(): tasks may migrate between
+    # threads, and threadid() may exceed Threads.nthreads() with interactive threads.
     nchunks = max(1, min(Threads.nthreads(), Nelements))
     M_chunk = [zeros(Float64, length(M)) for _ in 1:nchunks]
     chunk_bounds = round.(Int, range(0, Nelements, length = nchunks + 1))
@@ -607,8 +520,7 @@ function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
             # Calculate gas volume fraction θ_g = n - θ_w = n(1 - S_r)
             θ_g = soil.porosity * (1.0 - soil.saturation)
 
-            # M_a = Σ_gp θ_g N_a(gp) w_gp W_gp. The shape function weights each node's share,
-            # so a node sees only the part of the element measure that belongs to it.
+            # M_a = Σ_gp θ_g N_a(gp) w_gp W_gp. N_a weights the nodal share of the element measure
             for p in 1:4  # 4 Gauss points
                 N_p = ShapeFunctions.get_N(p)
                 dV = ShapeFunctions.get_weight(e, p) * ShapeFunctions.shape_funcs.gauss_weights[p]
@@ -619,7 +531,7 @@ function assemble_lumped_mass_vector!(M::Vector{Float64}, mesh, materials)
         end
     end
 
-    # Reduce the chunk buffers in a fixed order, so M is reproducible run to run
+    # Fixed-order reduction, reproducible M between runs
     for c in 1:nchunks
         M .+= M_chunk[c]
     end
@@ -629,22 +541,15 @@ end
 """
 assemble_element_stiffness_matrices(mesh)
 
-Assemble and store element geometric stiffness matrices (without material properties).
-
-# Arguments
-- `mesh`: Mesh data structure
-
-# Returns
-- `Vector{Matrix{Float64}}`: Vector of element geometric stiffness matrices [Nelements][4×4]
+Assemble element geometric stiffness matrices without material properties [Nelements][4×4].
 
 # Formula
 K_e[i,j] = ∑_p (B · J^-1)^T · (B · J^-1) w_gp W_p
-where material properties will be applied later and `w_gp` is the quadrature measure of
-`ShapeFunctions.get_weight`. Because the measure already carries the radius on an axisymmetric
-run, this one matrix serves both formulations, and with it every term that contracts it: the
-diffusive flux of Eq. (ax_diffusive_flux) and the thermal conductive flux of
-Eq. (ax_thermal_conductive_flux). The contraction itself is identical in the two cases, which is
-exactly what the appendix asserts — only the measure changes.
+
+Material properties applied later. `w_gp` is the quadrature measure of
+`ShapeFunctions.get_weight` and includes the radius for axisymmetric runs, therefore one
+matrix serves both formulations: diffusive flux, Eq. (ax_diffusive_flux), and thermal
+conductive flux, Eq. (ax_thermal_conductive_flux). Only the measure changes between the two.
 """
 function assemble_element_stiffness_matrices(mesh)
     Nelements = mesh.num_elements
@@ -668,8 +573,7 @@ function assemble_element_stiffness_matrices(mesh)
             # Gauss weight
             w = ShapeFunctions.shape_funcs.gauss_weights[p]
 
-            # Compute geometric stiffness contribution: K_e += w * w_gp * (dN/dx) * (dN/dx)^T
-            # Using matrix multiplication: dN_dx * dN_dx' computes all ∇N_i · ∇N_j terms at once
+            # K_e += w * w_gp * (dN/dx) * (dN/dx)^T, all ∇N_i · ∇N_j terms in one product
             K_e .+= (w * dV) .* (dN_dx * dN_dx')
         end
         
@@ -684,8 +588,7 @@ end
 """
     fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data, log_print)
 
-Main fully explicit solver for gas diffusion in porous media.
-Solves the transient diffusion equation using forward Euler time integration.
+Solve transient gas transport in porous media with forward Euler time integration.
 
 # Arguments
 - `mesh`: Mesh data structure
@@ -733,35 +636,24 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     M_caco3= 100.09 #g/mol
     ρ_caco3= 2.71e6 #g/m³
     
-    # Reaction enthalpy for lime carbonation [J/mol CO2], read from the material file.
+    # Reaction enthalpy of lime carbonation [J/mol CO2], from the material file.
     # Ca(OH)2(s) + CO2(g) -> CaCO3(s) + H2O(l)
-    # Negative under the IUPAC convention, i.e. exothermic. Material files that
-    # predate the [reactants] table fall back to -113800 J/mol CO2, which is
-    # Hess's law on the standard enthalpies of formation at 298.15 K
-    # (-986.09, -393.51, -1207.6, -285.83 kJ/mol). That value assumes liquid-phase
-    # product water; taking H2O(g) instead would give -69.8 kJ/mol.
+    # Negative (IUPAC convention) for exothermic. Fallback for files without [reactants]
+    # is DEFAULT_REACTION_ENTHALPY (read_materials.jl).
     ΔH_r = materials.reactants.reaction_enthalpy  # J/mol CO2
 
-    # Kinetics of the carbonation reaction, k_T = k_o exp(-E/RT). A property of the
-    # reaction rather than of a material, so it is read once here instead of being
-    # carried per element.
+    # Carbonation kinetics, k_T = k_o exp(-E/RT). Reaction property, read once
     k_o_reaction = materials.reactants.arrhenius_factor    # m³/(mol·s)
     E_reaction = materials.reactants.activation_energy     # J/mol
-    # Interfacial-area coefficient of the same rate law. Fitted jointly with k_o,
-    # so the two must be taken from the same calibration.
+    # Interfacial-area coefficient. Fitted jointly with k_o, must come from the same calibration
     β_area_reaction = materials.reactants.interfacial_area_beta  # dimensionless
 
-    # Molar heat capacity of each gas species [J/(mol·K)], in gas_dictionary order.
-    # This replaces the single hard-coded mass-basis value the solver used to assume
-    # for every gas. The molar form is what Eq. (heat_advection) writes, and it lets
-    # the gas contribution to the mixture be assembled straight from the nodal
-    # concentrations as (ρc)_g = Σ_i C_g^i c̄_p^i, with no density conversion.
+    # Molar heat capacity per gas species [J/(mol·K)], gas_dictionary order.
+    # Molar form of Eq. (heat_advection): (ρc)_g = Σ_i C_g^i c̄_p^i, no density conversion.
     #
-    # Eq. (vol_heat_capacity) writes the gas term of C_mix on a mass basis and
-    # Eq. (heat_advection) on a molar basis; they are the same quantity, so the molar
-    # form is used for both. Strictly the storage term wants c_v and advection c_p,
-    # but the gas carries of order 1e-3 of the mixture capacity, so the distinction is
-    # far below anything else in the model.
+    # Eq. (vol_heat_capacity) uses a mass basis and Eq. (heat_advection) a molar basis for
+    # the same quantity; molar form used for both. Storage strictly requires c_v and
+    # advection c_p, but the gas contributes ~1e-3 of the mixture capacity.
     c_p_molar = [materials.gases[name].molar_heat_capacity
                  for name in materials.gas_dictionary]
 
@@ -780,16 +672,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     calculate_heat_advection = solver_settings["heat_advection"] == 1
     calculate_stabilization = get(solver_settings, "advection_stabilization", 0) == 1
 
-    # With neither transport mechanism active the temperature field does not evolve at
-    # all: the run is isothermal and the reaction enthalpy is ignored, however it is
-    # set in the material file. Note this is stronger than the λ_e = 0, v_g = 0 limit
-    # of the manuscript (tex:474), which still applies the local heat source; to get
-    # that adiabatic limit, enable conduction and set the phase conductivities to zero.
+    # Without conduction or heat advection T is constant: isothermal run, ΔH_r ignored.
+    # Stronger than the λ_e = 0, v_g = 0 limit of the manuscript (tex:474), which keeps the
+    # local heat source. Adiabatic limit: enable conduction, set phase conductivities to zero.
     calculate_heat = calculate_heat_conduction || calculate_heat_advection
 
-    # The rate law takes an Arrhenius pair (k_o, E) in place of the single
-    # constant κ used before. Material files written for the old input will
-    # parse with k_o = 0 and silently produce no reaction, so flag it here.
+    # Legacy material files (single constant κ) parse with k_o = 0 and give no reaction
     if calculate_reaction
         log_print(@sprintf("   Reaction enthalpy ΔH_r: %.4g J/mol CO2", ΔH_r))
         log_print(@sprintf("   Arrhenius factor k_o: %.4g m³/(mol·s), activation energy E: %.4g J/mol",
@@ -806,10 +694,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                       "[reactants] table with lime_arrhenius_factor and lime_activation_energy.")
         end
 
-        # ΔH_r enters the energy equation as q̇ = ΔH_r dC_CO2/dt with dC_CO2/dt < 0,
-        # so the exothermic carbonation reaction requires a negative enthalpy to
-        # release heat. A magnitude entered without its sign would cool the soil,
-        # which is easy to miss in the output, hence the explicit check.
+        # q̇ = ΔH_r dC_CO2/dt with dC_CO2/dt < 0, therefore heat release requires ΔH_r < 0.
+        # A positive value cools the soil
         if ΔH_r > 0.0
             log_print("Warning: reaction_enthalpy = $(ΔH_r) J/mol is positive, i.e. " *
                       "endothermic, so carbonation will cool the soil. Lime carbonation " *
@@ -817,19 +703,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         end
     end
 
-    # Get gravity vector from calc_params.
+    # Gravity vector from calc_params.
     #
-    # The components are the physical acceleration itself, not a magnitude with the
-    # orientation left to the solver: for a mesh with y pointing up, gravity points down
-    # and gravity_y_component is -1.0. Everything downstream implements Darcy's law in
-    # the form of Eq. (Darcy_law),
+    # Components are the physical acceleration (y up: gravity_y_component = -1.0).
+    # Darcy's law, Eq. (Darcy_law):
     #
     #     v = -(K/μ_g) (∇p - ρ_g g),
     #
-    # so g enters with a plus sign in the velocity and the gravitational flux carries the
-    # leading minus of Eq. (gravitational_flux). Flipping the sense of the input vector
-    # therefore flips the direction gravity drives the gas, which is the point of letting
-    # the user orient it.
+    # g enters the velocity with a plus sign; the gravitational flux has the leading minus
+    # of Eq. (gravitational_flux). Reversing the input vector reverses the gravity drive.
     gravity_params = calc_params["gravity"]
     g_magnitude = gravity_params["magnitude"]
     g_x = gravity_params["x_component"]
@@ -857,15 +739,12 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     # Precompute geometric element stiffness matrices (same for all gases)
     K_elements = assemble_element_stiffness_matrices(mesh)
 
-    # Resolve static element material properties and node ownership once, so the time
-    # loop never repeats a material dictionary lookup
+    # Static element properties and node ownership, no dictionary lookups in the time loop
     elem_props = build_element_properties(mesh, materials, C_lime_residual)
     node_owner = build_node_owner_elements(mesh)
 
-    # Per-element characteristic length, needed by the SU stabilization parameter tau*
-    # (calculate_stabilization). Static geometry, resolved once here rather than inside
-    # the time loop. calculate_element_characteristic_length is defined in time_step.jl,
-    # included before this file in kernel.jl, so it is already in scope.
+    # Element characteristic length for SU τ*. Static, computed once.
+    # calculate_element_characteristic_length defined in time_step.jl (included earlier in kernel.jl)
     h_elem = calculate_stabilization ?
         [calculate_element_characteristic_length(mesh, e) for e in 1:Nelements] :
         Float64[]
@@ -898,9 +777,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         output_counter = 1
     end
 
-    # Open the node probes. These follow individual nodes at data_saving_interval,
-    # which is set apart from the VTK cadence, so they can be sampled much more
-    # finely than the mesh is dumped. Returns nothing when no nodes were requested.
+    # Node probes sampled at data_saving_interval, independent of the VTK interval.
+    # `nothing` when no nodes requested
     probe_writer = WriteProbes.init_node_probes(project_name, current_stage, mesh,
                                                 materials.gas_dictionary,
                                                 calc_params["probing_nodes"],
@@ -908,44 +786,38 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                                                 calc_params["units"], current_time,
                                                 log_print)
 
-    # Record the starting state, so a series begins at the initial (or restart) time
+    # Initial (or restart) state as first probe sample
     WriteProbes.probe_sample!(probe_writer, current_time, C_g, dC_g_dt,
                               total_concentration, P, T, dT_dt, C_lime, C_caco3,
                               dC_lime_dt, degree_of_carbonation, binder_content, v;
                               force=true)
 
-    # Flow vectors, allocated once and zeroed in place each step.
-    # These are function-local rather than the like-named globals in initialize_flows.jl:
-    # locals are type-stable and avoid a global lookup in the hot loop. The globals of the
-    # same name are not used by this solver.
+    # Flow vectors, allocated once, zeroed in place each step.
+    # Function-local instead of the globals in initialize_flows.jl: type-stable, no global
+    # lookup in the hot loop. Those globals are unused by this solver.
     q_diffusion = zeros(Float64, Nnodes, NGases)
     q_advection = zeros(Float64, Nnodes, NGases)
     q_gravitational = zeros(Float64, Nnodes, NGases)
     # Thermal contribution to the pressure gradient, Eq. (thermal_pressure_flux).
-    # Kept separate from q_advection, which it shares a sign and a flag with, because
-    # the manuscript reports the relative magnitude of the two (tex:263).
+    # Separate from q_advection (same sign and flag) to report their relative magnitude (tex:263)
     q_thermal_press = zeros(Float64, Nnodes, NGases)
     total_rate = zeros(Float64, Nnodes)   # Boundary rate of change
     q_source_sink = zeros(Float64, Nnodes) # Only for CO2 for now
 
-    # Composition weights for the Lagrangian pressure-BC correction below: at each
-    # pressure-BC node, free_conc_sum holds the level-n total of the FREE gases only
-    # (P_boundary-gated), and n_free_nodes the count of free gases, so the correction can
-    # be split in proportion to each free species' own concentration instead of equally
-    # in absolute terms. Recomputed in full every step from level-n C_g, so no reset is
-    # needed between steps.
+    # Composition weights for the Lagrangian pressure-BC correction. Per pressure-BC node:
+    # free_conc_sum = level-n total of FREE gases (P_boundary-gated), n_free_nodes = free
+    # gas count. Correction split in proportion to each free species concentration.
+    # Fully recomputed each step from level-n C_g, no reset needed.
     free_conc_sum = zeros(Float64, Nnodes)
     n_free_nodes = zeros(Int, Nnodes)
 
     # Element-chunk decomposition for the threaded flux and velocity loops.
     #
-    # nchunks is deliberately independent of Threads.nthreads(): the per-chunk buffers are
-    # reduced in chunk order, so a fixed chunk count makes the result reproducible to the
-    # last bit no matter how many threads run it. Tying it to the thread count would make
-    # the summation order, and therefore the round-off, depend on the machine.
+    # nchunks independent of Threads.nthreads(): chunk-order reduction with a fixed chunk
+    # count gives bitwise-reproducible results for any thread count.
     #
-    # Memory is nchunks * Nnodes * (3*NGases + NDim) * 8 bytes. For meshes large enough for
-    # that to matter, mesh colouring would replace the buffers entirely.
+    # Memory: nchunks * Nnodes * (3*NGases + NDim) * 8 bytes. Mesh colouring would replace
+    # the buffers for very large meshes.
     nchunks = max(1, min(Nelements, 32))
     chunk_bounds = round.(Int, range(0, Nelements, length = nchunks + 1))
 
@@ -959,39 +831,34 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
     q_aux_chunk = [zeros(4) for _ in 1:nchunks]
     qT_aux_chunk = [zeros(4) for _ in 1:nchunks]
     ρ_g_chunk = [zeros(4) for _ in 1:nchunks]
-    # SU stabilization scratch: dN_dx * v_gp and dN_dx * v_gp_T, one pair per chunk, so
-    # the streamline-diffusion contraction in the advective loop needs no per-Gauss-point
-    # allocation (mirrors the mul! convention already used for q_aux at the diffusion term).
+    # SU stabilization scratch: dN_dx * v_gp and dN_dx * v_gp_T, one pair per chunk.
+    # No per-Gauss-point allocation (same mul! convention as q_aux in the diffusion term)
     a_su_chunk = [zeros(4) for _ in 1:nchunks]
     aT_su_chunk = [zeros(4) for _ in 1:nchunks]
 
-    # Energy equation: nodal heat source and the per-chunk accumulators for the
-    # lumped thermal capacity and the conductive and reactive fluxes.
+    # Energy equation: nodal heat source, per-chunk accumulators for lumped thermal
+    # capacity and conductive/reactive fluxes
     Q_dot_T = zeros(Float64, Nnodes)
     MT_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qd_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qr_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     qa_T_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
-    # Heat flux projection: the flux itself and the normalising weight of
-    # Eq. (nodal_velocities), whose denominator is sum(N |detJ| W)
+    # Heat flux projection: flux and normalising weight sum(N |detJ| W), Eq. (nodal_velocities)
     qh_chunk = [zeros(Float64, Nnodes, NDim) for _ in 1:nchunks]
     qhw_chunk = [zeros(Float64, Nnodes) for _ in 1:nchunks]
     heat_flux_weight = zeros(Float64, Nnodes)
 
-    # Gauss-point Darcy velocity, cached per element and Gauss point. Presently written
-    # for the nodal projection only; the thermal advective flux of the energy equation
-    # consumes it directly (manuscript Eq. thermal_advective_flux), which is why it is
-    # retained rather than discarded once projected.
+    # Gauss-point Darcy velocity per element and Gauss point. Used by the nodal projection
+    # and directly by the thermal advective flux, Eq. (thermal_advective_flux)
     v_gp_cache = zeros(Float64, Nelements, 4, NDim)
 
     #______________________________________________________
     # Time-dependent boundary conditions
     #
-    # Flatten the curve references once, keeping only the entries that actually
-    # carry a curve, so the per-step cost is proportional to the number of
-    # time-driven boundary nodes and disappears entirely for a constant model.
-    # Each tuple also carries the constant value from the mesh file, which a
-    # multiplier curve scales and an absolute curve replaces.
+    # Flatten curve references once, only entries with a curve. Per-step cost scales with
+    # the number of time-driven boundary nodes (zero for a constant model).
+    # Each tuple also stores the mesh-file constant: scaled by a multiplier curve,
+    # replaced by an absolute curve.
     #______________________________________________________
     time_functions = calc_params["time_functions"]
 
@@ -1013,11 +880,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                       for (node_id, id) in mesh.temperature_bc_tf
                       if id != 0 && haskey(mesh.temperature_bc, node_id)]
 
-    # partial_pressure_bc has no has_transient_* gate of its own: unlike the other four
-    # boundaries, it is already re-imposed unconditionally every step (it tracks the
-    # evolving temperature via the ideal gas law), so the curve lookup is inline in that
-    # existing loop below rather than through a separate filtered list. This count is
-    # purely for the log line.
+    # No has_transient_* gate for partial_pressure_bc: re-imposed every step (follows T via
+    # the ideal gas law), therefore the curve lookup is inline in that loop. Count used
+    # for the log line only.
     n_transient_partial_press = sum(count(!=(0), ids) for ids in values(mesh.partial_pressure_bc_tf);
                                     init=0)
 
@@ -1036,62 +901,48 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
     # Main time stepping loop
     save_data = false
-    # Reset at every output so the lime clamp warns once per output interval rather
-    # than once per node per step. Initialized here because the only other
-    # assignment is inside the output block: a run whose lime is exhausted before
-    # the first output would otherwise read it undefined.
+    # Reset at every output: one lime clamp warning per output interval. Initialized here
+    # since the only other assignment is in the output block (undefined if lime is
+    # exhausted before the first output).
     negative_lime_warned = false
 
-    # How often the non-negativity clamp actually fires, per gas, since the last output.
+    # Non-negativity clamp count per gas since the last output.
     #
-    # The warning at the clamp fires once per gas for the whole run, which is the right
-    # volume for a clamp that trips occasionally on round-off but hides the case it
-    # matters in: a clamp firing thousands of times a step is not housekeeping, it is an
-    # unstable mode being arrested and reshaped into a bounded standing oscillation. That
-    # is what an under-resolved stability limit looks like from the inside, and it went
-    # unnoticed on the axisymmetric carbonation runs precisely because one line of warning
-    # at step 1 reads like a rounding artefact.
+    # The clamp warning appears once per gas per run, adequate for occasional round-off.
+    # Thousands of clamps per step indicate an unstable mode reshaped into a bounded
+    # standing oscillation (under-resolved stability limit). This went unnoticed on the
+    # axisymmetric carbonation runs because a single warning at step 1 looks like round-off.
     #
-    # Indexed by gas rather than accumulated into a scalar because the update loop is
-    # threaded over gases: each task owns one entry, so there is no race and no lock.
+    # Indexed by gas: update loop threaded over gases, one entry per task, no race, no lock.
     negative_conc_count = zeros(Int, NGases)
 
-    # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is resolved.
-    # Per-node, per-gas clamp counter, so the top offending nodes can be classified as
-    # pressure-BC / concentration-BC / interior. A matrix rather than a shared vector:
-    # each thread in the update loop below owns exactly one gas_idx (hence one column),
-    # so writes never race, the same reasoning as negative_conc_count above.
+    # TEMPORARY DIAGNOSTIC: remove after the clamp-location investigation is resolved.
+    # Per-node, per-gas clamp count to classify top offending nodes as
+    # pressure-BC / concentration-BC / interior. One column per gas_idx, one thread per
+    # column, no race (same as negative_conc_count).
     negative_conc_node_count = zeros(Int, Nnodes, NGases)
 
-    # Step index of the last output, so the clamp count can be normalised by the number
-    # of nodal updates it was accumulated over rather than reported as a bare total.
+    # Step index of the last output, to normalise the clamp count by the number of nodal updates
     last_output_step = 0
     for step in 1:num_steps
 
         #______________________________________________________
         # Refresh the time-dependent boundary conditions for this step
         #
-        # The scheme is forward Euler: the state is at t_n, the rates are built
-        # from t_n, and the update lands at t_{n+1}. The two classes of boundary
-        # therefore take different times:
+        # Forward Euler: state and rates at t_n, update at t_{n+1}. Evaluation times:
         #
-        #   a Neumann flux ENTERS the rate      -> evaluate at t_n
-        #   a Dirichlet value is IMPOSED on the
-        #   new state                           -> evaluate at t_{n+1}
+        #   Neumann flux (enters the rate)        -> t_n
+        #   Dirichlet value (imposed on new state) -> t_{n+1}
         #
-        # dt is already this step's dt: it is adjusted at the end of the previous
-        # iteration to land exactly on the next output time, so t_next below is
-        # exact and does not drift across output boundaries.
+        # dt adjusted at the end of the previous iteration to match the next output time,
+        # therefore t_next is exact, no drift across output boundaries.
         #______________________________________________________
         t_next = current_time + dt
 
         if has_transient_flow
-            # q_boundary is prefilled at start-up and deliberately not zeroed in
-            # this loop, so overwrite only the entries a curve drives and leave
-            # the constant ones alone. dt is passed through so a table carrying
-            # average = true integrates over the step instead of point sampling,
-            # which is what keeps the injected mass right when the step is
-            # coarser than the file.
+            # q_boundary prefilled at start-up, not zeroed here: overwrite curve-driven
+            # entries only. dt passed for tables with average = true (step integral instead
+            # of point sample), conserving injected mass when dt exceeds the table spacing.
             for (node_id, gas_idx, tf_id, q_const) in transient_flow
                 q_boundary[node_id, gas_idx] =
                     bc_value(time_functions, tf_id, q_const, current_time, dt) *
@@ -1100,11 +951,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         end
 
         if has_transient_press
-            # Move the target the Lagrange multipliers below drive towards, so
-            # they aim at the pressure this step ends at rather than the one the
-            # previous step ended at. T here is still T_n; the end-of-step
-            # re-imposition uses the updated T, and the difference is O(dt dT/dt),
-            # below the error of the scheme itself.
+            # Lagrange multiplier target set to the end-of-step pressure. T is still T_n here;
+            # end-of-step re-imposition uses updated T. Difference O(dt dT/dt), below the
+            # scheme error.
             for (node_id, tf_id, p_const) in transient_press
                 total_concentration[node_id] =
                     bc_value(time_functions, tf_id, p_const, t_next) / (R * T[node_id])
@@ -1128,11 +977,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         #______________________________________________________
         #Reaction kinetics calculation start here
         #
-        #Evaluated per node rather than per element. The rate depends only on nodal
-        #state (C_g, C_lime, T) plus element-level properties, which `node_owner`
-        #resolves once, so this reproduces the element loop exactly while being
-        #order-independent and parallel. It uses level-k state, so it must run before
-        #the gas fluxes consume q_source_sink.
+        #Per node: rate depends on nodal state (C_g, C_lime, T) and element properties
+        #resolved by `node_owner`. Same result as the element loop, order-independent and
+        #parallel. Level-k state, must run before the gas fluxes use q_source_sink.
         #______________________________________________________
         if calculate_reaction && co2_gas_idx !== nothing
             @threads for node_id in 1:Nnodes
@@ -1143,8 +990,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 props = elem_props[e]
 
                 #Extent-of-reaction rate r >= 0, per unit volume of water
-                # The area factor is driven by the total gas pressure, so the whole
-                # mixture is summed here; C_aq still uses the CO2 component alone.
+                # Total gas concentration for the area factor; C_aq uses the CO2 component
                 C_g_tot = 0.0
                 for g in 1:NGases
                     C_g_tot += C_g[node_id, g]
@@ -1155,11 +1001,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                                             props.residual_lime, props.θ_w, T[node_id],
                                             k_o_reaction, E_reaction, β_area_reaction)
 
-                #Species rates follow from the stoichiometric coefficients.
-                #Lime is stored per unit total volume, so dA/dt = -θ_w r.
+                #Species rates from stoichiometric coefficients.
+                #Lime per unit total volume: dA/dt = -θ_w r.
                 dC_lime_dt[node_id] = -props.θ_w * r
 
-                #CO2 is stored per unit gas volume, so the sink carries θ_w/θ_g.
+                #CO2 per unit gas volume: sink scaled by θ_w/θ_g.
                 if props.θ_g > 0.0
                     q_source_sink[node_id] = -M[node_id] * (props.θ_w / props.θ_g) * r
                 else
@@ -1169,14 +1015,11 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         end
         #______________________________________________________
 
-        # Loop over element chunks, with the gas loop moved inside.
+        # Loop over element chunks, gas loop inside.
         #
-        # Threading over elements rather than gas species widens the parallel section from
-        # NGases (commonly 2) to the element count. Elements sharing a node would race on
-        # the nodal flux arrays, so each chunk accumulates into its own buffer and the
-        # buffers are reduced in chunk order afterwards. The chunk count is fixed and
-        # independent of Threads.nthreads(), so the reduction order - and hence the result
-        # to the last bit - does not depend on how many threads happen to be available.
+        # Threading over elements instead of gases: parallel width = element count instead
+        # of NGases (commonly 2). Per-chunk buffers avoid races on shared nodes, reduced in
+        # chunk order. Fixed chunk count, bitwise-reproducible for any thread count.
         @threads for c in 1:nchunks
             qd_c = qd_chunk[c]
             qa_c = qa_chunk[c]
@@ -1212,11 +1055,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #Get gas dynamic viscosity
                 μ_g = gas.dynamic_viscosity
 
-                # Effective diffusivity of THIS species' diffusive operator, used only by
-                # the SU stabilization parameter below. Zero when diffusion is switched off
-                # in solver_settings, matching what the assembled system actually contains
-                # rather than what the material file lists - axisym_darcy_radial is exactly
-                # this case (diffusion = 0 by construction).
+                # Effective diffusivity of this species, for SU τ* only. Zero when diffusion is
+                # off in solver_settings, consistent with the assembled system
+                # (e.g. axisym_darcy_radial, diffusion = 0).
                 D_g_eff = calculate_diffusion ? (θ_g * D_g * τ) : 0.0
 
                 #Get current gas nodal concentrations
@@ -1273,25 +1114,23 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         dN_dx = ShapeFunctions.get_dN_dx(e, p)  # [4 nodes, 2 coords]
 
                         #Update diffusion flow vector ∑_p K^p * T^p *C^p * k^p_elm *C_tot * w_gp * W_p / μ_g^p
-                        #Eq. (advective_flux); Eq. (ax_advective_flux) when the measure carries r_gp
-                        #Contract right to left: dN_dx * (dN_dx' * C_t) avoids forming the 4×4 product
+                        #Eq. (advective_flux); Eq. (ax_advective_flux) when the measure includes r_gp
+                        #Right-to-left contraction dN_dx * (dN_dx' * C_t), no 4×4 product
                         q_aux .+= (R * k_intrinsic * C_gp * T_gp * dV * Wp / μ_g) .* (dN_dx * (dN_dx' * C_t))
 
                         #Thermal contribution to the pressure gradient, Eq. (thermal_pressure_flux).
-                        #Same element operator as the advective flux above with the roles of T and
-                        #Σ_j C_g^j exchanged: there T is the Gauss-point scalar and the total
-                        #concentration is differentiated, here it is the other way round. So this
-                        #adds one contraction and no new element matrices (tex:368).
+                        #Same operator as the advective flux with T and Σ_j C_g^j exchanged
+                        #(differentiated T, Gauss-point total concentration). One extra contraction,
+                        #no new element matrices (tex:368).
                         C_tot_gp = N_p' * C_t
                         qT_aux .+= (R * k_intrinsic * C_gp * C_tot_gp * dV * Wp / μ_g) .* (dN_dx * (dN_dx' * T_e))
 
                         #______________________________________________________
-                        #Streamline-upwind (SU) stabilization, added to both q_aux and
-                        #qT_aux. See src/ADVECTION_STABILIZATION_NOTES.md for the
-                        #derivation. v_gp and v_gpT are the two local velocities driving
-                        #q_aux and qT_aux respectively - the product-rule split of
-                        #grad(P) = R(T grad(C_tot) + C_tot grad(T)) - and are NOT the same
-                        #vector, so each gets its own tau*.
+                        #Streamline-upwind (SU) stabilization of q_aux and qT_aux.
+                        #Derivation in src/ADVECTION_STABILIZATION_NOTES.md. v_gp and v_gpT are
+                        #the velocities of q_aux and qT_aux from the product-rule split
+                        #grad(P) = R(T grad(C_tot) + C_tot grad(T)). Different vectors,
+                        #therefore separate τ* values.
                         #______________________________________________________
                         if calculate_stabilization
                             v_gp = (-k_intrinsic * R * T_gp / μ_g) .* (dN_dx' * C_t)
@@ -1303,12 +1142,10 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             mul!(a_su, dN_dx, v_gp)
                             q_aux .+= (τ_g * dV * Wp) .* (a_su .* (a_su' * C_e))
 
-                            #The companion term stabilizes the SAME transported quantity - the species
-                            #concentration - but along the streamline of the thermally driven velocity,
-                            #so it contracts C_e with v_gpT. Contracting T_e instead would not be a
-                            #stabilization at all: it adds no diagonal weight to the C_g^i system, so it
-                            #cannot restore the discrete maximum principle, and it carries units of
-                            #K m^3/s where a molar flux is required.
+                            #Stabilizes the species concentration along the thermally driven
+                            #streamline, therefore C_e contracted with v_gpT. Contracting T_e adds no
+                            #diagonal weight to the C_g^i system (no discrete maximum principle) and
+                            #has units of K m^3/s instead of a molar flux.
                             mul!(aT_su, dN_dx, v_gpT)
                             qT_aux .+= (τ_gT * dV * Wp) .* (aT_su .* (aT_su' * C_e))
                         end
@@ -1358,19 +1195,15 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         end
 
                         #Gravitational flux, Eq. (gravitational_flux); Eq. (ax_gravitational_flux)
-                        #when the measure carries r_gp. Under the axisymmetric formulation the
-                        #gravity vector is restricted to the axis, g = (0, -g) (Eq. ax_gravity),
-                        #which is enforced at startup rather than assumed here.
-                        #ρ_g interpolates to a scalar at the Gauss point, so this is a scaled
-                        #4-vector rather than the 4×4 outer product the previous form built.
+                        #when the measure includes r_gp. Axisymmetric gravity restricted to the axis,
+                        #g = (0, -g) (Eq. ax_gravity), enforced at startup.
+                        #ρ_g interpolated to a Gauss-point scalar: scaled 4-vector, no 4×4 outer product.
                         #
-                        #The subtraction is the leading minus of Eq. (gravitational_flux), not a
-                        #sign choice free to be made here. g_vector is the user's oriented vector
-                        #(downward for the usual mesh), and the buffer is subtracted again in the
-                        #rate equation alongside j_d, j_a and j_T, Eq. (FEM_compact). Together
-                        #those two minuses reproduce M Ċ_i = ∫ ∇N_i·(C v) with the gravity half of
-                        #the velocity equal to +(K/μ) ρ_g g - the same convention the advective
-                        #term above already follows.
+                        #Subtraction = leading minus of Eq. (gravitational_flux). g_vector is the
+                        #user-oriented vector (downward for the usual mesh). The buffer is subtracted
+                        #again in the rate equation with j_d, j_a and j_T, Eq. (FEM_compact). Both
+                        #minuses give M Ċ_i = ∫ ∇N_i·(C v) with gravity velocity +(K/μ) ρ_g g, same
+                        #convention as the advective term.
                         ρ_g_gp = N_p' * ρ_g
                         q_aux .-= (k_intrinsic * C_gp * dV * Wp * ρ_g_gp / μ_g) .* (dN_dx * g_vector)
                     end
@@ -1409,9 +1242,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     dC_g_dt_rxn = (q_source_sink[i] * P_boundary[i, gas_idx]) / M[i]
 
                     if C_g[i, gas_idx] + dt * (dC_g_dt[i, gas_idx] + dC_g_dt_rxn) < 0.0
-                        #can't consume more CO2 than available: throttle the reaction
-                        #so the gas is exactly exhausted at the end of the step, and
-                        #scale the lime and heat rates by the same factor.
+                        #CO2 consumption limited to the available amount: reaction throttled
+                        #to exhaust the gas at the end of the step, lime and heat rates
+                        #scaled by the same factor.
                         dC_g_dt_rxn_allowed = min(-C_g[i, gas_idx] / dt - dC_g_dt[i, gas_idx], 0.0)
                         scale = dC_g_dt_rxn < 0.0 ?
                                 clamp(dC_g_dt_rxn_allowed / dC_g_dt_rxn, 0.0, 1.0) : 0.0
@@ -1446,25 +1279,17 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 le = boundary_node_influences[j] #length of influence
                 #Get current total concentration at node j
                 C_total_j = sum(C_g[j, :])
-                # total_concentration[j] is the target this step must reach. For a
-                # transient pressure it was refreshed to the t_{n+1} value at the
-                # top of the step; for a constant one it is last step's imposed
-                # value, which is the same number.
+                # total_concentration[j]: target for this step. Transient pressure: t_{n+1}
+                # value set at the top of the step. Constant pressure: previous imposed value.
 
-                #The correction is composition-weighted, not split equally in absolute
-                #terms among the free gases. An equal absolute split subtracts the SAME
-                #amount from every free species regardless of how much of it is actually
-                #present, which can drive a minority species (e.g. Air, once displaced by
-                #CO2 near an injection face) negative while barely denting a dominant
-                #species with plenty to give - a documented, pre-existing weakness (see
-                #advection_1d/case.toml's discussion of the same outlet mechanism).
-                #λ_bc[j] is now the TOTAL correction rate needed (no /n_free); it is split
-                #at the application site below in proportion to each free gas's own level-n
-                #concentration, via free_conc_sum[j] computed here. A gas whose
-                #concentration is prescribed here cannot absorb any of it, so both the
-                #weighting sum and (at the application site) the split exclude prescribed
-                #gases - dividing by NGases, or weighting by a prescribed gas's own
-                #concentration, would both push the prescribed gas off its boundary value.
+                #Composition-weighted correction. An equal absolute split subtracts the same
+                #amount from every free species, which can make a minority species negative
+                #(e.g. Air displaced by CO2 near an injection face; see advection_1d/case.toml,
+                #same outlet mechanism).
+                #λ_bc[j] = TOTAL correction rate (no /n_free), split at the application site in
+                #proportion to each free gas level-n concentration via free_conc_sum[j].
+                #Prescribed gases excluded from both the weighting sum and the split, otherwise
+                #the prescribed gas departs from its boundary value.
                 n_free = 0
                 free_sum = 0.0
                 for g in 1:NGases
@@ -1486,11 +1311,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
-        # Gas velocities are computed HERE, before the concentration update, so the
-        # whole right-hand side is level k: v^k is built from p^k and C_g^k. The
-        # manuscript's algorithm listing places it at this point for the same reason,
-        # and the thermal advective flux downstream consumes v^k rather than a value
-        # mixing the old pressure with the new concentrations.
+        # Gas velocities before the concentration update: full right-hand side at level k,
+        # v^k from p^k and C_g^k (same position as the manuscript algorithm listing). The
+        # thermal advective flux uses v^k, without mixing old pressure and new concentrations.
         # Calculate nodal gas velocities using Darcy's law
         #zero the velocity vector
         v .= 0.0
@@ -1498,9 +1321,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             v_chunk[c] .= 0.0
         end
 
-        # This stays a separate pass rather than being folded into the flux loop above:
-        # it consumes C_g at level k+1 (already updated) together with P at level k, and
-        # merging it would silently change which state the velocity is built from.
+        # Separate pass from the flux loop: merging would change the state used for the velocity
         #loop over element chunks
         @threads for c in 1:nchunks
             v_c = v_chunk[c]
@@ -1554,15 +1375,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 end
 
                 #Calculate velocity at Gauss point using Darcy's law, Eq. (Darcy_law):
-                #v = - (k/μ) (∇P - ρ_g g). This is the pressure half; the gravity half is
-                #added below when gravity is enabled.
+                #v = - (k/μ) (∇P - ρ_g g). Pressure part; gravity part added below if enabled.
                 v_gp = - (k_intrinsic / μ_g_weighted) * grad_P
 
-                # Calculate mass weight at this Gauss point. This same weight builds both the
-                # numerator and the denominator of the point-to-grid transfer, Eq.
-                # (nodal_velocities), so carrying the radius here satisfies Eq.
-                # (ax_nodal_velocities) - which needs r_gp in both sums - by construction, and
-                # the consistency requirement of Appendix (app:velocity_transfer) still holds.
+                # Gauss-point mass weight, used in numerator and denominator of the
+                # point-to-grid transfer, Eq. (nodal_velocities). Including r_gp here satisfies
+                # Eq. (ax_nodal_velocities) (r_gp in both sums) and the consistency requirement
+                # of Appendix (app:velocity_transfer).
                 mass_weight = props.θ_g * w * dV
 
                 #Distribute mass-weighted velocity to nodes
@@ -1585,11 +1404,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     end
                     ρ_g_gp = N_p' * ρ_g
 
-                    #Gravity half of Eq. (Darcy_law): expanding -(K/μ)(∇p - ρ_g g) leaves
-                    #+(K/μ) ρ_g g, so a dense gas under a downward g drifts downward. The plus
-                    #here and the minus in the gravitational flux above are the same convention
-                    #seen from the two sides; they must move together or the reported velocity
-                    #and the transported mass disagree.
+                    #Gravity part of Eq. (Darcy_law): +(K/μ) ρ_g g, dense gas moves along g.
+                    #This plus and the minus of the gravitational flux are one convention; changing
+                    #one without the other makes reported velocity and transported mass inconsistent.
                     v_g_gp = (k_intrinsic / μ_g_weighted) * ρ_g_gp * g_vector
 
                     #Distribute mass-weighted gravitational velocity to nodes
@@ -1602,8 +1419,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     v_gp = v_gp + v_g_gp
                 end
 
-                #Cache the Gauss-point velocity (Eq. Darcy_Gauss). Previously this was
-                #projected to nodes and discarded; the thermal advective flux needs it.
+                #Cache Gauss-point velocity (Eq. Darcy_Gauss) for the thermal advective flux
                 for d in 1:NDim
                     v_gp_cache[e, p, d] = v_gp[d]
                 end
@@ -1630,18 +1446,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             
             # Update concentrations: C^(n+1) = C^n + dt * dC/dt
             for i in 1:Nnodes
-                # Apply Lagrangian correction only at nodes with boundary influence, and
-                # only to gases that are actually free at this node. P_boundary already
-                # zeroes dC_g_dt for a prescribed gas; without the same factor here the
-                # correction would be added straight through that gate and would walk the
-                # prescribed concentration away from its boundary value every step. The
-                # drift only shows up once the reaction is active, because λ is built from
-                # total_rate, which carries the CO2 sink term.
+                # Lagrangian correction only at nodes with boundary influence and only for
+                # free gases. P_boundary zeroes dC_g_dt for a prescribed gas; without the same
+                # factor here the prescribed concentration departs from its boundary value
+                # each step. Visible only with reaction active (total_rate includes the CO2 sink).
                 #
-                # The split among free gases is composition-weighted (C_TOL guards the
-                # degenerate case where every free gas is ~0 at this node, falling back to
-                # an equal split rather than a 0/0 division) - see the multiplier loop
-                # above for why. P_boundary gates the whole thing exactly as before.
+                # Composition-weighted split among free gases (see multiplier loop). C_TOL:
+                # equal split when every free gas is ~0, avoiding 0/0.
                 lagrangian_correction = 0.0
                 if haskey(boundary_node_influences, i) && haskey(mesh.absolute_pressure_bc, i)
                     C_TOL = 1e-12
@@ -1680,11 +1491,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Update reaction kinetic terms for lime concentration
         if calculate_reaction
             for i in 1:Nnodes
-                # Lime consumed this step. The clamp is applied to the INCREMENT, not to
-                # C_lime after the fact, so that CaCO3 gains exactly what lime lost.
-                # Clamping C_lime alone while crediting CaCO3 with the unclamped rate
-                # would create carbonate from lime that was never there, breaking the 1:1
-                # stoichiometry of Eq. (carbonation).
+                # Lime consumed this step. Clamp on the INCREMENT, such that CaCO3 gains exactly
+                # the lime lost (1:1 stoichiometry, Eq. (carbonation)). Clamping C_lime only
+                # would credit CaCO3 with nonexistent lime.
                 ΔC_lime = dt * dC_lime_dt[i]
                 if C_lime[i] + ΔC_lime < 0.0
                     if !negative_lime_warned
@@ -1700,8 +1509,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 #calculate binder content β_b= V_caco3/V_total
                 binder_content[i]= C_caco3[i] * M_caco3 / ρ_caco3
                 #calculate degree of carbonation DoC= C_caco3/C_caco3_max
-                #Caco3_max is zero for a lime-free material, which would otherwise emit
-                #NaN into the output field
+                #Caco3_max = 0 for lime-free material, guard against NaN
                 degree_of_carbonation[i] = Caco3_max[i] > 0.0 ? C_caco3[i] / Caco3_max[i] : 0.0
             end
         end
@@ -1711,19 +1519,16 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         #
         #     M^L_T · dT/dt = q̃_ext - q̃_d - q̃_a + q̃_r
         #
-        # Assembled in the order of the manuscript's algorithm listing: heat rate,
-        # lumped capacity, conductive flux, reactive flux, boundary conditions,
-        # update. Runs whether or not the reaction is active, since heat must
-        # conduct on its own; the reactive flux simply contributes nothing when it
-        # is not.
+        # Order of the manuscript algorithm listing: heat rate, lumped capacity, conductive
+        # flux, reactive flux, boundary conditions, update. Runs with or without reaction;
+        # reactive flux is zero without reaction.
         #______________________________________________________
         if calculate_heat
             ρ_w = materials.liquid.density
             c_w = materials.liquid.specific_heat
 
-            # Volumetric heat source at the nodes, Q̇ = θ_w q̇ per Eq. (heat_rate),
-            # already on the total-volume basis: q̇ = -ΔH_r r and dC_lime_dt = -θ_w r,
-            # so θ_w q̇ = ΔH_r dC_lime_dt exactly.
+            # Nodal volumetric heat source, Q̇ = θ_w q̇, Eq. (heat_rate), total-volume basis:
+            # q̇ = -ΔH_r r and dC_lime_dt = -θ_w r, therefore θ_w q̇ = ΔH_r dC_lime_dt.
             if calculate_reaction
                 @threads for i in 1:Nnodes
                     Q_dot_T[i] = ΔH_r * dC_lime_dt[i]
@@ -1747,7 +1552,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 qhw_chunk[c] .= 0.0
             end
 
-            # Element assembly, chunked exactly like the gas fluxes
+            # Element assembly, same chunking as the gas fluxes
             @threads for c in 1:nchunks
                 MT_c = MT_chunk[c]
                 qd_c = qd_T_chunk[c]
@@ -1769,13 +1574,13 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         N_p = ShapeFunctions.shape_funcs.N[p]
                         Wp = ShapeFunctions.shape_funcs.gauss_weights[p]
                         # Quadrature measure: |det J| W, or r_gp |det J| W when axisymmetric.
-                        # Carries the whole energy block - Eqs. (ax_lumped_capacity),
+                        # Used for the whole energy block, Eqs. (ax_lumped_capacity),
                         # (ax_thermal_conductive_flux), (ax_thermal_advective_flux),
-                        # (ax_thermal_reactive_flux) - and the heat-flux projection below.
+                        # (ax_thermal_reactive_flux), and the heat-flux projection.
                         dV = ShapeFunctions.get_weight(e, p) * Wp
 
-                        # (ρc)_g at the Gauss point, Eq. (heat_advection), per unit
-                        # volume of gas so it enters C_mix weighted by θ_g
+                        # (ρc)_g at the Gauss point, Eq. (heat_advection), per unit gas volume
+                        # (weighted by θ_g in C_mix)
                         ρc_g_gp = 0.0
                         for g in 1:NGases
                             C_gp = 0.0
@@ -1791,9 +1596,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             MT_c[nodes[i]] += C_mix_gp * N_p[i] * dV
                         end
 
-                        # Conductive flux, Eq. (thermal_conductive_flux). Same
-                        # contraction shape as the diffusive gas flux, so it reuses the
-                        # cached dN_dx and the right-to-left association.
+                        # Conductive flux, Eq. (thermal_conductive_flux). Same contraction as
+                        # the diffusive gas flux: cached dN_dx, right-to-left association.
                         if calculate_heat_conduction && props.λ_e > 0.0
                             dN_dx = ShapeFunctions.get_dN_dx(e, p)
                             gradT = dN_dx' * T_e
@@ -1803,39 +1607,27 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                             end
                         end
 
-                        # Advective flux, Eq. (thermal_advective_flux), in the
-                        # NON-CONSERVATIVE form (ρc)_g v·∇T rather than ∇·((ρc)_g v T).
+                        # Advective flux, Eq. (thermal_advective_flux), NON-CONSERVATIVE form
+                        # (ρc)_g v·∇T instead of ∇·((ρc)_g v T).
                         #
-                        # That is the form the left-hand side of this equation demands.
-                        # M^L_T dT/dt is C_mix ∂T/∂t, not ∂(C_mix T)/∂t, and the two
-                        # advective operators differ by exactly T ∇·((ρc)_g v), which the
-                        # gas mass balance ties to ∂(θ_g C)/∂t and to the reaction's CO2
-                        # sink. Pairing the divergence form with this left-hand side
-                        # therefore adds a spurious source wherever gas accumulates or is
-                        # consumed - and in a carbonation run the sink is the dominant
-                        # term, so the error is not small: on 8mm_size it put 17% more
-                        # energy into the column than the reaction released.
+                        # Consistent with the left-hand side C_mix ∂T/∂t (instead of
+                        # ∂(C_mix T)/∂t). The two operators differ by T ∇·((ρc)_g v), linked by
+                        # the gas mass balance to ∂(θ_g C)/∂t and the CO2 sink. The divergence form
+                        # with this left-hand side adds a spurious source wherever gas accumulates
+                        # or is consumed; on 8mm_size, 17% more energy than the reaction released.
                         #
-                        # The divergence form also had to be integrated by parts to be
-                        # assembled, and the ∮ N_i (ρc)_g T (v·n̂) dΓ it produces was never
-                        # assembled with it. That omission is invisible at an interior
-                        # node and on a wall, where v·n̂ = 0, but on a face gas crosses it
-                        # drained enthalpy at (ρc)_g |v| T per unit area with nothing
-                        # carried back - a sink proportional to the ABSOLUTE temperature,
-                        # which no amount of reaction heat behind it can balance. It held
-                        # the inflow row of 8mm_size near its initial temperature while
-                        # the interior one element away heated normally.
+                        # The divergence form also requires integration by parts, and the surface
+                        # term ∮ N_i (ρc)_g T (v·n̂) dΓ was never assembled. Zero at interior nodes
+                        # and walls (v·n̂ = 0), but at a flow-through face it acts as an enthalpy sink
+                        # (ρc)_g |v| T proportional to ABSOLUTE temperature. Result on 8mm_size:
+                        # inflow row near initial temperature, interior heating normally.
                         #
-                        # v·∇T has neither problem. It needs no integration by parts, so
-                        # it has no surface term to forget, and it vanishes identically on
-                        # a uniform temperature field at every node, boundary nodes
-                        # included - which is the statement that a constant transports
-                        # nothing, and the check the divergence form failed.
+                        # v·∇T: no integration by parts, no surface term, and zero for a uniform
+                        # temperature field at every node including boundaries.
                         #
-                        # The leading sign is the manuscript's: every nodal flux in
-                        # Eq. (FEM_compact_energy) is a quantity to be subtracted, so a
-                        # positive v·∇T - temperature rising along the flow - is stored
-                        # here as a positive q̃_a and cools the node.
+                        # Sign: every nodal flux in Eq. (FEM_compact_energy) is subtracted, therefore
+                        # positive v·∇T (temperature increasing along the flow) gives positive q̃_a
+                        # and cools the node.
                         if calculate_heat_advection
                             ρc_gp = ρc_g_gp
                             dN_dx_a = ShapeFunctions.get_dN_dx(e, p)
@@ -1853,8 +1645,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                         # Total heat flux at this Gauss point, for output:
                         #   q_d = -lambda_e grad(T)          Eq. (fourier)
                         #   q_a = (rho c)_g T v_g            Eq. (heat_advection)
-                        # Projected to the nodes below. Diagnostic only - the solver
-                        # itself works with the nodal flux vectors, not with this.
+                        # Projected to the nodes below. Output diagnostic only; the solver uses
+                        # the nodal flux vectors.
                         dN_dx_h = ShapeFunctions.get_dN_dx(e, p)
                         gradT_h = dN_dx_h' * T_e                # [NDim]
                         T_gp_h = 0.0
@@ -1898,9 +1690,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 heat_flux_weight .+= qhw_chunk[c]
             end
 
-            # Normalise the projected flux, Eq. (nodal_velocities): dividing by
-            # sum(N |detJ| W) maps a flux that is uniform over an element onto the nodes
-            # without changing its magnitude, which plain tributary weighting would not.
+            # Normalise the projected flux by sum(N |detJ| W), Eq. (nodal_velocities):
+            # element-uniform flux keeps its magnitude at the nodes (unlike tributary weighting).
             for i in 1:Nnodes
                 if heat_flux_weight[i] > 0.0
                     for d in 1:NDim
@@ -1911,12 +1702,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
             # Convective (Robin) boundary, Eq. (conduction_flux_BC):
             #     q_d . n = h_c (T - T_inf)
-            # The weak form carries this as -∫(q_d.n) ω dS over the boundary, so a node
-            # whose temperature is above ambient loses heat. The edge integral is lumped
-            # onto the nodes with the tributary edge lengths computed once at start-up,
-            # the same geometry the pressure boundary uses. h_c = 0 gives an adiabatic
-            # edge, which is also what leaving a boundary unset gives, since zero flux is
-            # the natural condition of the weak form.
+            # Weak form term -∫(q_d.n) ω dS: a node above ambient loses heat. Edge integral
+            # lumped with the tributary edge lengths from start-up (same as the pressure
+            # boundary). h_c = 0 or unset boundary: adiabatic (natural condition).
             q_ext_T .= 0.0
             for (node_id, params) in mesh.convective_heat_bc
                 h_c = params[1]
@@ -1932,9 +1720,7 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                 else
                     dT_dt[i] = 0.0
                 end
-                # A prescribed node holds its value: gate the RATE, so nothing downstream
-                # can move it and dT_dt reports zero there rather than a rate that is
-                # computed and then discarded.
+                # Prescribed node: RATE gated, therefore dT_dt = 0 there in the output
                 dT_dt[i] *= T_boundary[i]
             end
 
@@ -1949,30 +1735,22 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
-        # Prescribed temperatures that follow a curve. The T_boundary gate in the
-        # energy equation already zeroed the rate at these nodes, which holds the
-        # value still but never advances it, so the new value has to be written
-        # here. Outside the calculate_heat block on purpose: a prescribed
-        # temperature history is still meaningful with the energy equation off,
-        # where it drives the pressure through the ideal gas law. Placed before
-        # anything that divides by T, so the rest of the step sees the
-        # temperature it ends at.
+        # Curve-driven prescribed temperatures. The T_boundary gate zeroes the rate,
+        # therefore the new value is written here. Outside calculate_heat on purpose: with
+        # the energy equation off, a temperature history still drives the pressure through
+        # the ideal gas law. Placed before any division by T, such that the rest of the
+        # step uses the end-of-step temperature.
         if has_transient_temp
             for (node_id, tf_id, T_const) in transient_temp
                 T[node_id] = bc_value(time_functions, tf_id, T_const, t_next)
             end
         end
 
-        # Apply partial pressure boundary conditions after temperature update
-        # This ensures partial pressure remains constant by updating concentrations
-        # based on new temperature: C_g = P_partial / (R * T)
+        # Partial pressure BCs after the temperature update: C_g = P_partial / (R * T)
         #
-        # A time-driven partial pressure (partial_pressure_bc_tf) is evaluated at t_next,
-        # the same convention as every other Dirichlet boundary re-imposed below (a value
-        # IMPOSED on the new state, not a flux entering the rate). This block runs
-        # unconditionally every step regardless of whether any curve is attached - see the
-        # n_transient_partial_press comment above - so the curve lookup is inline rather
-        # than gated behind a has_transient_* flag.
+        # Time-driven partial pressure (partial_pressure_bc_tf) evaluated at t_next, same as
+        # every Dirichlet boundary. Runs every step (see n_transient_partial_press), curve
+        # lookup inline.
         for (node_id, partial_pressures) in mesh.partial_pressure_bc
             tf_ids = get(mesh.partial_pressure_bc_tf, node_id, Int[])
             for gas_idx in 1:NGases
@@ -1984,12 +1762,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
             end
         end
 
-        # Prescribed concentrations that follow a curve. Unlike the pressure and
-        # partial pressure boundaries, a concentration Dirichlet is enforced by
-        # rate gating: P_boundary multiplies dC_g_dt to zero, which stops the
-        # solver moving the node but leaves nothing to advance it. A curve
-        # therefore has to write C_g explicitly. Placed before the sum below so
-        # the total concentration sees the imposed values.
+        # Curve-driven prescribed concentrations. Concentration Dirichlet enforced by rate
+        # gating (P_boundary zeroes dC_g_dt), therefore a curve writes C_g explicitly.
+        # Placed before the sum below to include the imposed values in the total.
         if has_transient_conc
             for (node_id, gas_idx, tf_id, C_const) in transient_conc
                 C_g[node_id, gas_idx] = bc_value(time_functions, tf_id, C_const, t_next)
@@ -2001,9 +1776,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
 
         #Apply total pressure boundary condition at nodes
         for node_id in keys(mesh.absolute_pressure_bc)
-            # Apply absolute pressure BC by setting total concentration. Evaluated
-            # at t_next, the same time the Lagrange multipliers aimed at, so the
-            # target and its enforcement agree.
+            # Absolute pressure BC via total concentration, at t_next (same time as the
+            # Lagrange multiplier target)
             tf_id = get(mesh.absolute_pressure_tf, node_id, 0)
             P_bc = bc_value(time_functions, tf_id,
                             mesh.absolute_pressure_bc[node_id], t_next)
@@ -2016,9 +1790,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
         # Update current time
         current_time += dt
 
-        # Sample the probed nodes. Placed after the pressure update so the row holds
-        # the fully updated state of this step, and outside the VTK block so the
-        # probe cadence is independent of the output cadence.
+        # Probe sample after the pressure update (fully updated state), outside the VTK
+        # block (independent sampling interval)
         WriteProbes.probe_sample!(probe_writer, current_time, C_g, dC_g_dt,
                                   total_concentration, P, T, dT_dt, C_lime, C_caco3,
                                   dC_lime_dt, degree_of_carbonation, binder_content, v)
@@ -2032,9 +1805,8 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                               output_counter, progress, current_time,
                               calc_params["units"]["time_unit"]))
 
-            # Report the clamp, loudly, when it is doing more than mopping up round-off.
-            # Scaled against the work done since the last output - nodes x gases x steps -
-            # so the threshold means the same thing on any mesh and at any output cadence.
+            # Clamp report. Rate normalised by nodes x gases x steps since the last output,
+            # threshold independent of mesh size and output interval.
             total_clamped = sum(negative_conc_count)
             if total_clamped > 0
                 steps_since = max(1, step - last_output_step)
@@ -2047,9 +1819,9 @@ function fully_explicit_diffusion_solver(mesh, materials, calc_params, time_data
                     log_print("          Re-check the critical time step and lower the Courant number.")
                 end
 
-                # TEMPORARY DIAGNOSTIC - remove after the clamp-location investigation is
-                # resolved. Hits on pressure/concentration-BC nodes would point at the
-                # Lagrangian boundary correction; hits scattered along the front do not.
+                # TEMPORARY DIAGNOSTIC: remove after the clamp-location investigation is
+                # resolved. Hits on pressure/concentration-BC nodes indicate the Lagrangian
+                # boundary correction; hits along the front do not.
                 node_totals = vec(sum(negative_conc_node_count, dims=2))
                 tops = String[]
                 for nid in sortperm(node_totals, rev=true)[1:min(6, Nnodes)]
@@ -2103,14 +1875,12 @@ end
 """
     write_output_vtk(mesh, materials, step::Int, time::Float64, project_name, total_concentration)
 
-Write VTK output file for the current time step.
+Write the VTK output file for the current time step.
 
 # Arguments
-- `mesh`: Mesh data structure
-- `materials`: Material data structure
-- `step::Int`: Output file counter
-- `time::Float64`: Current simulation time
-- `project_name::String`: Name of the project for output files
+- `step`: Output file counter
+- `time`: Current simulation time
+- `project_name`: Project name for output files
 - `total_concentration`: Total gas concentration vector
 """
 function write_output_vtk(mesh, materials, step::Int, time::Float64, project_name, total_concentration)

@@ -1,9 +1,9 @@
 #______________________________________________________
 # metrics.jl
 #
-# Error measures for comparing a numerical profile against
-# an analytical one. Pass/fail is gated on the relative L2
-# norm; the others are reported for insight.
+# Error measures of a numerical profile against an analytical
+# one. Pass/fail gated on the relative L2 norm; the other
+# measures are informative.
 #______________________________________________________
 
 module Metrics
@@ -13,8 +13,8 @@ export relative_l2, rmse, max_abs_error, total_variation, tv_ratio, relative_lin
 """
     relative_l2(num, exact) -> Float64
 
-Relative discrete L2 error: ||num - exact||_2 / ||exact||_2.
-Falls back to the absolute L2 norm when `exact` is essentially zero.
+Compute the relative discrete L2 error ||num - exact||_2 / ||exact||_2.
+Absolute L2 norm when `exact` is ~0.
 """
 function relative_l2(num::AbstractVector, exact::AbstractVector)
     length(num) == length(exact) || error("length mismatch: $(length(num)) vs $(length(exact))")
@@ -23,20 +23,19 @@ function relative_l2(num::AbstractVector, exact::AbstractVector)
     return den > 1e-30 ? num_norm / den : num_norm
 end
 
-"""rmse(num, exact) — root-mean-square error."""
+"""rmse(num, exact): root-mean-square error."""
 rmse(num::AbstractVector, exact::AbstractVector) = sqrt(sum(abs2, num .- exact) / length(num))
 
-"""max_abs_error(num, exact) — worst-case pointwise |num - exact|."""
+"""max_abs_error(num, exact): maximum pointwise |num - exact|."""
 max_abs_error(num::AbstractVector, exact::AbstractVector) = maximum(abs.(num .- exact))
 
 """
     relative_linf(num, exact) -> Float64
 
-Worst-case pointwise error relative to the scale of the exact solution.
+Compute the maximum pointwise error relative to the scale of the exact solution.
 
-L2 divides the error budget across the whole profile, so an error confined to a handful
-of nodes barely moves it. L∞ does not, which is what makes it the right companion gate
-for a defect that is localized rather than distributed.
+L2 averages the error over the whole profile; an error on a few nodes barely changes it.
+L∞ complements it for localized defects.
 """
 function relative_linf(num::AbstractVector, exact::AbstractVector)
     den = maximum(abs, exact)
@@ -47,11 +46,10 @@ end
 """
     total_variation(v) -> Float64
 
-Discrete total variation Σ|v[i] - v[i-1]| along the profile.
+Compute the discrete total variation Σ|v[i] - v[i-1]| along the profile.
 
-A monotone profile has TV = |v[end] - v[1]| exactly; every node-to-node reversal adds
-twice the size of the reversal. That makes TV the natural detector for an oscillation
-riding on a smooth solution.
+Monotone profile: TV = |v[end] - v[1]|. Each node-to-node reversal adds twice its size,
+therefore TV detects oscillations on a smooth solution.
 """
 function total_variation(v::AbstractVector)
     length(v) < 2 && return 0.0
@@ -67,34 +65,26 @@ end
 """
     tv_ratio(num, exact) -> Float64
 
-Total variation of the numerical profile divided by that of the exact one.
+Compute the total variation of the numerical profile over that of the exact one.
 
-Reads as 1.0 for a solution that is as smooth as it should be and grows without bound as
-node-to-node oscillation develops, independently of whether that oscillation is large
-enough to move the L2 norm.
+1.0 for a solution as smooth as the exact one; increases without bound with node-to-node
+oscillation, also when the oscillation does not change the L2 norm.
 
-This is the metric that would have caught the axisymmetric instability. That run was
-producing a bounded sawtooth against the axis of symmetry - bounded because the solver's
-non-negativity clamp arrested it every step - which a relative-L2 gate averaged away
-across the profile while the field was visibly wrong.
+Detects cases such as the axisymmetric instability: a bounded sawtooth at the symmetry
+axis (bounded by the non-negativity clamp each step), averaged out by the relative-L2 gate.
 
-Note the direction it can see: the comparison is made along the profile the case
-extracts, so it detects oscillation ALONG that line only. A case whose profile runs
-axially cannot see a sawtooth in the radial direction; that is what the radial-profile
-cases (`axisym_conduction_radial`, `axisym_darcy_radial`) are for.
+Measured along the extracted profile only. An axial profile cannot detect a radial
+sawtooth; radial-profile cases (`axisym_conduction_radial`, `axisym_darcy_radial`) cover it.
 
 # Flat reference profiles
-`darcy_1d` compares a uniform Darcy velocity, whose exact total variation is identically
-zero, so a bare ratio reports `Inf` for any discretisation error at all. The denominator
-is therefore floored at 1% of the solution scale, which reads as: against a flat
-reference, drift of up to about 1% of scale across the whole profile is not oscillation.
-That case's measured variation is 0.26% of scale - a smooth monotone drift, not a
-wiggle - and it scores 0.26 against a gate of 1.15.
+`darcy_1d` compares a uniform Darcy velocity (exact TV = 0), giving `Inf` for any
+discretisation error. Denominator floored at 1% of the solution scale: against a flat
+reference, drift up to ~1% of scale over the profile is not oscillation. Measured
+variation of that case: 0.26% of scale (smooth monotone drift), score 0.26 vs. gate 1.15.
 
-The floor costs nothing in sensitivity. A sawtooth alternating by just 0.1% of scale
-across 20 nodes has TV = 4% of scale and scores 4.0; one alternating by 1% scores 40.
-On a profile with genuine variation the floor sits orders of magnitude below
-`TV(exact)` and never binds.
+No loss of sensitivity: a sawtooth of 0.1% of scale over 20 nodes gives TV = 4% of scale
+(score 4.0); 1% gives 40. For profiles with real variation the floor is orders of
+magnitude below `TV(exact)`.
 """
 function tv_ratio(num::AbstractVector, exact::AbstractVector)
     tv_e = total_variation(exact)

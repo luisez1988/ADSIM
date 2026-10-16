@@ -1,17 +1,14 @@
 # Regression guard for the Phase 0 stability fix.
 #
-# The critical time step is Δt <= 2/λ_max of the semi-discrete operator M̂⁻¹K. Before
-# Phase 0 that eigenvalue was evaluated from a closed form valid only on a uniform PLANE
-# quad mesh, which under-estimated it on the axisymmetric carbonation meshes and produced
-# a step long enough for forward Euler to go unstable against the axis of symmetry.
+# Critical time step: Δt <= 2/λ_max of the semi-discrete operator M̂⁻¹K. Before Phase 0,
+# λ_max came from a closed form valid only on a uniform PLANE quad mesh; on axisymmetric
+# carbonation meshes it was underestimated and forward Euler became unstable at the axis.
 #
-# This checks the three properties the fix rests on:
-#   1. the power iteration recovers λ_max of the assembled operator
-#   2. the axisymmetric operator really does have a larger λ_max than the plane one on a
-#      mesh that reaches r = 0
-#   3. the step the solver will actually use never exceeds 2/λ_max -- the safety
-#      invariant, and the only one whose failure produces a wrong answer rather than a
-#      slow one
+# Checked properties:
+#   1. power iteration recovers λ_max of the assembled operator
+#   2. axisymmetric λ_max > plane λ_max on a mesh reaching r = 0
+#   3. solver step never exceeds 2/λ_max (safety invariant; its failure gives a wrong
+#      result instead of a slow one)
 #
 # Run:  julia -t4 src/test/test_operator_spectrum.jl
 
@@ -27,8 +24,8 @@ const T_REF = 293.15
 failures = String[]
 check(ok, msg) = (ok ? println("   ✓ $msg") : (println("   ✗ $msg"); push!(failures, msg)))
 
-# λ_max of M̂⁻¹ Σ_e coef[e] K_e, computed exactly. K is PSD and M diagonal positive, so
-# the generalised problem K u = λ M u maps to the symmetric standard one via M^(-1/2).
+# Exact λ_max of M̂⁻¹ Σ_e coef[e] K_e. K PSD, M diagonal positive: K u = λ M u maps to
+# a symmetric standard problem via M^(-1/2).
 function exact_lambda_max(mesh, M, K_elements, coef)
     N = length(M)
     K = zeros(N, N)
@@ -88,9 +85,8 @@ for mech in (:diffusion, :advection)
 end
 
 # --- 3. the safety invariant ------------------------------------------------------
-# The step the solver will use must satisfy dt <= 2/λ_max for every active mechanism.
-# This is what the whole phase exists to guarantee; it is checked through the real entry
-# point, not through the internals, so a regression anywhere in that path trips it.
+# Solver step must satisfy dt <= 2/λ_max for every active mechanism. Checked through the
+# real entry point instead of internals, covering regressions anywhere on that path.
 println("\n[3] Critical time step respects 2/λ_max through the real code path")
 calc_params = get_all_calc_params(joinpath(DATA, "$(PROJECT)_calc.toml"), DATA)
 axisym = calc_params["solver_settings"]["axisymmetric"]

@@ -51,21 +51,21 @@ struct CaseResult
     worst_tv::Float64
 end
 
-# The error paths (solver crash, no output, bad config) have no metrics to report, so
-# they keep the original six-argument form and leave the TV fields unset.
+# Error paths (solver crash, no output, bad config): no metrics, six-argument form,
+# TV fields unset
 CaseResult(name, passed, tol, worst, steps, message) =
     CaseResult(name, passed, tol, worst, steps, message, Inf, NaN)
 
 const CASES_DIR = joinpath(VERIF_DIR, "cases")
 
-"""List available cases (subfolders of cases/ that contain a case.toml)."""
+"""List available cases (subfolders of cases/ with a case.toml)."""
 function list_cases()
     isdir(CASES_DIR) || return String[]
     return sort([d for d in readdir(CASES_DIR)
                  if isfile(joinpath(CASES_DIR, d, "case.toml"))])
 end
 
-# Copy this case's ADSIM input files into src/data so the solver can find them.
+# Copy the case input files into src/data (solver input location)
 function _stage_inputs(input_dir, project)
     isdir(input_dir) || error("case folder not found: $input_dir")
     for ext in (".mesh", "_calc.toml", "_mat.toml")
@@ -75,7 +75,7 @@ function _stage_inputs(input_dir, project)
     end
 end
 
-# Remove stale outputs (vtk + checkpoints + logs) for a clean run.
+# Remove stale outputs (vtk, checkpoints, logs) for a clean run
 function _clean_outputs(project)
     isdir(OUTPUT_DIR) || return
     for f in readdir(OUTPUT_DIR)
@@ -83,7 +83,7 @@ function _clean_outputs(project)
     end
 end
 
-# Run the solver as a subprocess, exactly the way a user runs it.
+# Solver as a subprocess, same as a user run
 function _run_solver(project; verbose=false)
     runner = joinpath(REPO_ROOT, "buildscripts", "run_cli.jl")
     cmd = Cmd(`$(Base.julia_cmd()) $runner $project`; dir=REPO_ROOT)
@@ -104,8 +104,8 @@ function _collect_vtks(project)
     return [joinpath(OUTPUT_DIR, f) for f in files]
 end
 
-# Probe files are named <project>_node<id>_stage<n>.csv. A case names the node it
-# wants; the stage is whatever the run produced, so it is matched rather than assumed.
+# Probe files: <project>_node<id>_stage<n>.csv. Node from the case; stage matched
+# from the run output
 function _collect_probe(project, node_id)
     isdir(OUTPUT_DIR) || return nothing
     pat = Regex("^" * project * "_node" * string(node_id) * "_stage(\\d+)\\.csv\$")
@@ -117,10 +117,8 @@ end
 
 # Score a probe time series against the analytical solution.
 #
-# The metrics and result structs are shared with the VTK path unchanged: they take
-# two plain equal-length vectors, so a time series substitutes for a spatial profile
-# without touching them. A 0-D case has no position, so x is passed as zero and the
-# analytical type is expected to ignore it.
+# Metrics and result structs shared with the VTK path (two equal-length vectors; a time
+# series replaces the spatial profile). 0-D case: x = 0, ignored by the analytical type.
 function _score_probe(name, project, node_id, field, spec, tol, tv_tol)
     path = _collect_probe(project, node_id)
     path === nothing &&
@@ -130,7 +128,7 @@ function _score_probe(name, project, node_id, field, spec, tol, tv_tol)
     probe = read_probe(path)
     times, num_all = probe_series(probe, field)
 
-    # Skip t = 0: the initial condition, as in the VTK path.
+    # Skip t = 0 (initial condition), as in the VTK path
     keep = findall(t -> t > 0, times)
     isempty(keep) &&
         return CaseResult(name, false, tol, Inf, StepResult[], "probe has no samples beyond t=0")
@@ -140,8 +138,7 @@ function _score_probe(name, project, node_id, field, spec, tol, tv_tol)
     exact = [Analytical.evaluate(spec, 0.0, t) for t in t_kept]
 
     r = relative_l2(num, exact)
-    # On a 0-D case the "profile" is a time history, so total variation measures temporal
-    # oscillation rather than spatial - the same defect seen along the other axis.
+    # 0-D case: total variation of the time history, i.e. temporal oscillation
     tv = tv_ratio(num, exact)
     steps = [StepResult(length(t_kept), t_kept[end], r, rmse(num, exact),
                         max_abs_error(num, exact), relative_linf(num, exact), tv)]
@@ -160,7 +157,7 @@ end
 """
     run_case(name; verbose=false) -> CaseResult
 
-Verify a single case identified by the config file `cases/<name>.toml`.
+Verify a single case defined by `cases/<name>/case.toml`.
 """
 function run_case(name::AbstractString; verbose::Bool=false)
     case_dir = joinpath(CASES_DIR, name)
@@ -170,15 +167,13 @@ function run_case(name::AbstractString; verbose::Bool=false)
     axis = Symbol(get(cfg, "axis", "y"))
     origin = Float64(get(cfg, "boundary_coord", 0.0))
     tol = Float64(get(cfg, "tolerance", 0.02))
-    # Total-variation gate. The default admits 15% more variation than the exact profile,
-    # which covers ordinary discretisation wiggle on a coarse mesh while still failing on
-    # a node-to-node sawtooth, whose TV runs to several times the exact value. Cases
-    # whose reference profile is genuinely near-flat should raise it in case.toml, since
-    # the ratio is then a small number divided by a smaller one.
+    # Total-variation gate. Default: 15% above the exact profile, enough for coarse-mesh
+    # discretisation wiggle; a node-to-node sawtooth gives several times the exact value.
+    # Near-flat reference profiles: raise it in case.toml (ratio of two small numbers).
     tv_tol = Float64(get(cfg, "tv_tolerance", 1.15))
     check_steps = Int.(get(cfg, "check_steps", Int[]))
     component = Symbol(get(cfg, "component", "magnitude"))  # for vector fields
-    # Centre of the radial coordinate; used only when axis = "radius".
+    # Centre of the radial coordinate, axis = "radius" only
     center = (Float64(get(cfg, "center_x", 0.0)), Float64(get(cfg, "center_y", 0.0)))
     snapshot = get(cfg, "snapshot", "all")                  # "all" or "last" (steady state)
     source = get(cfg, "source", "vtk")                      # "vtk" or "probe" (node time series)
@@ -193,8 +188,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
         return CaseResult(name, false, tol, Inf, StepResult[], "solver error: $(err)")
     end
 
-    # A 0-D case is a time history at one node, not a profile at each instant, so it
-    # is scored off the probe CSV instead of the VTK series.
+    # 0-D case: time history at one node, scored from the probe CSV instead of VTK
     if source == "probe"
         probe_node > 0 ||
             return CaseResult(name, false, tol, Inf, StepResult[],
@@ -216,7 +210,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
     worst_tv = 0.0
     for path in vtks
         vtk = read_vtk(path)
-        # Skip t = 0: the initial condition, and singular for advection solutions.
+        # Skip t = 0: initial condition, singular for advection solutions
         vtk.time <= 0 && continue
         !isempty(check_steps) && !(vtk.time_step in check_steps) && continue
 
@@ -224,8 +218,7 @@ function run_case(name::AbstractString; verbose::Bool=false)
                                 component=component, center=center)
         exact = [Analytical.evaluate(spec, x, vtk.time) for x in pos]
 
-        # Total variation is only meaningful on an ordered profile; sort by position so
-        # the metric does not depend on the order line_profile happens to return.
+        # Total variation requires an ordered profile: sort by position
         ord = sortperm(pos)
         tv = tv_ratio(num[ord], exact[ord])
 

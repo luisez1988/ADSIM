@@ -2,9 +2,9 @@
 #______________________________________________________
 # run_verification.jl
 #
-# Run ADSIM's verification suite: execute each case's
-# solver run, compare against the analytical solution, and
-# report PASS/FAIL on the relative L2 error.
+# ADSIM verification suite: run the solver for each case,
+# compare against the analytical solution, report PASS/FAIL
+# on the relative L2 error.
 #
 # Usage:
 #   julia verification/run_verification.jl              # run all cases
@@ -12,8 +12,8 @@
 #   julia verification/run_verification.jl --verbose    # show solver output
 #   julia verification/run_verification.jl --list       # list available cases
 #
-# Exit code is 0 when every case passes, 1 otherwise
-# (so it can be wired into CI or a pre-commit check).
+# Exit code 0 when every case passes, 1 otherwise
+# (for CI or pre-commit checks).
 #______________________________________________________
 
 include(joinpath(@__DIR__, "src", "verify.jl"))

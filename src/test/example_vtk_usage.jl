@@ -9,9 +9,7 @@ include("write_vtk.jl")
 using .WriteVTK
 
 """
-Example usage of the VTK writer module with ADSIM mesh data.
-
-This example demonstrates how to:
+Example of the VTK writer with ADSIM mesh data:
 1. Load mesh data using read_mesh_file
 2. Prepare simulation results arrays
 3. Write VTK output files at different time steps

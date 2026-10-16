@@ -8,7 +8,7 @@ include("../shape_functions.jl")
 using .ShapeFunctions
 
 """
-Generate a synthetic mesh for testing
+Generate a synthetic structured quad mesh.
 """
 function generate_test_mesh(nx::Int, ny::Int)
     # Generate a structured quad mesh
@@ -56,7 +56,7 @@ function generate_test_mesh(nx::Int, ny::Int)
 end
 
 """
-Benchmark with different mesh sizes and thread counts
+Benchmark shape function initialization for several mesh sizes.
 """
 function benchmark_threading()
     println("="^70)
