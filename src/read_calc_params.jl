@@ -75,27 +75,14 @@ Extract solver settings from calculation data including dimension and calculatio
 function get_solver_settings(calc_data::Dict)
     solver = calc_data["solver"]
 
-    # The dimension string used to be carried through and only printed, so a typo would run
-    # silently as plane strain. Validate it: the two formulations differ in physics, not in
-    # presentation, and selecting the wrong one must not be a quiet outcome.
+    # Prints solver type in the log. Validated as as an enum
     dimension = solver["solver_type"]
     if !(dimension in ("2D-Plane", "2D-Axisymmetric"))
         error("Unknown solver_type \"$dimension\" in [solver]. " *
               "Expected \"2D-Plane\" or \"2D-Axisymmetric\".")
     end
 
-    # Time integration scheme. Validated as an enum rather than parsed as a flag for the
-    # same reason as solver_type above: the two schemes differ in what they resolve in
-    # time, not in presentation, and a typo must not run silently as the other one.
-    #
-    # "Explicit" - forward Euler on every term (fully_explicit_diffusion_solver).
-    # "IMPES"    - the advective term is made implicit by solving the summed species
-    #              equations for C_t^{n+1} first, then advancing each species explicitly
-    #              (impes_solver). This removes the h^2/D_P pressure-diffusion limit that
-    #              sets the step on every carbonation run; see IMPES_FORMULATION_NOTES.md.
-    #
-    # Optional with an "Explicit" default so every calculation file written before this
-    # existed loads and runs bit-identically.
+    # Time integration scheme. Validated as an enum 
     time_integration = get(solver, "time_integration", "Explicit")
     if !(time_integration in ("Explicit", "IMPES"))
         error("Unknown time_integration \"$time_integration\" in [solver]. " *
@@ -106,29 +93,21 @@ function get_solver_settings(calc_data::Dict)
         "dimension" => dimension,
         "time_integration" => time_integration,
         "impes" => time_integration == "IMPES",
-        # Axisymmetric analysis per Appendix (app:axisymmetric): the first coordinate is the
-        # radius r, the second the axial coordinate z, and every quadrature measure carries
-        # the factor r_gp.
+        # Axisymmetric analysis:the first coordinate is the
+        # radius r, the second the axial coordinate z
         "axisymmetric" => dimension == "2D-Axisymmetric",
         "diffusion" => solver["diffusion"],
         "advection" => solver["advection"],
         "gravity" => solver["gravity"],
         "reaction_kinetics" => solver["reaction_kinetics"],
-        # Heat transport. Optional so calculation files written before the energy
-        # equation still load, and off by default. With neither mechanism active the
-        # temperature field does not evolve at all and the run is isothermal, whatever
-        # reaction enthalpy the material file declares.
+        # Heat transport. Optional to enable old version of problemtype run
         "heat_conduction" => get(solver, "heat_conduction", 0),
         "heat_advection" => get(solver, "heat_advection", 0),
         # Streamline-upwind (SU) stabilization of the advective/thermal-pressure flux.
         # Optional and off by default so every existing calculation file is unaffected.
         # See src/ADVECTION_STABILIZATION_NOTES.md for the derivation and rationale.
         "advection_stabilization" => get(solver, "advection_stabilization", 0),
-        # IMPES pressure-solve controls. Ignored entirely under "Explicit". The defaults
-        # are deliberately tight: the solve is warm-started from C_t^n and the system is
-        # SPD and mass-dominated, so a strict tolerance costs only a few iterations, and a
-        # loose one would show up as a volume-consistency drift rather than as a visible
-        # failure.
+        # IMPES pressure-solve controls. Ignored entirely under "Explicit". 
         "impes_pcg_tolerance" => Float64(get(solver, "impes_pcg_tolerance", 1.0e-10)),
         "impes_pcg_maxiter" => Int(get(solver, "impes_pcg_maxiter", 500))
     )
@@ -181,8 +160,6 @@ Extract probing node information from calculation data.
 - Dictionary with number of nodes and array of node IDs to probe
 """
 function get_probing_nodes(calc_data::Dict)
-    # Probing is optional: a calculation file written without a [probing] section,
-    # or with the section but no node list, simply runs without probes
     probing = get(calc_data, "probing", Dict{String, Any}())
     nodes = Int[Int(n) for n in get(probing, "nodes_to_probe", Int[])]
     return Dict(
@@ -203,8 +180,6 @@ Extract probing element information from calculation data.
 - Dictionary with number of elements and array of element IDs to probe
 """
 function get_probing_elements(calc_data::Dict)
-    # Optional for the same reason as the node list. Element probing is parsed but
-    # not yet consumed by the solver; only nodes are written as time series.
     probing = get(calc_data, "probing", Dict{String, Any}())
     elements = Int[Int(e) for e in get(probing, "elements_to_probe", Int[])]
     return Dict(
@@ -218,10 +193,10 @@ end
 
 Build the time function table from the `[[time_function]]` section.
 
-Optional for the same reason as the probing section: a calculation file written
-without it yields an empty table and every boundary condition stays constant.
-`data_dir` is the folder holding the calculation file, and any CSV referenced by
-a table curve is resolved against it so the data travels with the input set.
+Optional: a calculation file written
+without this implies steady BCs.
+`data_dir` is the folder containing the calculation file, and a CSV referenced by
+a table curve is reference to this path.
 
 # Returns
 - `Dict{Int, TimeFunction}` keyed by the id referenced from the mesh file
@@ -244,8 +219,7 @@ Generate analysis type log message based on enabled solver components.
 function log_analysis_type(solver_settings::Dict)
     msg = "   ✓ Dimension: $(solver_settings["dimension"])\n"
     if get(solver_settings, "axisymmetric", false)
-        msg *= "   ✓ Geometry: axisymmetric - x is the radius r, y the axis of revolution z;\n" *
-               "               every quadrature measure carries the factor r_gp\n"
+        msg *= "   ✓ Geometry: axisymmetric - x is the radius r, y the axis of revolution.\n"
     end
 
     # Build component list (values are 0 or 1)
@@ -258,23 +232,17 @@ function log_analysis_type(solver_settings::Dict)
     solver_settings["heat_advection"] == 1 && push!(components, "Heat Advection")
     get(solver_settings, "advection_stabilization", 0) == 1 && push!(components, "SU Stabilization")
 
-    if isempty(components)
+    if isempty(components) #validate solution component selection
         msg *= "   ✓ Solver: WARNING - No components selected!"
     else
         msg *= "   ✓ Solver: $(join(components, " + "))"
     end
 
-    # Time integration. Named explicitly rather than left to be inferred, because it
-    # changes which terms set the time step and therefore how the stability report below
-    # should be read.
+    # Logging/showing time integration scheme and any warnings about advection stabilization under IMPES
     if get(solver_settings, "impes", false)
         msg *= "\n   ✓ Time integration: IMPES - the advective term is implicit; the step\n" *
-               "                       adapts each step from the Courant limit\n" *
-               "                       (see src/IMPES_FORMULATION_NOTES.md)"
-        # Under IMPES the species step is genuinely advection dominated: the pressure
-        # feedback that used to dominate the operator is gone, and consistent Galerkin has
-        # no discrete maximum principle for what is left. Respect the setting as written,
-        # but say so loudly.
+               "                       adapts each step from the Courant limit.\n" 
+        # Under IMPES the species step is genuinely advection dominated
         if get(solver_settings, "advection_stabilization", 0) != 1 &&
            solver_settings["advection"] == 1
             msg *= "\n   ⚠ WARNING: advection_stabilization = 0 under IMPES. With the pressure\n" *
@@ -287,9 +255,7 @@ function log_analysis_type(solver_settings::Dict)
         msg *= "\n   ✓ Time integration: Explicit (forward Euler)"
     end
 
-    # Say so explicitly rather than leaving the reader to infer it from two absent
-    # entries in the list above: with no heat transport the temperature is frozen,
-    # so a nonzero reaction enthalpy is deliberately ignored.
+    # Log/inform about thermal analysis type. If heat transport is disabled, the solver is isothermal and ignores reaction enthalpy.
     if solver_settings["reaction_kinetics"] == 1 &&
        solver_settings["heat_conduction"] == 0 && solver_settings["heat_advection"] == 0
         msg *= "\n   ✓ Thermal: isothermal (no heat transport active, reaction enthalpy ignored)"

@@ -15,7 +15,8 @@ using Dates
 using Printf
 
 # Load version information. get_version_string is used by the --version flag in
-# main(), so it is imported here rather than relied on from an enclosing module,
+# main(), therefore it is imported here instead of relying on it
+# from an enclosing module,
 # which would leave it undefined when kernel.jl runs directly as a script.
 include("version.jl")
 using .ADSIMVersion: get_version, get_version_string
@@ -32,9 +33,8 @@ include("shape_functions.jl")
 include("write_vtk.jl")
 include("write_probes.jl")
 include("fully_explicit_solver.jl")
-# IMPES solver. Included after the explicit one because it reuses its free functions
-# (mass assembly, element properties, kinetics closures, stab_tau, VTK output); the
-# explicit solver itself is unchanged by its presence.
+# IMPES solver. Included after explicit solver because it reuses its free functions
+# (mass assembly, element properties, kinetics closures, stab_tau, VTK output)
 include("impes_solver.jl")
 include("write_checkpoint.jl")
 include("read_checkpoint.jl")
@@ -62,14 +62,13 @@ function main()
     end
 
     # --report-timestep runs steps [1/8] through [7/8] and stops before the solver,
-    # printing the stability spectrum behind the critical time step. It answers "what
-    # will my step be, and which term sets it" in seconds on any mesh, without
-    # committing to a run that may take hours. Accepted in any argument position.
+    # printing the stability spectrum behind the critical time step. The code prints
+    # time step calculations in seconds on any mesh
     report_only = any(a -> a == "--report-timestep", ARGS)
     positional = filter(a -> !startswith(a, "--"), ARGS)
 
     # Check if project name is provided as command-line argument
-    #For debugging only
+    #For debugging only (I think this is legacy now, so probably can be removed)
     #ARGS = ["Advection_test"]
     if isempty(positional)
         println("Error: No project name provided")
@@ -129,9 +128,8 @@ function main()
         current_stage = 1
     end
 
-    # Setup log file with stage number. A report-only run writes to its own file: it
-    # neither advances nor completes a stage, and clobbering the log of a real run with a
-    # diagnostic would lose the record of that run.
+    # Setup log file with stage number. A report-only run writes in a distinct file: it
+    # neither advances nor completes a stage. This was added to check setup and time calculations without running the solver, which is slow on large meshes.
     log_file_path = report_only ?
         joinpath(output_dir, "$(project_name)_timestep_report.log") :
         joinpath(output_dir, "$(project_name)_stage$(current_stage).log")
@@ -181,8 +179,7 @@ function main()
         calc_params = get_all_calc_params(calc_file, data_dir)
         log_print(log_analysis_type(calc_params["solver_settings"]))
 
-        # Time functions drive the boundary conditions in time. A model without
-        # them keeps every boundary constant, exactly as before.
+        # Time functions drive the boundary conditions in time
         time_functions = calc_params["time_functions"]
         validate_time_function_ids(time_functions, mesh)
         if !isempty(time_functions)
@@ -192,14 +189,10 @@ function main()
 
         log_print("   ✓ Total simulation time: $(calc_params["time_stepping"]["total_simulation_time"]) $(calc_params["units"]["time_unit"])")
 
-        # Axisymmetry is a property of the whole analysis, so it is resolved once here and
-        # threaded into the routines whose geometry depends on it.
+        # Setting Axisymmetry for the solver. This is used in the solver to apply the axisymmetric formulation of the equations.
         axisymmetric = calc_params["solver_settings"]["axisymmetric"]
 
-        # Step 3.4: Gravity must act along the axis of revolution (Eq. ax_gravity). A radial
-        # component would vary with the azimuthal angle and so contradict the independence
-        # from that angle assumed for every field - a geometric requirement, not a
-        # simplification, which is why this is an error rather than a warning.
+        # Step 3.4: Gravity must act along the axis of revolution (Eq. ax_gravity)
         if axisymmetric && calc_params["solver_settings"]["gravity"] == 1
             g_r = calc_params["gravity"]["x_component"]
             if abs(g_r) > 0.0
@@ -262,8 +255,8 @@ function main()
 
         # Step 5: Apply initial conditions and initialize flows
         #
-        # Time-driven boundaries are seeded at the time the run actually starts:
-        # 0 for a fresh run, the checkpoint time for a restart, so a later stage
+        # Time-driven boundaries are seeded at the time the run starts:
+        # 0 for a fresh run and the checkpoint time for a restart, such that a later stage
         # picks its curves up where the previous stage left them.
         bc_start_time = checkpoint_loaded ? initial_state.current_time : 0.0
 
@@ -277,9 +270,7 @@ function main()
             log_print("\n[5/8] Applying boundary conditions from mesh file")
             # Apply boundary conditions from mesh file (may have changed between stages)
             # This sets P_boundary and T_boundary, and applies the prescribed values.
-            # apply_temperature_bc! belongs here too: without it T_boundary stays
-            # all ones after a restart and prescribed temperature nodes are never
-            # frozen.
+            # apply_temperature_bc! belongs here too
             apply_concentration_bc!(mesh, time_functions, bc_start_time)
             apply_pressure_bc!(mesh, time_functions, bc_start_time)
             apply_temperature_bc!(mesh, time_functions, bc_start_time)
@@ -328,8 +319,7 @@ function main()
         log_print(@sprintf("   ✓ Actual time step: %.4g %s", time_data.actual_dt, calc_params["units"]["time_unit"]))
         log_print("   ✓ Number of time steps: $(time_data.num_steps)")
 
-        # How that step was arrived at: the measured spectrum of every active operator
-        # beside the closed form it replaced.
+        # Additional information of time step calculation if available
         if time_data.stability !== nothing
             log_print("")
             log_stability_report(time_data.stability, log_print)
@@ -343,16 +333,14 @@ function main()
             return nothing
         end
 
-        # A table sampled more finely than the time step is aliased: the solver
-        # steps straight over samples the file recorded. Say so once, here, now
-        # that the step is known.
+        # A table sampled more finely than the time step is aliased
         warn_if_aliased(time_functions, time_data.actual_dt, log_print)
 
         # Step 8: Run the solver selected by [solver] time_integration.
         #
         # Everything above this line is solver-agnostic, and so is the checkpoint written
         # below: the IMPES solver's state is the same C_g / T / lime field the explicit one
-        # carries (C_t is derived from C_g, not stored), so a multi-stage run may switch
+        # carries (C_t is derived from C_g, not stored). It is possible that a multi-stage run may switch
         # integrator between stages.
         final_state = if calc_params["solver_settings"]["impes"]
             impes_solver(mesh, materials, calc_params, time_data, project_name,

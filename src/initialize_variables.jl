@@ -13,8 +13,6 @@ using Base.Threads
 # Dimensional parameters
 global NDim::Int = 0
 # Geometric formulation of the analysis. Held here beside the other dimension globals
-# because it is fixed for the whole run and is needed before the shape functions - which
-# also carry it - have been initialized.
 global Axisymmetric::Bool = false
 global Nnodes::Int = 0
 global Nelements::Int = 0
@@ -28,10 +26,8 @@ global T::Vector{Float64} = Float64[]
 global v::Matrix{Float64} = Matrix{Float64}(undef, 0, 0)
 global P_boundary::Matrix{Int} = Matrix{Int}(undef, 0, 0)
 # Thermal Dirichlet mask, the temperature counterpart of P_boundary:
-# 1 = free node, 0 = prescribed temperature. EVERY write to T must be gated by this,
-# including any correction term. The concentration path was bitten by exactly that:
-# the Lagrange correction was added after the P_boundary gate and walked prescribed
-# concentrations off their boundary values.
+# 1 = free node, 0 = prescribed temperature. EVERY write to T must be gated,
+# including any correction term.
 global T_boundary::Vector{Int} = Int[]
 # Tributary edge length of each convective-heat boundary node, for the Robin integral
 global thermal_node_influences::Dict{Int, Float64} = Dict{Int, Float64}()
@@ -110,9 +106,7 @@ function zero_variables!(mesh, materials; axisymmetric::Bool = false)
     λ_bc = zeros(Float64, Nnodes)  # Lagrange multipliers for pressure BCs
     
     # Calculate and store boundary node influence lengths. Under the axisymmetric
-    # formulation these are ring measures l_e * r̄_e rather than arclengths, which is what
-    # the Lagrange multiplier of Eq. (ax_Lambda_solution) and the convective heat boundary
-    # both require.
+    # formulation these are ring measures l_e * r̄_e, required by the Lagrange multiplier integral of Eq. (lagrange_multiplier_integral).
     boundary_influences = get_boundary_node_influences(mesh; axisymmetric = axisymmetric)
     boundary_node_influences = boundary_influences.node_influences
 
@@ -170,9 +164,9 @@ function apply_initial_concentrations!(mesh)
     global C_g, NGases
     
     # Apply element-based initial concentrations to nodes.
-    # Iterate in ascending element order rather than in the Dict's own order: a node
+    # Iterate in ascending element order: a node
     # shared by several elements keeps whichever value is written last, so Dict
-    # iteration order would decide the initial condition at every shared node. Sorting
+    # iteration order determines the initial condition at every shared node. Sorting
     # makes that rule "highest element index wins", which is stable and reproducible.
     for elem_id in sort(collect(keys(mesh.initial_concentrations)))
         concentrations = mesh.initial_concentrations[elem_id]
@@ -209,7 +203,7 @@ function apply_initial_temperature!(mesh)
     
     # Apply element-based initial temperatures to nodes.
     # Ascending element order for the same reason as the concentrations above: the
-    # last write to a shared node wins, so the ordering must not be left to the Dict.
+    # last write to a shared node is stored. The ordering must not be left to the Dict.
     for elem_id in sort(collect(keys(mesh.initial_temperature)))
         temperature = mesh.initial_temperature[elem_id]
         # Get nodes of this element
@@ -229,12 +223,12 @@ end
 Apply prescribed nodal temperatures, Eq. (temperature_BC), and mark those nodes in
 `T_boundary` so the solver never writes to them again.
 
-Called after `apply_initial_temperature!`, so a prescribed value overrides the
-element-based initial condition at the same node.
+Called after `apply_initial_temperature!`, at this time a prescribed value overrides the
+element-based initial condition at the same node. Might need correction
 
 A node driven by a time function is seeded at time `t`, which is 0 for a fresh
 run and the checkpoint time for a restart, so a stage 2 run picks its curve up
-where stage 1 left it rather than at the origin.
+where stage 1 left.
 
 # Note
 - Modifies global variables `T` and `T_boundary`
@@ -264,10 +258,9 @@ boundary conditions are specified.
 
 # Note
 - Modifies global variable `C_g`
-- A node with no time function keeps this value for the whole run, since
-  `P_boundary` gates its rate to zero. A time-driven node is rewritten every
-  step by the solver, because gating the rate holds the value still but nothing
-  would otherwise advance it.
+- A node with no time function preserves this value for the whole run, since
+  `P_boundary` restricts the rate to zero. A time-driven node is rewritten every
+  step by the solver.
 """
 function apply_concentration_bc!(mesh, time_functions = Dict{Int, TimeFunction}(), t = 0.0)
     global C_g, NGases, P_boundary
@@ -348,7 +341,7 @@ function apply_initial_lime_concentration!(mesh, materials)
             soil_props = get_soil_properties(materials, soil_name)
 
             # Get the reaction inputs for this material. β_l and the residual
-            # lime fraction live alongside the kinetics rather than in the soil
+            # lime fraction is contained alongside the kinetics and no longer in the soil
             # block, so they are looked up by the same soil name.
             reaction_props = get_reaction_properties(materials, soil_name)
 

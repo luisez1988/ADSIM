@@ -19,9 +19,9 @@ Structure to store gas-specific properties.
 - `thermal_conductivity::Float64`: Thermal conductivity λ_g [W/(m·K)]
 - `molar_heat_capacity::Float64`: Molar heat capacity at constant pressure c̄_p [J/(mol·K)]
 
-The heat capacity is molar rather than mass-based so the gas contribution to the
+The heat capacity is molar therefore the gas contribution to the
 mixture can be assembled straight from the concentrations the solver already
-carries: (ρc)_g = Σ_i C_g^i c̄_p^i, with C_g^i in mol per m³ of gas.
+knows: (ρc)_g = Σ_i C_g^i c̄_p^i, with C_g^i in mol per m³ of gas.
 """
 mutable struct GasProperties
     name::String
@@ -66,9 +66,9 @@ SoilProperties
 Structure to store soil material properties.
 
 The carbonation reaction inputs (lime content, residual lime, and the Arrhenius
-pair) used to live here. They now live in [`ReactionProperties`](@ref), keyed by
-the same soil name, so that the soil block holds only physics that is
-independent of whether reaction kinetics is switched on.
+pair) used to be stored here. They now are in [`ReactionProperties`](@ref), keyed by
+the same soil name, such that the soil block holds only physics
+independent of whether reaction kinetics is switched on/off.
 
 # Fields
 - `name::String`: Soil name
@@ -105,12 +105,11 @@ These are the quantities of the reaction
 
     Ca(OH)2(s) + CO2(g) -> CaCO3(s) + H2O(l)
 
-that depend on how much lime a given material carries, read from the
-`[reaction."<soil name>"]` table of the material file. Each entry pairs with the
-soil of the same name, so different layers can carry different lime contents.
+that depend on how much lime a given material has, read from the
+`[reaction."<soil name>"]` table of the material file. Each entry is paired with the
+soil of the same name, such that different layers can have different lime contents.
 
-The kinetics of the reaction (k_o, E) are a property of the chemistry rather
-than of a soil layer and live in [`ReactantProperties`](@ref) instead.
+The kinetics of the reaction (k_o, E) are a property of the chemistry instead of a soil layer and are stored in [`ReactantProperties`](@ref).
 
 # Fields
 - `name::String`: Soil name this reaction data belongs to
@@ -129,14 +128,10 @@ end
 
 
 # Reaction enthalpy of lime carbonation used when the material file predates the
-# `[reactants]` table, so that older inputs reproduce their previous results.
+# `[reactants]` table, such that older inputs reproduce their previous results.
 #
-# Ca(OH)2(s) + CO2(g) -> CaCO3(s) + H2O(l). Hess's law on the standard enthalpies
-# of formation at 298.15 K (-986.09, -393.51, -1207.6, -285.83 kJ/mol) gives
-# -113.8 kJ/mol CO2. Negative under the IUPAC convention, i.e. exothermic. The
-# liquid-phase product water applies here; taking H2O(g) instead would give
-# -69.8 kJ/mol.
-const DEFAULT_REACTION_ENTHALPY = -113800.0  # J/mol CO2
+# This can be deleted later.
+const DEFAULT_REACTION_ENTHALPY = -69800.0  # J/mol CO2
 
 
 """
@@ -145,8 +140,8 @@ ReactantProperties
 Structure to store the reactant (chemistry) properties shared by every material.
 
 These describe the carbonation reaction itself, so they do not vary from one
-soil layer to the next. How much lime each layer carries is a mix-design input
-and lives in [`ReactionProperties`](@ref) instead.
+soil layer to the next. How much lime each layer has is a mix-design input
+and is stored in [`ReactionProperties`](@ref).
 
 # Fields
 - `reaction_enthalpy::Float64`: Enthalpy of the carbonation reaction ΔH_r [J/mol CO2].
@@ -168,6 +163,8 @@ and lives in [`ReactionProperties`](@ref) instead.
   The conversion is β_new = β_old K_H(T_ref) P_atm = 33.44 β_old, so a β of 0.47
   in the old form is 15.7 in this one. A value carried over unconverted leaves
   almost no pressure sensitivity at all - refit or rescale it.
+
+  UPDATED NOTE ON THE INTERFACIAL-AREA FACTOR: This method did not work well and will be removed in a future release. This is an area of the reaction that needs more research
 """
 mutable struct ReactantProperties
     reaction_enthalpy::Float64
@@ -352,11 +349,10 @@ parse_reactant_properties!(materials::MaterialData, reactant_data::Dict,
 
 Parse the reactant properties shared by all materials from TOML data.
 
-The Arrhenius pair describes the reaction rather than a soil layer, so it is read
-from `[reactants]`. Material files that predate that grouping carry it per
-material, in either `[reaction."<soil name>"]` or `[soil."<soil name>"]`; those
-are still honoured. Because one reaction now serves every material, a legacy file
-whose materials disagree on the kinetics cannot be represented exactly: the first
+The Arrhenius pair describes the reaction kinetics, so it is read
+from `[reactants]`. These parameters were previously contained in in either `[reaction."<soil name>"]` or `[soil."<soil name>"]`; those
+are still honoured. The current approach is to use the `[reactants]` table, but a legacy file
+whose materials disagree on the kinetics cannot be represented exactly: If this happens the first
 material's values are taken and the conflict is reported.
 
 # Arguments
@@ -387,7 +383,7 @@ function parse_reactant_properties!(materials::MaterialData, reactant_data::Dict
         return
     end
 
-    # Legacy layout: gather the kinetics from wherever each material declared them.
+    # Legacy layout: gather the kinetics from wherever each material declared them. We might want to delete this in a future version.
     found = Tuple{String, Float64, Float64}[]
     for soil_name in materials.soil_dictionary
         for source in (get(reaction_data, soil_name, nothing),
@@ -419,7 +415,7 @@ function parse_reactant_properties!(materials::MaterialData, reactant_data::Dict
 
         Ignored: $(join(["$(c[1]) (k_o = $(c[2]), E = $(c[3]))" for c in conflicting], ", "))
 
-        Set the pair explicitly in a [reactants] table to silence this.
+        Use the latest version to set the pair explicitly in the [reactants] table to avoid this message.
         """
     end
 end
@@ -472,8 +468,9 @@ function parse_reaction_properties!(materials::MaterialData, reaction_data::Dict
 
     if !isempty(legacy_soils)
         @warn """
+        The legacy format for reaction inputs is deprecated.
         Reaction inputs were read from the [soil] tables of $(filename).
-        These now belong in their own tables and should be moved:
+        These should be moved:
 
             [reactants]
             reaction_enthalpy = ...

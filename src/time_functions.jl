@@ -4,9 +4,8 @@
 #
 # A time function is defined once in the [[time_function]] section of the
 # calculation TOML and referenced by integer id from the *_tf blocks of the mesh
-# file. Id 0 is reserved and means "no curve": the boundary keeps the constant
-# value typed in the mesh file, so every model written before this feature
-# existed runs unchanged.
+# file. Id 0 is reserved for steady BCs: the boundary keeps the constant
+# value typed in the mesh file.
 #
 # Four kinds are supported:
 #   :constant  a flat value, mostly useful as a multiplier of 1.0
@@ -14,26 +13,24 @@
 #   :periodic  mean + amplitude * wave(2π (t - t_start)/period + phase)
 #   :table     lookup in a two-column CSV of time and value
 #
-# The mode decides how the curve combines with the value in the mesh file:
+# The mode determines how the curve combines with the value in the mesh file:
 #   :absolute    the curve IS the boundary value in physical units, and the
 #                number in the mesh file is ignored
 #   :multiplier  applied BC = (mesh file value) * f(t), with f dimensionless
 #
-# A table is a continuous function of t, not a sequence of steps to march
-# through: the lookup is a stateless binary search, so nothing here couples to
+# A table is a continuous function of t
+# the lookup is a stateless binary search, therefore nothing can couple that to
 # the solver's dt, and a checkpoint restart at an arbitrary time is exact.
 #------------------------------------------------------------------------------
 
 """
     TimeFunction
 
-One named curve f(t). Only the fields relevant to `kind` carry meaning; the rest
-hold their defaults. Kept as a single concrete struct rather than an abstract
-hierarchy because a handful of unused Float64 fields costs less than a dynamic
-dispatch inside the time loop.
+One named curve f(t). Only the fields relevant to `kind` have an important meaning; the rest
+hold their defaults. Kept as a single concrete struct.
 
 # Fields
-- `id::Int`: 1-based identifier referenced from the mesh file. Id 0 is never stored.
+- `id::Int`: 1-based identifier referenced from the mesh file. Id 0 is not stored.
 - `name::String`: Name shown in the GiD tree, used only for error messages
 - `kind::Symbol`: `:constant`, `:ramp`, `:periodic` or `:table`
 - `mode::Symbol`: `:absolute` or `:multiplier`
@@ -97,12 +94,11 @@ parse as a number, so both of these are accepted:
     3600.0,102000.0
 
 and the same file without the header. Times must be strictly increasing; the
-check is done here rather than at the lookup so a malformed file is reported
-once, with its name and row, instead of silently returning wrong values every
-time step.
+check is done here in order to catch a malformed file. This is reported
+once, with its name and row.
 
 Comma, semicolon, tab and whitespace all work as separators, which covers the
-usual spreadsheet exports without pulling in a CSV dependency.
+usual spreadsheet exports
 """
 function read_time_series_csv(path::AbstractString)
     isfile(path) || error("time series file not found: $(path)")
@@ -124,7 +120,7 @@ function read_time_series_csv(path::AbstractString)
 
         if t === nothing || v === nothing
             # The first unparseable row is taken to be the header. A later one is
-            # a genuine error and must not be swallowed.
+            # a genuine error
             if !header_checked && isempty(times)
                 header_checked = true
                 continue
@@ -157,7 +153,7 @@ TOML. The section is optional: a file written without it simply yields an empty
 dictionary and every boundary stays constant.
 
 `file` entries of table curves are resolved relative to `data_dir`, the folder
-holding the calculation file, so a CSV travels with the input set.
+holding the calculation file. The CSV must accompany the calculation file
 """
 function read_time_functions(calc_data::Dict, data_dir::AbstractString = ".")
     functions = Dict{Int, TimeFunction}()
@@ -236,8 +232,7 @@ function read_time_functions(calc_data::Dict, data_dir::AbstractString = ".")
             path = isabspath(file) ? file : joinpath(data_dir, file)
             times, values = read_time_series_csv(path)
 
-            # Shift and rescale the file's time column into model time. This is how
-            # a CSV recorded in hours drives a model running in seconds.
+            # Shift and rescale the file's time column into model time. 
             time_scale = Float64(get(entry, "time_scale", 1.0))
             time_offset = Float64(get(entry, "time_offset", 0.0))
             time_scale > 0.0 ||
@@ -299,10 +294,9 @@ end
 
 Point sample of a table curve.
 
-The bracketing sample is found with `searchsortedlast`, which is O(log n) and
-carries no state between calls. That matters twice over: the solver shrinks dt
-to land exactly on output times, so evaluation times are not evenly spaced, and
-a checkpoint restart resumes at an arbitrary time with no history to replay.
+The bracketing sample is found with `searchsortedlast`, which is O(log n) with no state between calls. Important because: the solver shrinks dt
+to be exactly on output times, so evaluation times are not evenly spaced, and
+a checkpoint restart resumes at an arbitrary time that might no concide on a sampled snapshot.
 """
 function table_value(tf::TimeFunction, t::Float64)
     times = tf.times
@@ -357,16 +351,14 @@ linear (or piecewise constant, for `:step`) interpolant.
 Point sampling a *flux* loses mass whenever the step over-steps the file's
 sample spacing: the samples in between are never visited. Averaging over the
 step makes the injected mass correct regardless of how the two spacings relate.
-Only meaningful for a Neumann boundary; averaging a prescribed value has no
-such justification.
+Only meaningful for a Neumann boundary
 """
 function table_mean(tf::TimeFunction, t0::Float64, t1::Float64)
     span = t1 - t0
     span <= 0.0 && return table_value(tf, t0)
 
-    # Integrate by walking the sample points that fall strictly inside the step,
-    # so every segment is integrated on the interval where its own linear form
-    # holds. Endpoints are evaluated through table_value so the out-of-range and
+    # Integrate by walking the sample points that fall strictly inside the step.
+    # Endpoints are evaluated through table_value so the out-of-range and
     # repeat rules apply here exactly as they do to a point sample.
     integral = 0.0
     t_left = t0
@@ -397,7 +389,7 @@ end
 
 The raw curve value at time `t`, before the mode is applied.
 
-`dt` is only consulted by a table curve carrying `average = true`, which then
+`dt` is only consulted by a table curve with `average = true`, which then
 returns the mean of the curve over `[t, t + dt]` instead of the point sample.
 """
 function evaluate(tf::TimeFunction, t::Float64, dt::Float64 = 0.0)
@@ -446,8 +438,7 @@ end
 
 Check every curve id referenced by the mesh file against the curves actually
 defined. A dangling reference means the calculation file and the mesh file came
-from different runs of the problemtype, which is worth stopping for: silently
-treating it as a constant would run a wrong model to completion.
+from different runs of the problemtype
 """
 function validate_time_function_ids(time_functions, mesh)
     referenced = Set{Int}()
@@ -471,11 +462,6 @@ end
 
 Report any table curve whose samples are closer together than the time step.
 
-The lookup itself does not care how the two spacings relate, but a step larger
-than the sample spacing steps straight over samples the file went to the trouble
-of recording, and the boundary the solver sees is an aliased version of the
-data. That is worth saying out loud once at start-up rather than leaving the
-user to discover it in the results.
 """
 function warn_if_aliased(time_functions, dt::Float64, log_print)
     dt > 0.0 || return nothing
@@ -489,7 +475,7 @@ function warn_if_aliased(time_functions, dt::Float64, log_print)
 
         log_print("   ⚠ Warning: time function \"$(tf.name)\" samples every " *
                   "$(spacing) but the time step is $(dt). Samples between steps " *
-                  "will not be seen and the boundary condition is aliased.")
+                  "will generate an aliased boundary.")
         if !tf.average
             log_print("     Set average = true on this curve to integrate it over " *
                       "the step instead (recommended for flux boundaries), or " *
